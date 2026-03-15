@@ -16,9 +16,9 @@ import MenuSectionsWithModal, {
 } from "./components/MenuSectionsWithModal";
 
 export const metadata = {
-  title: "Cheiro Verde • ItapoáDelivery",
+  title: "Cheiro Verde • EasyDelivery",
   description:
-    "Visualize cardápio completo, pratos mais pedidos e informações do estabelecimento no ItapoáDelivery.",
+    "Visualize cardápio completo, pratos mais pedidos e informações do estabelecimento no EasyDelivery.",
 };
 
 const ESTABLISHMENT = {
@@ -158,6 +158,7 @@ const ESTABLISHMENT_TOP_LINKS: HeaderLink[] = [
   { label: "Início", href: "/delivery/home" },
   { label: "Restaurantes", href: "/delivery/home#restaurantes" },
   { label: "Mercados", href: "/delivery/home#mercados" },
+  { label: "Meus pedidos", href: "/delivery/meus-pedidos" },
 ];
 
 const ESTABLISHMENT_MENU_LINKS: HeaderLink[] = [

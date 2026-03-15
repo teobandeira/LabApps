@@ -34,11 +34,17 @@ export default function AppHeader({
             ))}
           </nav>
           <div className="flex items-center gap-2">
+            <a
+              href="/delivery/meus-pedidos"
+              className="rounded-full border border-[#ea1d2c]/35 bg-red-50 px-3 py-1.5 text-[13px] font-extrabold text-[#ea1d2c] transition hover:bg-red-100"
+            >
+              Meus Pedidos
+            </a>
             <CouponBanner compact />
             <CreateAccountButton />
             <a
               href="#"
-              className="rounded-full px-3 py-1.5 text-zinc-700 transition hover:bg-zinc-100"
+              className="rounded-full border border-zinc-300 bg-zinc-50 px-3 py-1.5 font-semibold text-zinc-800 transition hover:bg-zinc-100"
             >
               Entrar
             </a>

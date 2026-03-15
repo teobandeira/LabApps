@@ -16,7 +16,7 @@ import ServiceBoxCard from "./components/ServiceBoxCard";
 import StoreSlider from "./components/StoreSlider";
 
 export const metadata = {
-  title: "ItapoáDelivery • Comida, mercado e mais",
+  title: "EasyDelivery • Comida, mercado e mais",
   description:
     "Tudo para facilitar seu dia: peça comida, mercado, bebidas e farmácia com entrega rápida.",
 };
@@ -69,14 +69,15 @@ const HOME_TOP_LINKS: HeaderLink[] = [
   { label: "Entregador", href: "#" },
   { label: "Restaurante e Mercado", href: "#" },
   { label: "Carreiras", href: "#" },
-  { label: "iFood Card", href: "#" },
-  { label: "iFood Benefícios", href: "#" },
+  { label: "Easy Card", href: "#" },
+  { label: "Easy Benefícios", href: "#" },
 ];
 
 const HOME_MENU_LINKS: HeaderLink[] = [
   { label: "Restaurantes", href: "#restaurantes" },
   { label: "Mercados", href: "#mercados" },
   { label: "Parceiros", href: "#parceiros" },
+  { label: "Meus pedidos", href: "/delivery/meus-pedidos" },
 ];
 
 const BEST_RESTAURANTS: Store[] = [
@@ -493,7 +494,7 @@ export default function HomePage() {
               Seu delivery de comida, mercado, farmácia e mais!
             </p>
             <h1 className="mt-3 max-w-2xl text-4xl font-black leading-tight text-white sm:text-5xl">
-              Mate sua fome, peça no ItapoáDelivery!
+              Mate sua fome, peça no EasyDelivery!
             </h1>
 
             <div className="mt-8 flex w-full max-w-3xl flex-col gap-3 rounded-2xl bg-white p-3 shadow-2xl ring-1 ring-black/10 sm:flex-row">
@@ -552,7 +553,7 @@ export default function HomePage() {
 
         <section id="parceiros" className="grid gap-5 lg:grid-cols-2">
           <PartnerBanner
-            title="Quer fazer entregas pelo ItapoáDelivery?"
+            title="Quer fazer entregas pelo EasyDelivery?"
             description="Faça agora o seu cadastro e comece o quanto antes."
             action="Saiba mais"
             image="/entregador.jpg"

@@ -15,7 +15,7 @@ export default function ItapoaLogo({ compact = false }: ItapoaLogoProps) {
         <MdDeliveryDining className={compact ? "h-5 w-5" : "h-6 w-6"} aria-hidden />
       </span>
       <span className={`font-black leading-none ${compact ? "text-lg" : "text-2xl"}`}>
-        <span className="text-zinc-950">Itapoá</span>
+        <span className="text-zinc-950">Easy</span>
         <span className="text-[#ea1d2c]">Delivery</span>
       </span>
     </div>

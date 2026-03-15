@@ -36,7 +36,7 @@ export default function OpenGraphImageView() {
             backgroundColor: "#ffffff",
           }}
         />
-        <span style={{ fontSize: 24, fontWeight: 700 }}>ItapoáDelivery</span>
+        <span style={{ fontSize: 24, fontWeight: 700 }}>EasyDelivery</span>
       </div>
       <h1
         style={{

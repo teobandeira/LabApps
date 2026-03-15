@@ -128,7 +128,7 @@ export default function PortfolioPage() {
 
           <p className="relative inline-flex items-center gap-2 rounded-full border border-violet-200/25 bg-violet-300/10 px-4 py-1.5 font-(family-name:--font-jetbrains-mono) text-[11px] font-semibold tracking-[0.2em] text-violet-100">
             <MdRocketLaunch className="h-4 w-4 text-violet-300" />
-            LAB APPS // PORTFOLIO
+            LAB APPS // TIMOTEO BANDEIRA
           </p>
 
           <h1 className="relative mt-5 max-w-4xl font-(family-name:--font-space-grotesk) text-4xl font-bold leading-tight sm:text-6xl">

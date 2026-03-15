@@ -7,16 +7,22 @@ export default function AppFooter() {
         <div>
           <ItapoaLogo compact />
           <p className="mt-2 text-zinc-500">
-            © {new Date().getFullYear()} ItapoáDelivery. Todos os direitos reservados.
+            © {new Date().getFullYear()} EasyDelivery. Todos os direitos reservados.
           </p>
         </div>
         <div className="space-y-2">
-          <p className="font-semibold text-zinc-900">ItapoáDelivery</p>
+          <p className="font-semibold text-zinc-900">EasyDelivery</p>
           <a href="#" className="block transition hover:text-zinc-900">
             Site institucional
           </a>
           <a href="#" className="block transition hover:text-zinc-900">
             Conta e segurança
+          </a>
+          <a
+            href="/delivery/meus-pedidos"
+            className="block font-semibold text-[#ea1d2c] transition hover:text-[#c81422]"
+          >
+            Meus Pedidos
           </a>
           <a href="#" className="block transition hover:text-zinc-900">
             Carreiras
@@ -31,10 +37,10 @@ export default function AppFooter() {
             Cadastre seu restaurante ou mercado
           </a>
           <a href="#" className="block transition hover:text-zinc-900">
-            iFood Shop
+            Easy Shop
           </a>
           <a href="#" className="block transition hover:text-zinc-900">
-            iFood Benefícios
+            Easy Benefícios
           </a>
           <a href="#" className="block transition hover:text-zinc-900">
             Termos e privacidade
