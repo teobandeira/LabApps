@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 import { JetBrains_Mono, Space_Grotesk } from "next/font/google";
 import Link from "next/link";
 import type { IconType } from "react-icons";
 import {
   MdArrowOutward,
-  MdCalendarMonth,
   MdDeliveryDining,
   MdGridView,
   MdLocalMall,
@@ -39,11 +39,12 @@ type PortfolioApp = {
   href?: string;
   icon: IconType;
   stack: string[];
+  image: string;
 };
 
 const APPS: PortfolioApp[] = [
   {
-    name: "Delivery",
+    name: "Delivery App",
     subtitle: "Producao",
     description:
       "Marketplace de restaurantes e mercados com vitrine, detalhes do estabelecimento e fluxo focado em conversao.",
@@ -51,33 +52,28 @@ const APPS: PortfolioApp[] = [
     href: "/delivery/home",
     icon: MdDeliveryDining,
     stack: ["Next.js", "App Router", "Tailwind v4"],
+    image: "/entregador.jpg",
   },
   {
-    name: "Catalogo Local",
+    name: "Mini RPG",
+    subtitle: "Producao",
+    description:
+      "RPG narrativo com progressao de personagem, escolhas de historia e batalhas por turnos.",
+    status: "live",
+    href: "/rpg",
+    icon: MdSportsEsports,
+    stack: ["Narrative", "Turn-Based", "Cards"],
+    image: "/rpg-hero2.jpg",
+  },
+  {
+    name: "War Spot - Zonas de Conflito",
     subtitle: "Em planejamento",
     description:
       "Hub de vitrines para comercios de bairro com busca inteligente, colecoes e checkout simplificado.",
     status: "roadmap",
     icon: MdLocalMall,
     stack: ["Search", "CMS", "Checkout"],
-  },
-  {
-    name: "Agenda de Servicos",
-    subtitle: "Em planejamento",
-    description:
-      "Aplicativo para agendamentos, pagamentos e gestao de horarios de prestadores independentes.",
-    status: "roadmap",
-    icon: MdCalendarMonth,
-    stack: ["Scheduler", "Payments", "CRM"],
-  },
-  {
-    name: "Jogo RPG",
-    subtitle: "Em planejamento",
-    description:
-      "RPG com progressao de personagem, sistema de classes, missoes e inventario.",
-    status: "roadmap",
-    icon: MdSportsEsports,
-    stack: ["Quests", "Combat", "Inventory"],
+    image: "/war.jpg",
   },
 ];
 
@@ -92,9 +88,9 @@ const METRICS = [
     icon: MdGridView,
   },
   {
-    label: "Primeiro release",
-    value: "App destaque",
-    detail: "Fluxo completo ja navegavel",
+    label: "Apps publicados",
+    value: `${String(liveCount).padStart(2, "0")} live`,
+    detail: "Delivery + RPG ja navegaveis",
     icon: MdStackedLineChart,
   },
   {
@@ -105,8 +101,7 @@ const METRICS = [
   },
 ];
 
-const featuredApp = APPS[0];
-const plannedApps = APPS.slice(1);
+const displayApps = APPS.slice(0, 3);
 
 export default function PortfolioPage() {
   return (
@@ -122,10 +117,25 @@ export default function PortfolioPage() {
       />
 
       <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 lg:px-8 lg:py-14">
-        <header className="portfolio-fade-up relative overflow-hidden rounded-3xl border border-violet-300/20 bg-white/4 p-7 shadow-[0_32px_90px_rgba(0,0,0,0.55)] backdrop-blur-xl sm:p-10">
-          <div className="absolute -right-16 -top-16 h-56 w-56 rounded-full bg-violet-500/20 blur-3xl" />
-          <div className="absolute bottom-0 left-1/3 h-40 w-40 rounded-full bg-indigo-400/20 blur-3xl" />
+        <header className="portfolio-fade-up relative isolate overflow-hidden rounded-3xl border border-violet-300/20 bg-[linear-gradient(145deg,rgba(40,12,86,0.9),rgba(21,7,49,0.95)_52%,rgba(9,3,25,0.98))] p-7 shadow-[0_32px_90px_rgba(0,0,0,0.55)] backdrop-blur-xl sm:p-10">
+          <div className="pointer-events-none absolute inset-0 z-0">
+            <Image
+              src="/lab.jpg"
+              alt=""
+              fill
+              priority
+              sizes="(min-width: 1024px) 1200px, 100vw"
+              className="object-cover object-center opacity-65"
+              aria-hidden
+            />
+          </div>
+          <div className="pointer-events-none absolute inset-0 z-10 bg-linear-to-r from-[#070412]/76 via-[#0b0720]/54 to-[#130a2b]/72" />
+          <div className="pointer-events-none absolute inset-0 z-10 bg-[radial-gradient(circle_at_20%_0%,rgba(168,85,247,0.28),transparent_42%),radial-gradient(circle_at_90%_100%,rgba(99,102,241,0.24),transparent_44%)]" />
 
+          <div className="absolute -right-16 -top-16 z-20 h-56 w-56 rounded-full bg-violet-500/20 blur-3xl" />
+          <div className="absolute bottom-0 left-1/3 z-20 h-40 w-40 rounded-full bg-indigo-400/20 blur-3xl" />
+
+          <div className="relative z-20">
           <p className="relative inline-flex items-center gap-2 rounded-full border border-violet-200/25 bg-violet-300/10 px-4 py-1.5 font-(family-name:--font-jetbrains-mono) text-[11px] font-semibold tracking-[0.2em] text-violet-100">
             <MdRocketLaunch className="h-4 w-4 text-violet-300" />
             LAB APPS // TIMOTEO BANDEIRA
@@ -135,8 +145,8 @@ export default function PortfolioPage() {
             Lab Apps
           </h1>
           <p className="relative mt-4 max-w-3xl text-sm leading-relaxed text-zinc-300 sm:text-base">
-            A raiz funciona como hub do projeto. O app em destaque ja esta disponivel e os
-            proximos entram aqui com o mesmo padrao visual.
+            A raiz funciona como hub do projeto. Hoje o portfolio ja tem dois apps em producao:
+            Delivery e Jogo RPG. Os proximos entram aqui com o mesmo padrao visual.
           </p>
 
           <div className="relative mt-8 flex flex-wrap gap-3">
@@ -144,9 +154,18 @@ export default function PortfolioPage() {
               href="/delivery/home"
               className="inline-flex items-center gap-2 rounded-xl bg-violet-500 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-500/35 transition hover:bg-violet-400"
             >
-              Abrir app em destaque
+              Abrir Delivery
               <MdArrowOutward className="h-4 w-4" />
             </Link>
+            <Link
+              href="/rpg"
+              className="inline-flex items-center gap-2 rounded-xl border border-violet-200/35 bg-black/30 px-5 py-3 text-sm font-semibold text-violet-100 transition hover:bg-white/10 hover:text-white"
+            >
+              Abrir Jogo RPG
+              <MdArrowOutward className="h-4 w-4" />
+            </Link>
+          </div>
+
           </div>
         </header>
 
@@ -154,10 +173,10 @@ export default function PortfolioPage() {
           {METRICS.map((metric, index) => (
             <article
               key={metric.label}
-              className="portfolio-fade-up rounded-2xl border border-violet-200/15 bg-white/3 p-4 backdrop-blur-md"
+              className="portfolio-fade-up rounded-2xl border border-violet-200/20 bg-[linear-gradient(150deg,rgba(36,10,78,0.9),rgba(20,7,47,0.95)_52%,rgba(9,3,24,0.98))] p-4 shadow-[0_14px_40px_rgba(7,4,18,0.45)] backdrop-blur-md"
               style={{ animationDelay: `${120 + index * 120}ms` }}
             >
-              <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-xl border border-violet-200/20 bg-violet-300/10">
+              <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-xl border border-violet-200/25 bg-[linear-gradient(145deg,rgba(74,38,143,0.42),rgba(44,20,93,0.3))]">
                 <metric.icon className="h-5 w-5 text-violet-200" />
               </div>
               <p className="text-xs uppercase tracking-[0.16em] text-zinc-400">{metric.label}</p>
@@ -169,86 +188,102 @@ export default function PortfolioPage() {
           ))}
         </section>
 
-        <section className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
-          <article className="portfolio-fade-up group relative overflow-hidden rounded-3xl border border-violet-300/30 bg-linear-to-br from-violet-500/20 via-fuchsia-500/10 to-transparent p-6 shadow-[0_20px_65px_rgba(139,92,246,0.22)]">
-            <div className="absolute -right-14 -top-14 h-44 w-44 rounded-full bg-violet-400/25 blur-3xl" />
-            <div className="relative flex items-start justify-between gap-3">
-              <span className="inline-flex items-center gap-2 rounded-full border border-emerald-400/40 bg-emerald-500/15 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.12em] text-emerald-200">
-                <MdStackedLineChart className="h-4 w-4" />
-                Live
-              </span>
-              <featuredApp.icon className="h-7 w-7 text-violet-200" />
-            </div>
-
-            <p className="mt-5 text-xs uppercase tracking-[0.16em] text-violet-200/90">
-              {featuredApp.subtitle}
-            </p>
-            <h2 className="mt-2 font-(family-name:--font-space-grotesk) text-3xl font-bold tracking-tight text-white">
-              {featuredApp.name}
-            </h2>
-            <p className="mt-3 max-w-xl text-sm leading-relaxed text-zinc-200">
-              {featuredApp.description}
-            </p>
-
-            <div className="mt-5 flex flex-wrap gap-2">
-              {featuredApp.stack.map((item) => (
+        <section className="mt-6 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {displayApps.map((app, index) => (
+            <article
+              key={app.name}
+              className="portfolio-fade-up group flex h-full flex-col rounded-2xl border border-violet-200/20 bg-[linear-gradient(150deg,rgba(36,10,78,0.9),rgba(20,7,47,0.95)_52%,rgba(9,3,24,0.98))] p-5 shadow-[0_18px_45px_rgba(7,4,18,0.5)] backdrop-blur-md transition hover:-translate-y-0.5 hover:border-violet-200/35"
+              style={{ animationDelay: `${360 + index * 120}ms` }}
+            >
+              <div className="relative mb-4 h-28 overflow-hidden rounded-xl border border-white/15">
+                <Image
+                  src={app.image}
+                  alt={`Imagem do app ${app.name}`}
+                  fill
+                  sizes="(min-width: 1024px) 33vw, (min-width: 768px) 50vw, 100vw"
+                  className="object-cover object-center transition duration-500 group-hover:scale-[1.03]"
+                />
+                <div className="pointer-events-none absolute inset-0 bg-linear-to-t from-[#0a0518]/64 via-transparent to-transparent" />
+              </div>
+              <div className="flex items-start justify-between gap-3">
                 <span
-                  key={item}
-                  className="rounded-full border border-violet-200/20 bg-black/30 px-3 py-1 font-(family-name:--font-jetbrains-mono) text-[11px] text-zinc-200"
+                  className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-bold uppercase tracking-[0.12em] ${
+                    app.status === "live"
+                      ? "border border-emerald-300/30 bg-emerald-500/12 text-emerald-100"
+                      : "border border-fuchsia-300/30 bg-fuchsia-400/10 text-fuchsia-100"
+                  }`}
                 >
-                  {item}
-                </span>
-              ))}
-            </div>
-
-            <div className="mt-6 flex flex-wrap gap-2">
-              <Link
-                href="/delivery/home"
-                className="inline-flex items-center gap-2 rounded-xl bg-violet-100 px-4 py-2.5 text-sm font-semibold text-violet-950 transition hover:bg-white"
-              >
-                Acessar app
-                <MdArrowOutward className="h-4 w-4" />
-              </Link>
-            </div>
-          </article>
-
-          <div className="grid gap-4">
-            {plannedApps.map((app, index) => (
-              <article
-                key={app.name}
-                className="portfolio-fade-up group rounded-2xl border border-violet-200/15 bg-white/3 p-5 backdrop-blur-md transition hover:-translate-y-0.5 hover:border-violet-200/30"
-                style={{ animationDelay: `${360 + index * 120}ms` }}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <span className="inline-flex items-center gap-1 rounded-full border border-fuchsia-300/30 bg-fuchsia-400/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.12em] text-fuchsia-100">
+                  {app.status === "live" ? (
+                    <MdStackedLineChart className="h-4 w-4" />
+                  ) : (
                     <MdSchedule className="h-4 w-4" />
-                    Roadmap
+                  )}
+                  {app.status === "live" ? "Live" : "Roadmap"}
+                </span>
+                <app.icon className="h-6 w-6 text-violet-200" />
+              </div>
+
+              <h3 className="mt-4 font-(family-name:--font-space-grotesk) text-2xl font-semibold text-zinc-100">
+                {app.name}
+              </h3>
+              <p className="mt-1 text-xs uppercase tracking-[0.14em] text-zinc-400">
+                {app.subtitle}
+              </p>
+              <p className="mt-3 text-sm leading-relaxed text-zinc-300">{app.description}</p>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                {app.stack.map((item) => (
+                  <span
+                    key={item}
+                    className="rounded-full border border-violet-200/25 bg-[linear-gradient(145deg,rgba(44,16,93,0.8),rgba(18,5,42,0.96))] px-3 py-1 font-(family-name:--font-jetbrains-mono) text-[11px] text-zinc-300"
+                  >
+                    {item}
                   </span>
-                  <app.icon className="h-6 w-6 text-violet-200" />
-                </div>
+                ))}
+              </div>
 
-                <h3 className="mt-4 font-(family-name:--font-space-grotesk) text-2xl font-semibold text-zinc-100">
-                  {app.name}
-                </h3>
-                <p className="mt-1 text-xs uppercase tracking-[0.14em] text-zinc-400">
-                  {app.subtitle}
-                </p>
-                <p className="mt-3 text-sm leading-relaxed text-zinc-300">{app.description}</p>
-
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {app.stack.map((item) => (
-                    <span
-                      key={item}
-                      className="rounded-full border border-violet-200/15 bg-black/30 px-3 py-1 font-(family-name:--font-jetbrains-mono) text-[11px] text-zinc-300"
-                    >
-                      {item}
-                    </span>
-                  ))}
-                </div>
-              </article>
-            ))}
-          </div>
+              {app.href ? (
+                <Link
+                  href={app.href}
+                  className="mt-auto pt-5 inline-flex items-center gap-1 text-sm font-semibold text-violet-100 transition hover:gap-2 hover:text-white"
+                >
+                  Acessar app
+                  <MdArrowOutward className="h-4 w-4" />
+                </Link>
+              ) : (
+                <p className="mt-auto pt-5 text-sm font-semibold text-zinc-500">Em breve</p>
+              )}
+            </article>
+          ))}
         </section>
+
+        <footer
+          className="portfolio-fade-up mt-6 rounded-2xl border border-violet-200/20 bg-[linear-gradient(145deg,rgba(40,12,86,0.92),rgba(21,7,49,0.96)_52%,rgba(9,3,25,0.99))] px-5 py-4 shadow-[0_16px_44px_rgba(7,4,18,0.5)]"
+          style={{ animationDelay: "760ms" }}
+        >
+          <div className="flex flex-col gap-3 text-zinc-300 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="font-(family-name:--font-space-grotesk) text-lg font-semibold text-zinc-100">
+                Lab Apps
+              </p>
+              <p className="text-xs text-zinc-400">
+                © {new Date().getFullYear()} Hub de projetos e produtos digitais.
+              </p>
+            </div>
+
+            <nav className="flex flex-wrap items-center gap-4 text-xs text-zinc-300">
+              <Link href="/delivery/home" className="transition hover:text-white">
+                Delivery
+              </Link>
+              <Link href="/rpg" className="transition hover:text-white">
+                Mini RPG
+              </Link>
+              <a href="#" className="transition hover:text-white">
+                Roadmap
+              </a>
+            </nav>
+          </div>
+        </footer>
       </div>
     </main>
   );
