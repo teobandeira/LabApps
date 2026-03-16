@@ -6,6 +6,7 @@ import type { IconType } from "react-icons";
 import {
   MdArrowOutward,
   MdDeliveryDining,
+  MdForest,
   MdGridView,
   MdLocalMall,
   MdRocketLaunch,
@@ -66,14 +67,26 @@ const APPS: PortfolioApp[] = [
     image: "/rpg-hero2.jpg",
   },
   {
-    name: "War Spot - Zonas de Conflito",
-    subtitle: "Em planejamento",
+    name: "Conflict Zone - Zonas de Conflito",
+    subtitle: "Producao",
     description:
-      "Hub de vitrines para comercios de bairro com busca inteligente, colecoes e checkout simplificado.",
-    status: "roadmap",
+      "Plataforma de monitoramento geopolítico com mapa global interativo, alertas críticos e analise visual de conflitos.",
+    status: "live",
+    href: "/zona-conflito",
     icon: MdLocalMall,
-    stack: ["Search", "CMS", "Checkout"],
+    stack: ["Mapa Global", "Heatmap", "Dashboard"],
     image: "/war.jpg",
+  },
+  {
+    name: "Camping Brasil - Portal",
+    subtitle: "Producao",
+    description:
+      "Portal de viagens e turismo para descobrir campings no Brasil com mapa, filtros, roteiros e comunidade.",
+    status: "live",
+    href: "/camping",
+    icon: MdForest,
+    stack: ["Turismo", "Mapa Brasil", "Roteiros"],
+    image: "/camping1.jpg",
   },
 ];
 
@@ -90,7 +103,7 @@ const METRICS = [
   {
     label: "Apps publicados",
     value: `${String(liveCount).padStart(2, "0")} live`,
-    detail: "Delivery + RPG ja navegaveis",
+    detail: `${liveCount} apps navegaveis no hub`,
     icon: MdStackedLineChart,
   },
   {
@@ -101,7 +114,7 @@ const METRICS = [
   },
 ];
 
-const displayApps = APPS.slice(0, 3);
+const displayApps = APPS;
 
 export default function PortfolioPage() {
   return (
@@ -145,8 +158,8 @@ export default function PortfolioPage() {
             Lab Apps
           </h1>
           <p className="relative mt-4 max-w-3xl text-sm leading-relaxed text-zinc-300 sm:text-base">
-            A raiz funciona como hub do projeto. Hoje o portfolio ja tem dois apps em producao:
-            Delivery e Jogo RPG. Os proximos entram aqui com o mesmo padrao visual.
+            A raiz funciona como hub do projeto. Hoje o portfolio ja tem {liveCount} apps em
+            producao, todos navegaveis com o mesmo padrao visual.
           </p>
 
           <div className="relative mt-8 flex flex-wrap gap-3">
@@ -162,6 +175,13 @@ export default function PortfolioPage() {
               className="inline-flex items-center gap-2 rounded-xl border border-violet-200/35 bg-black/30 px-5 py-3 text-sm font-semibold text-violet-100 transition hover:bg-white/10 hover:text-white"
             >
               Abrir Jogo RPG
+              <MdArrowOutward className="h-4 w-4" />
+            </Link>
+            <Link
+              href="/camping"
+              className="inline-flex items-center gap-2 rounded-xl border border-emerald-200/45 bg-emerald-500/20 px-5 py-3 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-500/32 hover:text-white"
+            >
+              Abrir Camping
               <MdArrowOutward className="h-4 w-4" />
             </Link>
           </div>
@@ -278,9 +298,12 @@ export default function PortfolioPage() {
               <Link href="/rpg" className="transition hover:text-white">
                 Mini RPG
               </Link>
-              <a href="#" className="transition hover:text-white">
-                Roadmap
-              </a>
+              <Link href="/zona-conflito" className="transition hover:text-white">
+                Conflict Zone
+              </Link>
+              <Link href="/camping" className="transition hover:text-white">
+                Camping
+              </Link>
             </nav>
           </div>
         </footer>
