@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { IconType } from "react-icons";
 import {
   MdArrowOutward,
+  MdBalance,
   MdDeliveryDining,
   MdForest,
   MdGridView,
@@ -44,6 +45,17 @@ type PortfolioApp = {
 };
 
 const APPS: PortfolioApp[] = [
+  {
+    name: "Analisador de Processos",
+    subtitle: "Producao",
+    description:
+      "Dashboard juridico de inteligencia para priorizar riscos, gargalos, prazos e carga da equipe.",
+    status: "live",
+    href: "/analisador-processos",
+    icon: MdBalance,
+    stack: ["Legal Ops", "Analytics", "Timeline"],
+    image: "/lab.jpg",
+  },
   {
     name: "Delivery App",
     subtitle: "Producao",
@@ -184,6 +196,13 @@ export default function PortfolioPage() {
               Abrir Camping
               <MdArrowOutward className="h-4 w-4" />
             </Link>
+            <Link
+              href="/analisador-processos"
+              className="inline-flex items-center gap-2 rounded-xl border border-cyan-200/45 bg-cyan-500/18 px-5 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/30 hover:text-white"
+            >
+              Abrir Analisador
+              <MdArrowOutward className="h-4 w-4" />
+            </Link>
           </div>
 
           </div>
@@ -303,6 +322,9 @@ export default function PortfolioPage() {
               </Link>
               <Link href="/camping" className="transition hover:text-white">
                 Camping
+              </Link>
+              <Link href="/analisador-processos" className="transition hover:text-white">
+                Analisador Processos
               </Link>
             </nav>
           </div>
