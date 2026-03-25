@@ -12,6 +12,7 @@ import {
   MdLocalMall,
   MdRocketLaunch,
   MdSchedule,
+  MdSmartToy,
   MdSportsEsports,
   MdStackedLineChart,
 } from "react-icons/md";
@@ -66,6 +67,17 @@ const APPS: PortfolioApp[] = [
     icon: MdDeliveryDining,
     stack: ["Next.js", "App Router", "Tailwind v4"],
     image: "/entregador.jpg",
+  },
+  {
+    name: "ChatGPT App",
+    subtitle: "Producao",
+    description:
+      "Interface de prompt em tela cheia conectada em tempo real com a API da OpenAI via rota segura.",
+    status: "live",
+    href: "/chatgpt",
+    icon: MdSmartToy,
+    stack: ["OpenAI API", "Prompt UI", "Full Screen"],
+    image: "/technology-venture-workspace-using-machine-learning-streamline-coding-process.jpg",
   },
   {
     name: "Mini RPG",
@@ -203,6 +215,13 @@ export default function PortfolioPage() {
               Abrir Analisador
               <MdArrowOutward className="h-4 w-4" />
             </Link>
+            <Link
+              href="/chatgpt"
+              className="inline-flex items-center gap-2 rounded-xl border border-amber-200/45 bg-amber-400/18 px-5 py-3 text-sm font-semibold text-amber-100 transition hover:bg-amber-400/30 hover:text-white"
+            >
+              Abrir ChatGPT
+              <MdArrowOutward className="h-4 w-4" />
+            </Link>
           </div>
 
           </div>
@@ -325,6 +344,9 @@ export default function PortfolioPage() {
               </Link>
               <Link href="/analisador-processos" className="transition hover:text-white">
                 Analisador Processos
+              </Link>
+              <Link href="/chatgpt" className="transition hover:text-white">
+                ChatGPT
               </Link>
             </nav>
           </div>
