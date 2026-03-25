@@ -104,9 +104,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const isRelativePath = imageUrl.startsWith("/");
     let parsedUrl: URL;
     try {
-      parsedUrl = new URL(imageUrl);
+      parsedUrl = isRelativePath ? new URL(imageUrl, request.nextUrl.origin) : new URL(imageUrl);
     } catch {
       return NextResponse.json(
         { error: "URL da imagem invalida." },
@@ -124,7 +125,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (parsedUrl.hostname === "localhost" || parsedUrl.hostname === "127.0.0.1") {
+    const isSameOrigin = parsedUrl.origin === request.nextUrl.origin;
+    if (!isSameOrigin && (parsedUrl.hostname === "localhost" || parsedUrl.hostname === "127.0.0.1")) {
       return NextResponse.json(
         { error: "Hostname nao permitido para download." },
         { status: 400 }

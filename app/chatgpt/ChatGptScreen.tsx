@@ -22,6 +22,18 @@ type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   imageUrl?: string;
+  imageId?: string;
+};
+
+type GeneratedImageHistoryItem = {
+  id: string;
+  imageUrl: string;
+  createdAt: string;
+  prompt: string;
+  revisedPrompt: string | null;
+  model: string;
+  size: string;
+  action: "generate" | "edit";
 };
 
 type ChatGptScreenProps = {
@@ -178,6 +190,9 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const [theme, setTheme] = useState<ThemeMode>("dark");
   const [error, setError] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
+  const [generatedHistory, setGeneratedHistory] = useState<GeneratedImageHistoryItem[]>([]);
+  const [loadingGeneratedHistory, setLoadingGeneratedHistory] = useState(false);
+  const [generatedHistoryWarning, setGeneratedHistoryWarning] = useState("");
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sourceImageInputRef = useRef<HTMLInputElement>(null);
@@ -272,6 +287,61 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     return () => mediaQuery.removeListener(handleChange);
   }, [mode]);
 
+  useEffect(() => {
+    if (mode !== "image") {
+      return;
+    }
+
+    let active = true;
+    setLoadingGeneratedHistory(true);
+    setGeneratedHistoryWarning("");
+
+    async function loadGeneratedHistory() {
+      try {
+        const response = await fetch("/api/chatgpt/generated-images", {
+          method: "GET",
+          cache: "no-store",
+        });
+
+        const data = (await response.json()) as {
+          images?: GeneratedImageHistoryItem[];
+          error?: string;
+        };
+
+        if (!response.ok) {
+          throw new Error(data.error ?? "Falha ao carregar historico de imagens.");
+        }
+
+        const images = Array.isArray(data.images) ? data.images : [];
+        if (!active) {
+          return;
+        }
+
+        setGeneratedHistory(images);
+      } catch (loadError) {
+        if (!active) {
+          return;
+        }
+
+        const message =
+          loadError instanceof Error
+            ? loadError.message
+            : "Nao foi possivel carregar historico de imagens.";
+        setGeneratedHistoryWarning(message);
+      } finally {
+        if (active) {
+          setLoadingGeneratedHistory(false);
+        }
+      }
+    }
+
+    void loadGeneratedHistory();
+
+    return () => {
+      active = false;
+    };
+  }, [mode]);
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const cleanPrompt = prompt.trim();
@@ -313,7 +383,9 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       );
     }
 
-    setPrompt("");
+    if (mode === "chat") {
+      setPrompt("");
+    }
     setSelectedFiles([]);
     setLoading(true);
     setError("");
@@ -354,6 +426,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
         warnings?: string[];
         imageUrl?: string;
         revisedPrompt?: string | null;
+        storedImageId?: string | null;
       };
 
       if (!response.ok) {
@@ -373,6 +446,10 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
           ? data.revisedPrompt.trim()
           : "";
       const hasImage = typeof data.imageUrl === "string" && data.imageUrl.length > 0;
+      const storedImageId =
+        typeof data.storedImageId === "string" && data.storedImageId.length > 0
+          ? data.storedImageId
+          : undefined;
 
       const answerParts = [data.answer];
       if (revisedPrompt && revisedPrompt !== cleanPrompt) {
@@ -385,8 +462,32 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
           role: "assistant",
           content: answerParts.join("\n\n"),
           imageUrl: hasImage ? data.imageUrl : undefined,
+          imageId: hasImage ? storedImageId : undefined,
         },
       ]);
+
+      if (mode === "image" && hasImage && storedImageId) {
+        setGeneratedHistory((current) => {
+          const alreadyExists = current.some((item) => item.id === storedImageId);
+          if (alreadyExists) {
+            return current;
+          }
+
+          return [
+            {
+              id: storedImageId,
+              imageUrl: `/api/chatgpt/generated-image/${storedImageId}`,
+              createdAt: new Date().toISOString(),
+              prompt: cleanPrompt,
+              revisedPrompt: revisedPrompt || null,
+              model: IMAGE_MODEL_LABEL,
+              size: imageSize,
+              action: imageAction,
+            },
+            ...current,
+          ];
+        });
+      }
 
       if (mode === "chat" && usedFiles.length > 0) {
         setMessages((current) => [
@@ -499,7 +600,21 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const chatFocusClass = "focus:border-purple-400/60 focus:ring-4 focus:ring-purple-500/15";
   const imageFocusClass = "focus:border-violet-300/60 focus:ring-2 focus:ring-violet-300/30";
   const imageMessages = messages.filter((message) => Boolean(message.imageUrl));
-  const latestGenerated = imageMessages.length > 0 ? imageMessages[imageMessages.length - 1] : null;
+  const latestSessionGenerated =
+    imageMessages.length > 0
+      ? {
+          imageUrl: imageMessages[imageMessages.length - 1].imageUrl ?? "",
+          imageId: imageMessages[imageMessages.length - 1].imageId,
+        }
+      : null;
+  const latestHistoryGenerated =
+    generatedHistory.length > 0
+      ? {
+          imageUrl: generatedHistory[0].imageUrl,
+          imageId: generatedHistory[0].id,
+        }
+      : null;
+  const latestGenerated = latestSessionGenerated ?? latestHistoryGenerated;
   const isLight = theme === "light";
 
   useEffect(() => {
@@ -620,13 +735,24 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
   async function handleDownloadImage() {
     const imageUrl = latestGenerated?.imageUrl;
-    if (!imageUrl || downloadingImage) {
+    const imageId = latestGenerated?.imageId;
+    if ((!imageUrl && !imageId) || downloadingImage) {
       return;
     }
 
     try {
       setDownloadingImage(true);
       setError("");
+
+      if (imageId) {
+        const link = document.createElement("a");
+        link.href = `/api/chatgpt/generated-image/${imageId}?download=1`;
+        link.download = `imagem-${imageId}.png`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        return;
+      }
 
       const response = await fetch("/api/chatgpt/download-image", {
         method: "POST",
@@ -929,67 +1055,56 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                 ) : null}
               </article>
 
-              <article className={`flex min-h-0 flex-1 flex-col ${cardClass}`}>
-                <p className={`mb-3 ${sectionTitleClass}`}>Historico de Geracoes</p>
-                <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-                  {imageMessages.length > 0 ? (
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                      {[...imageMessages].reverse().map((message, index) => (
-                        <article
-                          key={`thumb-${index}-${message.imageUrl}`}
-                          className={`overflow-hidden rounded-xl border ${
-                            isLight ? "border-slate-200 bg-white" : "border-gray-700/80 bg-gray-900/70"
-                          }`}
-                        >
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={message.imageUrl}
-                            alt={`Geracao ${index + 1}`}
-                            className="aspect-square h-auto w-full object-cover"
-                            loading="lazy"
-                          />
-                        </article>
-                      ))}
-                    </div>
-                  ) : (
-                    <div
-                      className={`flex h-24 items-center justify-center rounded-xl border border-dashed text-xs ${
-                        isLight
-                          ? "border-slate-300 bg-slate-100 text-slate-500"
-                          : "border-purple-400/45 bg-purple-500/12 text-purple-100"
-                      }`}
-                    >
-                      Nenhuma imagem gerada ainda.
-                    </div>
-                  )}
-
-                  <div className="mt-3 space-y-3">
-                    {messages.map((message, index) => (
-                      <article
-                        key={`${message.role}-${index}`}
-                        className={`rounded-2xl border px-3 py-3 text-sm leading-relaxed ${
-                          message.role === "user"
-                            ? isLight
-                              ? "border-violet-200 bg-violet-50 text-violet-800"
-                              : "border-purple-400/45 bg-purple-500/15 text-purple-100"
-                            : isLight
-                              ? "border-slate-200 bg-white text-slate-800"
-                              : "border-gray-700/80 bg-gray-900/60 text-gray-100"
-                        }`}
-                      >
-                        <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] opacity-85">
-                          {message.role === "user" ? "Prompt" : "Assistente"}
-                        </p>
-                        <p className="whitespace-pre-wrap">{message.content}</p>
-                      </article>
-                    ))}
-                  </div>
-
-                  <div ref={bottomRef} />
-                </div>
-              </article>
             </div>
           </div>
+
+          <article className={`mt-4 w-full ${cardClass}`}>
+            <p className={`mb-3 ${sectionTitleClass}`}>Historico de Geracoes</p>
+            {loadingGeneratedHistory && generatedHistory.length === 0 ? (
+              <div
+                className={`flex h-24 items-center justify-center rounded-xl border border-dashed text-xs ${
+                  isLight
+                    ? "border-slate-300 bg-slate-100 text-slate-500"
+                    : "border-purple-400/45 bg-purple-500/12 text-purple-100"
+                }`}
+              >
+                Carregando historico salvo...
+              </div>
+            ) : generatedHistory.length > 0 ? (
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                {generatedHistory.map((item, index) => (
+                  <article
+                    key={`thumb-${item.id}-${index}`}
+                    className={`overflow-hidden rounded-xl border ${
+                      isLight ? "border-slate-200 bg-white" : "border-gray-700/80 bg-gray-900/70"
+                    }`}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={item.imageUrl}
+                      alt={`Geracao ${index + 1}`}
+                      className="aspect-square h-auto w-full object-cover"
+                      loading="lazy"
+                    />
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div
+                className={`flex h-24 items-center justify-center rounded-xl border border-dashed text-xs ${
+                  isLight
+                    ? "border-slate-300 bg-slate-100 text-slate-500"
+                    : "border-purple-400/45 bg-purple-500/12 text-purple-100"
+                }`}
+              >
+                Nenhuma imagem gerada ainda.
+              </div>
+            )}
+            {generatedHistoryWarning ? (
+              <p className={`mt-2 ${mutedTextClass}`}>{generatedHistoryWarning}</p>
+            ) : null}
+          </article>
+
           {isMobileViewport && isPreviewModalOpen && (loading || latestGenerated?.imageUrl) ? (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 lg:hidden">
               <div

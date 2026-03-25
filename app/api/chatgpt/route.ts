@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { get, put } from "@vercel/blob";
+import { put } from "@vercel/blob";
 
 import { prisma } from "@/lib/prisma";
 
@@ -91,7 +91,6 @@ type ResolvedGeneratedImage = {
 type PersistedGeneratedImage = {
   recordId: string;
   blobUrl: string;
-  deliveryUrl: string;
 };
 
 type BlobAccessMode = "public" | "private";
@@ -237,7 +236,6 @@ async function persistGeneratedImage(params: {
 
   const accessCandidates = getBlobAccessCandidates();
   let blob: Awaited<ReturnType<typeof put>> | null = null;
-  let usedAccessMode: BlobAccessMode | null = null;
   let lastError: unknown = null;
 
   for (const accessMode of accessCandidates) {
@@ -248,7 +246,6 @@ async function persistGeneratedImage(params: {
         token: blobToken,
         addRandomSuffix: false,
       });
-      usedAccessMode = accessMode;
       break;
     } catch (uploadError) {
       lastError = uploadError;
@@ -258,7 +255,7 @@ async function persistGeneratedImage(params: {
     }
   }
 
-  if (!blob || !usedAccessMode) {
+  if (!blob) {
     if (lastError instanceof Error) {
       throw lastError;
     }
@@ -281,25 +278,9 @@ async function persistGeneratedImage(params: {
     },
   });
 
-  let deliveryUrl = blob.url;
-  if (usedAccessMode === "private") {
-    const privateBlob = await get(blob.pathname, {
-      access: "private",
-      token: blobToken,
-      useCache: false,
-    });
-
-    if (!privateBlob || privateBlob.statusCode !== 200) {
-      throw new Error("Nao foi possivel obter URL de leitura da imagem privada.");
-    }
-
-    deliveryUrl = privateBlob.blob.url;
-  }
-
   return {
     recordId: savedImage.id,
     blobUrl: blob.url,
-    deliveryUrl,
   };
 }
 
@@ -645,7 +626,7 @@ export async function POST(request: NextRequest) {
           sourceImageName: sourceImage?.name ?? null,
         });
 
-        persistedImageUrl = persistedImage.deliveryUrl;
+        persistedImageUrl = `/api/chatgpt/generated-image/${persistedImage.recordId}`;
         storedImageId = persistedImage.recordId;
       } catch (persistError) {
         const persistErrorMessage =
