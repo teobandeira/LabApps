@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { put } from "@vercel/blob";
+import sharp from "sharp";
 
 import { prisma } from "@/lib/prisma";
 
@@ -10,6 +11,8 @@ const DEFAULT_TEXT_MODEL = "gpt-5.2";
 const DEFAULT_IMAGE_MODEL = "chatgpt-image-latest";
 const DEFAULT_IMAGE_SIZE = "1024x1024";
 const IMAGE_SIZES = new Set(["1024x1024", "1536x1024", "1024x1536"]);
+const SAVED_IMAGE_MAX_DIMENSION = 1280;
+const SAVED_IMAGE_WEBP_QUALITY = 82;
 const MAX_SOURCE_IMAGE_SIZE_BYTES = 50 * 1024 * 1024;
 const SUPPORTED_SOURCE_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
 
@@ -187,6 +190,38 @@ async function resolveGeneratedImage(imageUrl: string): Promise<ResolvedGenerate
   };
 }
 
+async function optimizeGeneratedImage(
+  image: ResolvedGeneratedImage
+): Promise<ResolvedGeneratedImage> {
+  try {
+    const inputBuffer = Buffer.from(image.bytes);
+    const optimizedBuffer = await sharp(inputBuffer)
+      .rotate()
+      .resize({
+        width: SAVED_IMAGE_MAX_DIMENSION,
+        height: SAVED_IMAGE_MAX_DIMENSION,
+        fit: "inside",
+        withoutEnlargement: true,
+      })
+      .webp({ quality: SAVED_IMAGE_WEBP_QUALITY, effort: 6 })
+      .toBuffer();
+
+    if (optimizedBuffer.byteLength <= 0 || optimizedBuffer.byteLength >= inputBuffer.byteLength) {
+      return image;
+    }
+
+    return {
+      ...image,
+      bytes: new Uint8Array(optimizedBuffer),
+      contentType: "image/webp",
+      extension: "webp",
+    };
+  } catch {
+    // Fallback seguro para nao interromper o fluxo de geracao.
+    return image;
+  }
+}
+
 function buildGeneratedImageBlobPath(extension: string): string {
   const datePath = new Date().toISOString().slice(0, 10);
   return `chatgpt/generated/${datePath}/${crypto.randomUUID()}.${extension}`;
@@ -229,9 +264,10 @@ async function persistGeneratedImage(params: {
   }
 
   const resolvedImage = await resolveGeneratedImage(params.imageUrl);
-  const blobPath = buildGeneratedImageBlobPath(resolvedImage.extension);
-  const blobBody = new Blob([Uint8Array.from(resolvedImage.bytes)], {
-    type: resolvedImage.contentType,
+  const optimizedImage = await optimizeGeneratedImage(resolvedImage);
+  const blobPath = buildGeneratedImageBlobPath(optimizedImage.extension);
+  const blobBody = new Blob([Uint8Array.from(optimizedImage.bytes)], {
+    type: optimizedImage.contentType,
   });
 
   const accessCandidates = getBlobAccessCandidates();
@@ -242,7 +278,7 @@ async function persistGeneratedImage(params: {
     try {
       blob = await put(blobPath, blobBody, {
         access: accessMode,
-        contentType: resolvedImage.contentType,
+        contentType: optimizedImage.contentType,
         token: blobToken,
         addRandomSuffix: false,
       });
@@ -270,11 +306,11 @@ async function persistGeneratedImage(params: {
       size: params.imageSize,
       action: params.imageAction,
       sourceImageName: params.sourceImageName,
-      openaiImageUrl: resolvedImage.openaiImageUrl,
+      openaiImageUrl: optimizedImage.openaiImageUrl,
       blobUrl: blob.url,
       blobPath: blob.pathname,
-      mimeType: resolvedImage.contentType,
-      bytes: resolvedImage.bytes.byteLength,
+      mimeType: optimizedImage.contentType,
+      bytes: optimizedImage.bytes.byteLength,
     },
   });
 
