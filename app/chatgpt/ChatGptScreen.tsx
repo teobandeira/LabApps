@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { ChangeEvent, FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import {
   MdAutoFixHigh,
@@ -10,10 +9,7 @@ import {
   MdClose,
   MdDownload,
   MdImage,
-  MdLightbulb,
-  MdSummarize,
 } from "react-icons/md";
-import type { IconType } from "react-icons";
 import { SiOpenai } from "react-icons/si";
 
 type GenerationMode = "chat" | "image";
@@ -42,6 +38,29 @@ const IMAGE_SIZE_OPTIONS: Array<{ label: string; value: ImageSize }> = [
 const CHAT_TEXT_MODEL_LABEL = "gpt-5.2";
 const IMAGE_MODEL_LABEL = "chatgpt-image-latest";
 const THEME_STORAGE_KEY = "chatgpt-theme-mode";
+const MOBILE_PREVIEW_BREAKPOINT = "(max-width: 1023px)";
+const BIBLE_LOADING_VERSES = [
+  "Tudo posso naquele que me fortalece. (Filipenses 4:13)",
+  "O Senhor e o meu pastor; nada me faltara. (Salmos 23:1)",
+  "Entrega o teu caminho ao Senhor; confia nele. (Salmos 37:5)",
+  "Buscai primeiro o Reino de Deus. (Mateus 6:33)",
+  "A minha graca te basta. (2 Corintios 12:9)",
+  "Alegrai-vos na esperanca. (Romanos 12:12)",
+  "Sede fortes e corajosos. (Josue 1:9)",
+  "Em paz me deito e logo adormeco. (Salmos 4:8)",
+];
+
+function getRandomBibleVerse(previous?: string): string {
+  if (BIBLE_LOADING_VERSES.length === 1) {
+    return BIBLE_LOADING_VERSES[0];
+  }
+
+  let verse = BIBLE_LOADING_VERSES[Math.floor(Math.random() * BIBLE_LOADING_VERSES.length)];
+  while (verse === previous) {
+    verse = BIBLE_LOADING_VERSES[Math.floor(Math.random() * BIBLE_LOADING_VERSES.length)];
+  }
+  return verse;
+}
 
 const MODE_COPY: Record<
   GenerationMode,
@@ -59,7 +78,7 @@ const MODE_COPY: Record<
     subtitle: "Converse com a IA usando texto e anexos",
     placeholder: "Escreva seu prompt aqui...",
     cta: "Enviar",
-    hint: "Enter envia. Shift + Enter quebra linha. Voce pode enviar apenas arquivos.",
+    hint: "",
     topTag: "Modo Chat",
   },
   image: {
@@ -72,52 +91,7 @@ const MODE_COPY: Record<
   },
 };
 
-const CHAT_QUICK_ACTIONS: Array<{
-  title: string;
-  subtitle: string;
-  prompt: string;
-  href?: string;
-  icon: IconType;
-  darkIconClass: string;
-  darkBgClass: string;
-  lightIconClass: string;
-  lightBgClass: string;
-}> = [
-  {
-    title: "Criar imagem",
-    subtitle: "Transforme uma ideia em prompt visual",
-    prompt: "Me ajude a criar um prompt detalhado para gerar uma imagem.",
-    href: "/chatgpt/imagem",
-    icon: MdImage,
-    darkIconClass: "text-cyan-200",
-    darkBgClass: "bg-cyan-500/20",
-    lightIconClass: "text-cyan-700",
-    lightBgClass: "bg-cyan-100",
-  },
-  {
-    title: "Resumir texto",
-    subtitle: "Converta textos longos em pontos-chave",
-    prompt: "Resuma o texto abaixo em pontos principais claros e objetivos:",
-    icon: MdSummarize,
-    darkIconClass: "text-emerald-200",
-    darkBgClass: "bg-emerald-500/20",
-    lightIconClass: "text-emerald-700",
-    lightBgClass: "bg-emerald-100",
-  },
-  {
-    title: "Aconselhar",
-    subtitle: "Receba orientacao pratica para decidir",
-    prompt: "Me aconselhe sobre esta situacao com prós, contras e proximo passo:",
-    icon: MdLightbulb,
-    darkIconClass: "text-fuchsia-200",
-    darkBgClass: "bg-fuchsia-500/20",
-    lightIconClass: "text-fuchsia-700",
-    lightBgClass: "bg-fuchsia-100",
-  },
-];
-
 export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
-  const router = useRouter();
   const copy = MODE_COPY[mode];
   const [messages, setMessages] = useState<ChatMessage[]>(
     mode === "chat"
@@ -130,6 +104,9 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const [sourceImage, setSourceImage] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [downloadingImage, setDownloadingImage] = useState(false);
+  const [loadingVerse, setLoadingVerse] = useState<string>(() => getRandomBibleVerse());
+  const [isMobileViewport, setIsMobileViewport] = useState(false);
+  const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>("dark");
   const [error, setError] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -165,6 +142,30 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       // ignore storage issues
     }
   }, [theme]);
+
+  useEffect(() => {
+    if (mode !== "image") {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia(MOBILE_PREVIEW_BREAKPOINT);
+    const handleChange = () => {
+      setIsMobileViewport(mediaQuery.matches);
+      if (!mediaQuery.matches) {
+        setIsPreviewModalOpen(false);
+      }
+    };
+
+    handleChange();
+
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", handleChange);
+      return () => mediaQuery.removeEventListener("change", handleChange);
+    }
+
+    mediaQuery.addListener(handleChange);
+    return () => mediaQuery.removeListener(handleChange);
+  }, [mode]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -389,6 +390,29 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const latestGenerated = imageMessages.length > 0 ? imageMessages[imageMessages.length - 1] : null;
   const isLight = theme === "light";
 
+  useEffect(() => {
+    if (mode !== "image" || !loading) {
+      return;
+    }
+
+    setLoadingVerse((current) => getRandomBibleVerse(current));
+    const intervalId = window.setInterval(() => {
+      setLoadingVerse((current) => getRandomBibleVerse(current));
+    }, 4200);
+
+    return () => window.clearInterval(intervalId);
+  }, [mode, loading]);
+
+  useEffect(() => {
+    if (mode !== "image" || !isMobileViewport) {
+      return;
+    }
+
+    if (loading || latestGenerated?.imageUrl) {
+      setIsPreviewModalOpen(true);
+    }
+  }, [mode, isMobileViewport, loading, latestGenerated?.imageUrl]);
+
   const mainClass = `font-(family-name:--font-montserrat) min-h-screen ${
     isLight ? "bg-slate-100 text-slate-900" : "bg-gray-900 text-white"
   }`;
@@ -416,28 +440,6 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
   function toggleTheme() {
     setTheme((current) => (current === "light" ? "dark" : "light"));
-  }
-
-  function applyQuickAction(promptText: string) {
-    setPrompt(promptText);
-    setError("");
-    setWarnings([]);
-
-    requestAnimationFrame(() => {
-      const textarea = document.getElementById("prompt") as HTMLTextAreaElement | null;
-      textarea?.focus();
-      const end = promptText.length;
-      textarea?.setSelectionRange(end, end);
-    });
-  }
-
-  function handleQuickAction(action: (typeof CHAT_QUICK_ACTIONS)[number]) {
-    if (action.href) {
-      router.push(action.href);
-      return;
-    }
-
-    applyQuickAction(action.prompt);
   }
 
   async function handleDownloadImage() {
@@ -639,10 +641,31 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
             </form>
 
             <div className="flex min-h-0 flex-col gap-4">
-              <article className={cardClass}>
+              {loading || latestGenerated?.imageUrl ? (
+                <button
+                  type="button"
+                  onClick={() => setIsPreviewModalOpen(true)}
+                  className={`lg:hidden inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition ${
+                    isLight
+                      ? "border border-violet-300/50 bg-violet-50 text-violet-700 hover:bg-violet-100"
+                      : "border border-purple-400/45 bg-purple-500/15 text-purple-100 hover:bg-purple-500/25"
+                  }`}
+                >
+                  <MdImage className="h-4 w-4" />
+                  {loading ? "Acompanhar geracao" : "Abrir preview"}
+                </button>
+              ) : null}
+
+              <article className={`hidden lg:block ${cardClass}`}>
                 <p className={sectionTitleClass}>Preview Atual</p>
                 {loading ? (
-                  <div className="relative mt-3 h-52 overflow-hidden rounded-2xl border border-purple-400/35 bg-purple-500/10">
+                  <div
+                    className={`relative mt-3 h-52 overflow-hidden rounded-2xl ${
+                      isLight
+                        ? "border border-violet-300/35 bg-violet-100/60"
+                        : "border border-purple-400/35 bg-purple-500/10"
+                    }`}
+                  >
                     {latestGenerated?.imageUrl ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
@@ -651,15 +674,33 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                         className="h-full w-full object-cover opacity-35 blur-[1px]"
                       />
                     ) : null}
-                    <div className="absolute inset-0 bg-linear-to-br from-purple-500/20 via-fuchsia-500/10 to-indigo-500/20" />
-                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-purple-100">
-                      <span className="h-10 w-10 animate-spin rounded-full border-2 border-purple-200/70 border-t-transparent" />
+                    <div
+                      className={`absolute inset-0 ${
+                        isLight
+                          ? "bg-linear-to-br from-violet-200/40 via-indigo-200/20 to-cyan-200/30"
+                          : "bg-linear-to-br from-purple-500/20 via-fuchsia-500/10 to-indigo-500/20"
+                      }`}
+                    />
+                    <div
+                      className={`absolute inset-0 flex flex-col items-center justify-center gap-3 px-4 ${
+                        isLight ? "text-slate-800" : "text-purple-100"
+                      }`}
+                    >
+                      <span
+                        className={`h-10 w-10 animate-spin rounded-full border-2 border-t-transparent ${
+                          isLight ? "border-violet-500/70" : "border-purple-200/70"
+                        }`}
+                      />
                       <p className="text-sm font-medium">
                         {sourceImage ? "Modificando imagem..." : "Criando nova imagem..."}
                       </p>
-                      <div className="h-1.5 w-44 overflow-hidden rounded-full bg-purple-300/20">
-                        <div className="h-full w-2/3 animate-pulse rounded-full bg-linear-to-r from-purple-200 via-fuchsia-100 to-purple-200" />
-                      </div>
+                      <p
+                        className={`max-w-sm text-center text-xs leading-relaxed ${
+                          isLight ? "text-slate-600" : "text-purple-200/90"
+                        }`}
+                      >
+                        {loadingVerse}
+                      </p>
                     </div>
                   </div>
                 ) : latestGenerated?.imageUrl ? (
@@ -727,6 +768,102 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
               </article>
             </div>
           </div>
+          {isMobileViewport && isPreviewModalOpen && (loading || latestGenerated?.imageUrl) ? (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 lg:hidden">
+              <div
+                className={`relative w-full max-w-lg rounded-2xl p-4 shadow-2xl ${
+                  isLight ? "border border-slate-200 bg-white" : "border border-gray-700 bg-gray-900"
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => setIsPreviewModalOpen(false)}
+                  className={`absolute top-3 right-3 inline-flex h-8 w-8 items-center justify-center rounded-full transition ${
+                    isLight
+                      ? "bg-slate-200 text-slate-700 hover:bg-slate-300"
+                      : "bg-gray-800 text-gray-200 hover:bg-gray-700"
+                  }`}
+                  aria-label="Fechar preview"
+                >
+                  <MdClose className="h-4 w-4" />
+                </button>
+
+                <p className={sectionTitleClass}>Preview Atual</p>
+
+                {loading ? (
+                  <div
+                    className={`relative mt-3 h-[62vh] max-h-[520px] overflow-hidden rounded-2xl ${
+                      isLight
+                        ? "border border-violet-300/35 bg-violet-100/60"
+                        : "border border-purple-400/35 bg-purple-500/10"
+                    }`}
+                  >
+                    {latestGenerated?.imageUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={latestGenerated.imageUrl}
+                        alt="Preview anterior"
+                        className="h-full w-full object-cover opacity-35 blur-[1px]"
+                      />
+                    ) : null}
+                    <div
+                      className={`absolute inset-0 ${
+                        isLight
+                          ? "bg-linear-to-br from-violet-200/40 via-indigo-200/20 to-cyan-200/30"
+                          : "bg-linear-to-br from-purple-500/20 via-fuchsia-500/10 to-indigo-500/20"
+                      }`}
+                    />
+                    <div
+                      className={`absolute inset-0 flex flex-col items-center justify-center gap-3 px-4 ${
+                        isLight ? "text-slate-800" : "text-purple-100"
+                      }`}
+                    >
+                      <span
+                        className={`h-10 w-10 animate-spin rounded-full border-2 border-t-transparent ${
+                          isLight ? "border-violet-500/70" : "border-purple-200/70"
+                        }`}
+                      />
+                      <p className="text-sm font-medium">
+                        {sourceImage ? "Modificando imagem..." : "Criando nova imagem..."}
+                      </p>
+                      <p
+                        className={`max-w-sm text-center text-xs leading-relaxed ${
+                          isLight ? "text-slate-600" : "text-purple-200/90"
+                        }`}
+                      >
+                        {loadingVerse}
+                      </p>
+                    </div>
+                  </div>
+                ) : latestGenerated?.imageUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={latestGenerated.imageUrl}
+                    alt="Imagem gerada mais recente"
+                    className={`mt-3 max-h-[62vh] w-full rounded-2xl object-contain ${
+                      isLight ? "border border-slate-200" : "border border-gray-700"
+                    }`}
+                  />
+                ) : null}
+
+                {latestGenerated?.imageUrl ? (
+                  <button
+                    type="button"
+                    onClick={handleDownloadImage}
+                    disabled={downloadingImage}
+                    className={`mt-3 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed ${
+                      isLight
+                        ? "border border-violet-300 bg-violet-500 text-white hover:bg-violet-600 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
+                        : "border border-purple-400/45 bg-purple-500/15 text-purple-100 hover:bg-purple-500/25 disabled:border-gray-600 disabled:bg-gray-700 disabled:text-gray-400"
+                    }`}
+                  >
+                    <MdDownload className="h-5 w-5" />
+                    {downloadingImage ? "Baixando..." : "Download da imagem"}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
           <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-2 lg:flex lg:justify-end">
             <button type="button" onClick={toggleTheme} className={toggleButtonClass}>
               <span
@@ -786,48 +923,21 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 sm:py-6">
             <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
               {messages.length === 0 ? (
-                <section className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-1">
-                  {CHAT_QUICK_ACTIONS.map((action) => {
-                    const Icon = action.icon;
-                    return (
-                      <button
-                        key={action.title}
-                        type="button"
-                        onClick={() => handleQuickAction(action)}
-                        className={`group rounded-2xl border p-4 text-left transition ${
-                          isLight
-                            ? "border-slate-200 bg-white hover:border-violet-300 hover:bg-violet-50/50"
-                            : "border-gray-700/80 bg-gray-900/70 hover:border-purple-400/45 hover:bg-gray-900"
-                        }`}
-                      >
-                        <div className="flex items-start gap-3">
-                          <span
-                            className={`inline-flex h-10 w-10 items-center justify-center rounded-xl ${
-                              isLight ? action.lightBgClass : action.darkBgClass
-                            }`}
-                          >
-                            <Icon
-                              className={`h-5 w-5 ${
-                                isLight ? action.lightIconClass : action.darkIconClass
-                              }`}
-                            />
-                          </span>
-                          <div className="min-w-0">
-                            <p
-                              className={`text-sm font-semibold ${
-                                isLight ? "text-slate-900" : "text-white"
-                              }`}
-                            >
-                              {action.title}
-                            </p>
-                            <p className={`mt-1 text-xs ${isLight ? "text-slate-500" : "text-gray-400"}`}>
-                              {action.subtitle}
-                            </p>
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })}
+                <section className="flex min-h-full flex-1 items-center justify-center">
+                  <div className="flex max-w-md flex-col items-center justify-center text-center">
+                    <span
+                      className={`inline-flex h-16 w-16 items-center justify-center rounded-2xl border ${
+                        isLight
+                          ? "border-violet-200 bg-violet-50 text-violet-600"
+                          : "border-purple-400/45 bg-purple-500/15 text-purple-200"
+                      }`}
+                    >
+                      <SiOpenai className="h-9 w-9" />
+                    </span>
+                    <h2 className={`mt-5 text-xl font-semibold ${isLight ? "text-slate-900" : "text-white"}`}>
+                      Ola, como posso ajudar?
+                    </h2>
+                  </div>
                 </section>
               ) : null}
 
@@ -988,10 +1098,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
               </div>
             </div>
 
-            <p className={`mt-2 ${mutedTextClass}`}>
-              Ate {MAX_FILES} arquivos de texto por envio (maximo 2MB cada).
-            </p>
-            <p className={`mt-2 ${mutedTextClass}`}>{copy.hint}</p>
+            {copy.hint ? <p className={`mt-2 ${mutedTextClass}`}>{copy.hint}</p> : null}
           </form>
         </div>
         <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-2 lg:flex lg:justify-end">
