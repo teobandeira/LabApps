@@ -107,6 +107,28 @@ function getRandomBibleVerse(previous?: string): string {
   return verse;
 }
 
+function getFilenameFromContentDisposition(headerValue: string | null): string {
+  if (!headerValue) {
+    return `imagem-${Date.now()}.png`;
+  }
+
+  const utf8Match = headerValue.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      return utf8Match[1];
+    }
+  }
+
+  const simpleMatch = headerValue.match(/filename="?([^";]+)"?/i);
+  if (simpleMatch?.[1]) {
+    return simpleMatch[1];
+  }
+
+  return `imagem-${Date.now()}.png`;
+}
+
 const MODE_COPY: Record<
   GenerationMode,
   {
@@ -604,22 +626,32 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
     try {
       setDownloadingImage(true);
-      const response = await fetch(imageUrl);
+      setError("");
+
+      const response = await fetch("/api/chatgpt/download-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageUrl }),
+      });
+
       if (!response.ok) {
         throw new Error("Falha ao baixar imagem.");
       }
 
       const blob = await response.blob();
+      const filename = getFilenameFromContentDisposition(
+        response.headers.get("content-disposition")
+      );
       const blobUrl = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = blobUrl;
-      link.download = `imagem-${Date.now()}.png`;
+      link.download = filename;
       document.body.appendChild(link);
       link.click();
       link.remove();
       URL.revokeObjectURL(blobUrl);
     } catch {
-      window.open(imageUrl, "_blank", "noopener,noreferrer");
+      setError("Nao foi possivel forcar o download da imagem agora.");
     } finally {
       setDownloadingImage(false);
     }
@@ -632,7 +664,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
         {topActionMenu}
         <section className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-0 py-0 sm:px-6 sm:py-8 lg:px-8 lg:py-10">
           <div className="h-11 sm:hidden" />
-          <header className={headerClass}>
+          <header className={`hidden sm:block ${headerClass}`}>
             <div
               className={`absolute -top-16 -right-10 h-44 w-44 rounded-full blur-3xl ${
                 isLight ? "bg-cyan-200/50" : "bg-cyan-500/20"
@@ -653,7 +685,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
           </header>
 
           <div
-            className={`mt-4 grid min-h-0 flex-1 gap-4 rounded-none p-4 sm:rounded-2xl sm:p-5 lg:grid-cols-[minmax(360px,0.95fr)_minmax(420px,1.05fr)] ${
+            className={`mt-0 grid min-h-0 flex-1 gap-4 rounded-none p-4 sm:mt-4 sm:rounded-2xl sm:p-5 lg:grid-cols-[minmax(360px,0.95fr)_minmax(420px,1.05fr)] ${
               isLight ? "border border-slate-200 bg-slate-50 shadow-sm" : "bg-gray-800 shadow"
             }`}
           >
