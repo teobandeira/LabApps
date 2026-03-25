@@ -7,6 +7,8 @@ import {
   MdArrowUpward,
   MdArrowBack,
   MdAttachFile,
+  MdChevronLeft,
+  MdChevronRight,
   MdClose,
   MdDownload,
   MdImage,
@@ -140,6 +142,18 @@ function getFilenameFromContentDisposition(headerValue: string | null): string {
   return `imagem-${Date.now()}.png`;
 }
 
+function formatCreatedAt(value: string): string {
+  const parsedDate = new Date(value);
+  if (Number.isNaN(parsedDate.getTime())) {
+    return "Data indisponivel";
+  }
+
+  return new Intl.DateTimeFormat("pt-BR", {
+    dateStyle: "short",
+    timeStyle: "short",
+  }).format(parsedDate);
+}
+
 const MODE_COPY: Record<
   GenerationMode,
   {
@@ -164,7 +178,7 @@ const MODE_COPY: Record<
     subtitle: "Descreva a cena e gere imagens com IA",
     placeholder: "Descreva a imagem que voce quer gerar...",
     cta: "Gerar imagem",
-    hint: "Upload de imagem base e opcional. Sem upload, a imagem e criada do zero.",
+    hint: "",
     topTag: "Modo Imagem",
   },
 };
@@ -192,6 +206,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const [generatedHistory, setGeneratedHistory] = useState<GeneratedImageHistoryItem[]>([]);
   const [loadingGeneratedHistory, setLoadingGeneratedHistory] = useState(false);
   const [generatedHistoryWarning, setGeneratedHistoryWarning] = useState("");
+  const [historyLightboxIndex, setHistoryLightboxIndex] = useState<number | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sourceImageInputRef = useRef<HTMLInputElement>(null);
@@ -632,15 +647,53 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     }
   }, [mode, isMobileViewport, loading]);
 
-  const mainClass = `font-(family-name:--font-montserrat) min-h-screen ${
+  useEffect(() => {
+    if (historyLightboxIndex === null) {
+      return;
+    }
+
+    function handleLightboxKeyboard(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") {
+        setHistoryLightboxIndex(null);
+        return;
+      }
+
+      if (generatedHistory.length <= 1) {
+        return;
+      }
+
+      if (event.key === "ArrowLeft") {
+        setHistoryLightboxIndex((current) => {
+          if (current === null) {
+            return current;
+          }
+          return (current - 1 + generatedHistory.length) % generatedHistory.length;
+        });
+      }
+
+      if (event.key === "ArrowRight") {
+        setHistoryLightboxIndex((current) => {
+          if (current === null) {
+            return current;
+          }
+          return (current + 1) % generatedHistory.length;
+        });
+      }
+    }
+
+    window.addEventListener("keydown", handleLightboxKeyboard);
+    return () => window.removeEventListener("keydown", handleLightboxKeyboard);
+  }, [historyLightboxIndex, generatedHistory.length]);
+
+  const mainClass = `font-(family-name:--font-montserrat) min-h-screen [&_button:enabled]:cursor-pointer [&_a]:cursor-pointer ${
     isLight ? "bg-slate-100 text-slate-900" : "bg-gray-900 text-white"
   }`;
   const headerClass = isLight
-    ? "relative overflow-hidden rounded-none border border-slate-200 bg-white px-6 py-6 shadow-sm sm:px-8"
-    : "relative overflow-hidden rounded-none border border-cyan-500/20 bg-linear-to-br from-gray-900 via-slate-900 to-gray-900 px-6 py-6 sm:px-8";
+    ? "relative overflow-hidden rounded-none border border-slate-200 bg-white px-4 py-3 shadow-sm sm:rounded-3xl sm:px-6 sm:py-5 lg:px-8 lg:py-6"
+    : "relative overflow-hidden rounded-none border border-cyan-500/20 bg-linear-to-br from-gray-900 via-slate-900 to-gray-900 px-4 py-3 sm:rounded-3xl sm:px-6 sm:py-5 lg:px-8 lg:py-6";
   const chatHeaderClass = isLight
-    ? "relative overflow-hidden rounded-none border border-slate-200 bg-white px-4 py-3 shadow-sm sm:px-5 sm:py-4"
-    : "relative overflow-hidden rounded-none border border-cyan-500/20 bg-linear-to-br from-gray-900 via-slate-900 to-gray-900 px-4 py-3 sm:px-5 sm:py-4";
+    ? "relative overflow-hidden rounded-none border border-slate-200 bg-white px-4 py-2.5 shadow-sm sm:rounded-3xl sm:px-5 sm:py-3.5 lg:px-6 lg:py-4"
+    : "relative overflow-hidden rounded-none border border-cyan-500/20 bg-linear-to-br from-gray-900 via-slate-900 to-gray-900 px-4 py-2.5 sm:rounded-3xl sm:px-5 sm:py-3.5 lg:px-6 lg:py-4";
   const subtitleClass = isLight ? "mt-1 text-slate-600" : "mt-1 text-gray-300";
   const modelClass = isLight ? "mt-1 text-slate-500" : "mt-1 text-cyan-200/90";
   const sectionTitleClass = isLight
@@ -665,6 +718,43 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
   function toggleTheme() {
     setTheme((current) => (current === "light" ? "dark" : "light"));
+  }
+
+  const historyLightboxItem =
+    historyLightboxIndex !== null ? generatedHistory[historyLightboxIndex] ?? null : null;
+
+  function openHistoryLightbox(index: number) {
+    setHistoryLightboxIndex(index);
+  }
+
+  function closeHistoryLightbox() {
+    setHistoryLightboxIndex(null);
+  }
+
+  function goToPreviousHistoryImage() {
+    if (generatedHistory.length <= 1) {
+      return;
+    }
+
+    setHistoryLightboxIndex((current) => {
+      if (current === null) {
+        return current;
+      }
+      return (current - 1 + generatedHistory.length) % generatedHistory.length;
+    });
+  }
+
+  function goToNextHistoryImage() {
+    if (generatedHistory.length <= 1) {
+      return;
+    }
+
+    setHistoryLightboxIndex((current) => {
+      if (current === null) {
+        return current;
+      }
+      return (current + 1) % generatedHistory.length;
+    });
   }
 
   const topActionMenu = (
@@ -786,7 +876,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
               }`}
             />
 
-            <div className="mt-2 flex items-center gap-2 text-lg font-semibold sm:mt-4 sm:text-3xl">
+            <div className="flex items-center gap-2 text-lg font-semibold sm:text-3xl">
               <SiOpenai className="h-6 w-6 text-purple-300 sm:h-8 sm:w-8" />
               <h1>{copy.title}</h1>
             </div>
@@ -795,7 +885,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
           </header>
 
           <div
-            className={`mt-0 grid min-h-0 flex-1 gap-4 rounded-none p-4 sm:mt-4 sm:rounded-2xl sm:p-5 lg:grid-cols-[minmax(360px,0.95fr)_minmax(420px,1.05fr)] ${
+            className={`mt-0 grid min-h-0 flex-1 gap-4 rounded-none p-0 sm:rounded-2xl lg:mt-4 lg:p-5 lg:grid-cols-[minmax(360px,0.95fr)_minmax(420px,1.05fr)] ${
               isLight ? "border border-slate-200 bg-slate-50 shadow-sm" : "bg-gray-800 shadow"
             }`}
           >
@@ -899,7 +989,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
                 <label
                   htmlFor="source-image"
-                  className={`inline-flex h-12 w-full items-center justify-center gap-2 rounded-2xl px-6 text-sm font-semibold transition ${
+                  className={`inline-flex h-12 w-full cursor-pointer items-center justify-center gap-2 rounded-2xl px-6 text-sm font-semibold transition ${
                     isLight
                       ? "border border-violet-300/50 bg-violet-50 text-violet-700 hover:bg-violet-100"
                       : "border border-purple-400/45 bg-gray-500/25 text-purple-100 hover:bg-purple-500/35 disabled:cursor-not-allowed disabled:border-gray-600 disabled:bg-gray-700 disabled:text-gray-400"
@@ -936,7 +1026,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                 ) : null}
               </div>
 
-              <p className={`mt-3 ${mutedTextClass}`}>{copy.hint}</p>
+              {copy.hint ? <p className={`mt-3 ${mutedTextClass}`}>{copy.hint}</p> : null}
             </form>
 
             <div className="flex min-h-0 flex-col gap-4">
@@ -973,26 +1063,47 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                         className="h-full w-full object-cover opacity-35 blur-[1px]"
                       />
                     ) : null}
-                    <div
-                      className={`absolute inset-0 ${
-                        isLight
-                          ? "bg-linear-to-br from-violet-200/40 via-indigo-200/20 to-cyan-200/30"
-                          : "bg-linear-to-br from-purple-500/20 via-fuchsia-500/10 to-indigo-500/20"
-                      }`}
-                    />
+                    <div className={`absolute inset-0 ${isLight ? "bg-slate-200/35" : "bg-slate-900/45"}`} />
+                    <div className="pointer-events-none absolute inset-0">
+                      <span
+                        className={`absolute left-1/2 top-1/2 h-28 w-28 -translate-x-1/2 -translate-y-1/2 rounded-full animate-[ping_2s_ease-in-out_infinite] ${
+                          isLight ? "bg-slate-300/45" : "bg-slate-400/20"
+                        }`}
+                      />
+                      <span
+                        className={`absolute left-1/2 top-1/2 h-16 w-16 -translate-x-1/2 -translate-y-1/2 rounded-2xl animate-pulse ${
+                          isLight ? "bg-slate-300/55" : "bg-slate-400/30"
+                        }`}
+                      />
+                    </div>
                     <div
                       className={`absolute inset-0 flex flex-col items-center justify-center gap-3 px-4 ${
                         isLight ? "text-slate-800" : "text-purple-100"
                       }`}
                     >
-                      <span
-                        className={`h-10 w-10 animate-spin rounded-full border-2 border-t-transparent ${
-                          isLight ? "border-violet-500/70" : "border-purple-200/70"
-                        }`}
-                      />
                       <p className="text-sm font-medium">
                         {sourceImage ? "Modificando imagem..." : "Criando nova imagem..."}
                       </p>
+                      <div className="space-y-2">
+                        <span
+                          className={`mx-auto block h-2 w-40 rounded-full animate-pulse ${
+                            isLight ? "bg-slate-400/45" : "bg-slate-300/35"
+                          }`}
+                          style={{ animationDuration: "1.4s" }}
+                        />
+                        <span
+                          className={`mx-auto block h-2 w-28 rounded-full animate-pulse ${
+                            isLight ? "bg-slate-400/45" : "bg-slate-300/35"
+                          }`}
+                          style={{ animationDuration: "1.8s" }}
+                        />
+                        <span
+                          className={`mx-auto block h-2 w-20 rounded-full animate-pulse ${
+                            isLight ? "bg-slate-400/45" : "bg-slate-300/35"
+                          }`}
+                          style={{ animationDuration: "1.2s" }}
+                        />
+                      </div>
                       <p
                         className={`max-w-sm text-center text-xs leading-relaxed ${
                           isLight ? "text-slate-600" : "text-purple-200/90"
@@ -1042,7 +1153,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
             </div>
           </div>
 
-          <article className={`mt-4 w-full ${cardClass}`}>
+          <article className={`mt-0 w-full lg:mt-4 ${cardClass}`}>
             <p className={`mb-3 ${sectionTitleClass}`}>Historico de Geracoes</p>
             {loadingGeneratedHistory && generatedHistory.length === 0 ? (
               <div
@@ -1063,13 +1174,27 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                       isLight ? "border-slate-200 bg-white" : "border-gray-700/80 bg-gray-900/70"
                     }`}
                   >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={item.imageUrl}
-                      alt={`Geracao ${index + 1}`}
-                      className="aspect-square h-auto w-full object-cover"
-                      loading="lazy"
-                    />
+                    <button
+                      type="button"
+                      onClick={() => openHistoryLightbox(index)}
+                      className="block w-full text-left"
+                      aria-label={`Abrir imagem ${index + 1} no lightbox`}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={item.imageUrl}
+                        alt={`Geracao ${index + 1}`}
+                        className="aspect-square h-auto w-full object-cover transition hover:opacity-90"
+                        loading="lazy"
+                      />
+                    </button>
+                    <p
+                      className={`px-2 py-1 text-[10px] ${
+                        isLight ? "text-slate-600" : "text-gray-300"
+                      }`}
+                    >
+                      {formatCreatedAt(item.createdAt)}
+                    </p>
                   </article>
                 ))}
               </div>
@@ -1099,7 +1224,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                 <button
                   type="button"
                   onClick={() => setIsPreviewModalOpen(false)}
-                  className={`absolute top-3 right-3 inline-flex h-8 w-8 items-center justify-center rounded-full transition ${
+                  className={`absolute top-3 right-3 z-20 inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-full transition ${
                     isLight
                       ? "bg-slate-200 text-slate-700 hover:bg-slate-300"
                       : "bg-gray-800 text-gray-200 hover:bg-gray-700"
@@ -1127,26 +1252,47 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                         className="h-full w-full object-cover opacity-35 blur-[1px]"
                       />
                     ) : null}
-                    <div
-                      className={`absolute inset-0 ${
-                        isLight
-                          ? "bg-linear-to-br from-violet-200/40 via-indigo-200/20 to-cyan-200/30"
-                          : "bg-linear-to-br from-purple-500/20 via-fuchsia-500/10 to-indigo-500/20"
-                      }`}
-                    />
+                    <div className={`absolute inset-0 ${isLight ? "bg-slate-200/35" : "bg-slate-900/45"}`} />
+                    <div className="pointer-events-none absolute inset-0">
+                      <span
+                        className={`absolute left-1/2 top-1/2 h-28 w-28 -translate-x-1/2 -translate-y-1/2 rounded-full animate-[ping_2s_ease-in-out_infinite] ${
+                          isLight ? "bg-slate-300/45" : "bg-slate-400/20"
+                        }`}
+                      />
+                      <span
+                        className={`absolute left-1/2 top-1/2 h-16 w-16 -translate-x-1/2 -translate-y-1/2 rounded-2xl animate-pulse ${
+                          isLight ? "bg-slate-300/55" : "bg-slate-400/30"
+                        }`}
+                      />
+                    </div>
                     <div
                       className={`absolute inset-0 flex flex-col items-center justify-center gap-3 px-4 ${
                         isLight ? "text-slate-800" : "text-purple-100"
                       }`}
                     >
-                      <span
-                        className={`h-10 w-10 animate-spin rounded-full border-2 border-t-transparent ${
-                          isLight ? "border-violet-500/70" : "border-purple-200/70"
-                        }`}
-                      />
                       <p className="text-sm font-medium">
                         {sourceImage ? "Modificando imagem..." : "Criando nova imagem..."}
                       </p>
+                      <div className="space-y-2">
+                        <span
+                          className={`mx-auto block h-2 w-40 rounded-full animate-pulse ${
+                            isLight ? "bg-slate-400/45" : "bg-slate-300/35"
+                          }`}
+                          style={{ animationDuration: "1.4s" }}
+                        />
+                        <span
+                          className={`mx-auto block h-2 w-28 rounded-full animate-pulse ${
+                            isLight ? "bg-slate-400/45" : "bg-slate-300/35"
+                          }`}
+                          style={{ animationDuration: "1.8s" }}
+                        />
+                        <span
+                          className={`mx-auto block h-2 w-20 rounded-full animate-pulse ${
+                            isLight ? "bg-slate-400/45" : "bg-slate-300/35"
+                          }`}
+                          style={{ animationDuration: "1.2s" }}
+                        />
+                      </div>
                       <p
                         className={`max-w-sm text-center text-xs leading-relaxed ${
                           isLight ? "text-slate-600" : "text-purple-200/90"
@@ -1185,6 +1331,84 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
               </div>
             </div>
           ) : null}
+
+          {historyLightboxItem ? (
+            <div
+              className="fixed inset-0 z-[90] flex items-center justify-center bg-black/85 p-3 sm:p-6"
+              onClick={closeHistoryLightbox}
+            >
+              <div
+                className={`relative w-full max-w-6xl rounded-2xl border p-3 shadow-2xl sm:p-4 ${
+                  isLight ? "border-slate-200 bg-white" : "border-gray-700 bg-gray-900"
+                }`}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  onClick={closeHistoryLightbox}
+                  className={`absolute top-3 right-3 z-20 inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-full transition ${
+                    isLight
+                      ? "bg-slate-200 text-slate-700 hover:bg-slate-300"
+                      : "bg-gray-800 text-gray-200 hover:bg-gray-700"
+                  }`}
+                  aria-label="Fechar lightbox"
+                >
+                  <MdClose className="h-4 w-4" />
+                </button>
+
+                <div className="relative flex items-center justify-center">
+                  {generatedHistory.length > 1 ? (
+                    <button
+                      type="button"
+                      onClick={goToPreviousHistoryImage}
+                      className={`absolute left-1 z-10 inline-flex h-10 w-10 items-center justify-center rounded-full transition sm:left-2 ${
+                        isLight
+                          ? "bg-white/90 text-slate-700 shadow hover:bg-white"
+                          : "bg-gray-900/80 text-white hover:bg-gray-800"
+                      }`}
+                      aria-label="Imagem anterior"
+                    >
+                      <MdChevronLeft className="h-6 w-6" />
+                    </button>
+                  ) : null}
+
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={historyLightboxItem.imageUrl}
+                    alt="Imagem do historico em destaque"
+                    className={`max-h-[80vh] w-full rounded-xl object-contain ${
+                      isLight ? "border border-slate-200" : "border border-gray-700"
+                    }`}
+                  />
+
+                  {generatedHistory.length > 1 ? (
+                    <button
+                      type="button"
+                      onClick={goToNextHistoryImage}
+                      className={`absolute right-1 z-10 inline-flex h-10 w-10 items-center justify-center rounded-full transition sm:right-2 ${
+                        isLight
+                          ? "bg-white/90 text-slate-700 shadow hover:bg-white"
+                          : "bg-gray-900/80 text-white hover:bg-gray-800"
+                      }`}
+                      aria-label="Proxima imagem"
+                    >
+                      <MdChevronRight className="h-6 w-6" />
+                    </button>
+                  ) : null}
+                </div>
+
+                <div className="mt-3 flex items-center justify-between gap-3 pr-10">
+                  <p className={`text-xs ${isLight ? "text-slate-600" : "text-gray-300"}`}>
+                    Criada em {formatCreatedAt(historyLightboxItem.createdAt)}
+                  </p>
+                  <p className={`text-xs ${isLight ? "text-slate-500" : "text-gray-400"}`}>
+                    {historyLightboxIndex !== null ? historyLightboxIndex + 1 : 1}/
+                    {generatedHistory.length}
+                  </p>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </section>
       </main>
     );
@@ -1206,7 +1430,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
             }`}
           />
 
-          <div className="mt-1 flex items-center gap-2 font-semibold sm:mt-2">
+          <div className="flex items-center gap-2 font-semibold">
             <SiOpenai className="h-5 w-5 text-purple-300 sm:h-6 sm:w-6" />
             <h1 className="text-base sm:text-2xl">{copy.title}</h1>
           </div>

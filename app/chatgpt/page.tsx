@@ -43,7 +43,7 @@ export default function ChatGptModesPage() {
   return (
     <main className="font-(family-name:--font-montserrat) min-h-screen bg-gray-900 text-white">
       <section className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        <header className="relative mb-6 overflow-hidden rounded-3xl border border-cyan-500/20 bg-linear-to-br from-gray-900 via-slate-900 to-gray-900 p-6 sm:p-8">
+        <header className="relative mb-6 overflow-hidden rounded-none border border-cyan-500/20 bg-linear-to-br from-gray-900 via-slate-900 to-gray-900 p-4 sm:rounded-3xl sm:p-8">
           <div className="absolute -top-16 -right-10 h-44 w-44 rounded-full bg-cyan-500/20 blur-3xl" />
           <div className="absolute -bottom-20 left-1/3 h-56 w-56 rounded-full bg-blue-500/10 blur-3xl" />
 
@@ -65,7 +65,7 @@ export default function ChatGptModesPage() {
             <Link
               key={card.title}
               href={card.href}
-              className={`group flex h-full flex-col rounded-2xl border border-gray-700/80 bg-linear-to-br from-gray-900/80 via-slate-900/70 to-gray-950/70 p-6 transition hover:border-purple-400/45 ${
+              className={`group flex h-full cursor-pointer flex-col rounded-2xl border border-gray-700/80 bg-linear-to-br from-gray-900/80 via-slate-900/70 to-gray-950/70 p-6 transition hover:border-purple-400/45 ${
                 card.style === "chat" ? "hover:bg-gray-900/95" : "hover:bg-purple-950/20"
               }`}
             >
