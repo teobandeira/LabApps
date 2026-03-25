@@ -558,7 +558,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   }
 
   const mobileTopBar = (
-    <div className="fixed inset-x-0 top-0 z-[65] flex h-11 items-center border-b border-white/10 bg-black px-3 sm:hidden">
+    <div className="fixed inset-x-0 top-0 z-65 flex h-11 items-center border-b border-white/10 bg-black px-3 sm:hidden">
       <div className="flex items-center gap-2">
         <SiOpenai className="h-4 w-4 text-white" />
         <span className="text-xs font-semibold tracking-[0.08em] text-white">{copy.title}</span>
@@ -567,7 +567,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   );
 
   const topActionMenu = (
-    <div ref={topMenuRef} className="fixed top-1 right-2 z-[80] sm:top-4 sm:right-4">
+    <div ref={topMenuRef} className="fixed top-1 right-2 z-80 sm:top-4 sm:right-4">
       <button
         type="button"
         onClick={() => setIsTopMenuOpen((current) => !current)}
@@ -597,7 +597,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
             >
               <span
                 className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition ${
-                  isLight ? "left-[22px]" : "left-0.5"
+                  isLight ? "left-5.5" : "left-0.5"
                 }`}
               />
             </span>
@@ -723,7 +723,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                     value={imageSize}
                     onChange={(event) => setImageSize(event.target.value as ImageSize)}
                     disabled={loading}
-                    className={`w-full rounded-xl px-3 py-2 text-sm outline-none transition sm:w-[280px] ${
+                    className={`w-full rounded-xl px-3 py-2 text-sm outline-none transition sm:w-70 ${
                       isLight
                         ? "border border-slate-300 bg-white text-slate-900 focus:border-violet-400/60 focus:ring-4 focus:ring-violet-500/15"
                         : "border border-gray-700/90 bg-gray-900/85 text-gray-100 focus:border-purple-400/60 focus:ring-4 focus:ring-purple-500/15"
@@ -981,7 +981,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
                 {loading ? (
                   <div
-                    className={`relative mt-3 h-[62vh] max-h-[520px] overflow-hidden rounded-2xl ${
+                    className={`relative mt-3 h-[62vh] max-h-130 overflow-hidden rounded-2xl ${
                       isLight
                         ? "border border-violet-300/35 bg-violet-100/60"
                         : "border border-purple-400/35 bg-purple-500/10"
@@ -1062,7 +1062,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     <main className={mainClass}>
       {mobileTopBar}
       {topActionMenu}
-      <section className="mx-auto flex h-[100dvh] min-h-[100dvh] w-full max-w-6xl flex-col px-0 pt-0 pb-0 sm:h-screen sm:min-h-screen sm:px-5 sm:pt-3 sm:pb-6 lg:px-6 lg:pt-4">
+      <section className="mx-auto flex h-dvh min-h-dvh w-full max-w-6xl flex-col px-0 pt-0 pb-0 sm:h-screen sm:min-h-screen sm:px-5 sm:pt-3 sm:pb-6 lg:px-6 lg:pt-4">
         <div className="h-11 sm:hidden" />
         <header className={`hidden sm:block ${headerClass}`}>
           <div
@@ -1198,7 +1198,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                           : "border border-purple-400/35 bg-purple-500/15 text-purple-100"
                       }`}
                     >
-                      <span className="max-w-[200px] truncate">{file.name}</span>
+                      <span className="max-w-50 truncate">{file.name}</span>
                       <button
                         type="button"
                         onClick={() => removeSelectedFile(file)}
@@ -1248,7 +1248,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                 onKeyDown={handleTextareaKeyDown}
                 placeholder={copy.placeholder}
                 disabled={loading}
-                className={`h-11 min-h-11 max-h-44 flex-1 resize-none rounded-xl px-4 py-[10px] text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                className={`h-11 min-h-11 max-h-44 flex-1 resize-none rounded-xl px-4 py-2.5 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60 ${
                   isLight
                     ? "border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400"
                     : "border border-gray-700/90 bg-gray-900/85 text-gray-100 placeholder:text-gray-500"

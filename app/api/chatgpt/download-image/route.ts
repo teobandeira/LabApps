@@ -25,7 +25,7 @@ function extensionFromContentType(contentType: string): string {
 function parseDataUrl(
   dataUrl: string
 ): { bytes: Uint8Array; contentType: string } | null {
-  const match = dataUrl.match(/^data:([^;,]+)(;base64)?,(.*)$/s);
+  const match = dataUrl.match(/^data:([^;,]+)(;base64)?,([\s\S]*)$/);
   if (!match) {
     return null;
   }
@@ -56,8 +56,11 @@ function buildAttachmentResponse(
   contentType: string
 ): NextResponse {
   const filename = `imagem-${Date.now()}.${extensionFromContentType(contentType)}`;
+  const normalizedBytes =
+    bytes instanceof Uint8Array ? Uint8Array.from(bytes) : new Uint8Array(bytes);
+  const body = new Blob([normalizedBytes], { type: contentType });
 
-  return new NextResponse(bytes, {
+  return new NextResponse(body, {
     status: 200,
     headers: {
       "Content-Type": contentType,
@@ -159,4 +162,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-
