@@ -20,7 +20,7 @@ type ModeCard = {
 
 const MODE_CARDS: ModeCard[] = [
   {
-    title: "Chat com Arquivos",
+    title: "ChatGPT 5.2 PRO",
     subtitle: "Texto + anexos",
     description:
       "Converse com a IA, envie arquivos de texto e receba respostas com contexto dos anexos.",
@@ -29,7 +29,7 @@ const MODE_CARDS: ModeCard[] = [
     style: "chat",
   },
   {
-    title: "Gerador de Imagens",
+    title: "Image Designer PRO",
     subtitle: "Texto para imagem",
     description:
       "Descreva uma cena e gere imagens na hora com diferentes proporcoes e estilo visual.",
@@ -49,25 +49,22 @@ export default function ChatGptModesPage() {
 
           <p className="inline-flex items-center gap-2 rounded-full border border-cyan-400/30 bg-cyan-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-cyan-300">
             <MdRocketLaunch className="h-4 w-4" />
-            OpenAI Workspace
+            OpenAI Family
           </p>
 
           <div className="mt-5 flex items-center gap-3">
             <SiOpenai className="h-9 w-9 text-purple-300" />
             <h1 className="text-3xl font-bold leading-tight sm:text-5xl">
-              Escolha o modo do ChatGPT
+              OpenAI
             </h1>
           </div>
-          <p className="mt-3 max-w-2xl text-sm leading-relaxed text-gray-300 sm:text-base">
-            Separei as experiencias em duas paginas para ficar mais rapido: chat com arquivos ou
-            criacao de imagens.
-          </p>
         </header>
 
         <section className="grid gap-4 md:grid-cols-2">
           {MODE_CARDS.map((card) => (
-            <article
+            <Link
               key={card.title}
+              href={card.href}
               className={`group rounded-2xl border border-gray-700/80 bg-linear-to-br from-gray-900/80 via-slate-900/70 to-gray-950/70 p-6 transition hover:border-purple-400/45 ${
                 card.style === "chat" ? "hover:bg-gray-900/95" : "hover:bg-purple-950/20"
               }`}
@@ -92,14 +89,13 @@ export default function ChatGptModesPage() {
               <h2 className="mt-1 text-2xl font-semibold text-gray-100">{card.title}</h2>
               <p className="mt-3 text-sm leading-relaxed text-gray-300">{card.description}</p>
 
-              <Link
-                href={card.href}
+              <span
                 className="mt-6 inline-flex items-center gap-2 rounded-lg border border-purple-400/35 bg-purple-500/15 px-3 py-1.5 text-sm font-semibold text-purple-100 transition hover:bg-purple-500/25"
               >
                 Abrir modo
                 <MdArrowOutward className="h-4 w-4" />
-              </Link>
-            </article>
+              </span>
+            </Link>
           ))}
         </section>
       </section>
