@@ -93,6 +93,8 @@ type PersistedGeneratedImage = {
   blobUrl: string;
 };
 
+type BlobAccessMode = "public" | "private";
+
 function extensionFromImageContentType(contentType: string): string {
   const normalized = contentType.toLowerCase();
 
@@ -190,6 +192,29 @@ function buildGeneratedImageBlobPath(extension: string): string {
   return `chatgpt/generated/${datePath}/${crypto.randomUUID()}.${extension}`;
 }
 
+function getBlobAccessCandidates(): BlobAccessMode[] {
+  const accessFromEnv = process.env.BLOB_ACCESS?.trim().toLowerCase();
+  if (accessFromEnv === "private") {
+    return ["private", "public"];
+  }
+  if (accessFromEnv === "public") {
+    return ["public", "private"];
+  }
+  return ["public", "private"];
+}
+
+function isBlobAccessCompatibilityError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("cannot use public access on a private store") ||
+    message.includes("cannot use private access on a public store")
+  );
+}
+
 async function persistGeneratedImage(params: {
   imageUrl: string;
   prompt: string;
@@ -209,12 +234,33 @@ async function persistGeneratedImage(params: {
     type: resolvedImage.contentType,
   });
 
-  const blob = await put(blobPath, blobBody, {
-    access: "public",
-    contentType: resolvedImage.contentType,
-    token: blobToken,
-    addRandomSuffix: false,
-  });
+  const accessCandidates = getBlobAccessCandidates();
+  let blob: Awaited<ReturnType<typeof put>> | null = null;
+  let lastError: unknown = null;
+
+  for (const accessMode of accessCandidates) {
+    try {
+      blob = await put(blobPath, blobBody, {
+        access: accessMode,
+        contentType: resolvedImage.contentType,
+        token: blobToken,
+        addRandomSuffix: false,
+      });
+      break;
+    } catch (uploadError) {
+      lastError = uploadError;
+      if (!isBlobAccessCompatibilityError(uploadError)) {
+        throw uploadError;
+      }
+    }
+  }
+
+  if (!blob) {
+    if (lastError instanceof Error) {
+      throw lastError;
+    }
+    throw new Error("Falha ao salvar imagem no Blob.");
+  }
 
   const savedImage = await prisma.generatedImage.create({
     data: {
