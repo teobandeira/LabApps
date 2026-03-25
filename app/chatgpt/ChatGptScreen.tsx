@@ -49,7 +49,6 @@ const IMAGE_SIZE_OPTIONS: Array<{ label: string; value: ImageSize }> = [
   { label: "Paisagem 1536x1024", value: "1536x1024" },
   { label: "Retrato 1024x1536", value: "1024x1536" },
 ];
-const CHAT_TEXT_MODEL_LABEL = "gpt-5.2";
 const IMAGE_MODEL_LABEL = "chatgpt-image-latest";
 const THEME_STORAGE_KEY = "chatgpt-theme-mode";
 const MOBILE_PREVIEW_BREAKPOINT = "(max-width: 1023px)";
@@ -607,14 +606,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
           imageId: imageMessages[imageMessages.length - 1].imageId,
         }
       : null;
-  const latestHistoryGenerated =
-    generatedHistory.length > 0
-      ? {
-          imageUrl: generatedHistory[0].imageUrl,
-          imageId: generatedHistory[0].id,
-        }
-      : null;
-  const latestGenerated = latestSessionGenerated ?? latestHistoryGenerated;
+  const latestGenerated = latestSessionGenerated;
   const isLight = theme === "light";
 
   useEffect(() => {
@@ -635,19 +627,22 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       return;
     }
 
-    if (loading || latestGenerated?.imageUrl) {
+    if (loading) {
       setIsPreviewModalOpen(true);
     }
-  }, [mode, isMobileViewport, loading, latestGenerated?.imageUrl]);
+  }, [mode, isMobileViewport, loading]);
 
   const mainClass = `font-(family-name:--font-montserrat) min-h-screen ${
     isLight ? "bg-slate-100 text-slate-900" : "bg-gray-900 text-white"
   }`;
   const headerClass = isLight
-    ? "relative overflow-hidden rounded-3xl border border-slate-200 bg-white px-6 py-6 shadow-sm sm:px-8"
-    : "relative overflow-hidden rounded-3xl border border-cyan-500/20 bg-linear-to-br from-gray-900 via-slate-900 to-gray-900 px-6 py-6 sm:px-8";
-  const subtitleClass = isLight ? "mt-1 text-sm text-slate-600" : "mt-1 text-sm text-gray-300";
-  const modelClass = isLight ? "mt-1 text-xs text-slate-500" : "mt-1 text-xs text-cyan-200/90";
+    ? "relative overflow-hidden rounded-none border border-slate-200 bg-white px-6 py-6 shadow-sm sm:px-8"
+    : "relative overflow-hidden rounded-none border border-cyan-500/20 bg-linear-to-br from-gray-900 via-slate-900 to-gray-900 px-6 py-6 sm:px-8";
+  const chatHeaderClass = isLight
+    ? "relative overflow-hidden rounded-none border border-slate-200 bg-white px-4 py-3 shadow-sm sm:px-5 sm:py-4"
+    : "relative overflow-hidden rounded-none border border-cyan-500/20 bg-linear-to-br from-gray-900 via-slate-900 to-gray-900 px-4 py-3 sm:px-5 sm:py-4";
+  const subtitleClass = isLight ? "mt-1 text-slate-600" : "mt-1 text-gray-300";
+  const modelClass = isLight ? "mt-1 text-slate-500" : "mt-1 text-cyan-200/90";
   const sectionTitleClass = isLight
     ? "text-[11px] font-semibold uppercase tracking-[0.16em] text-violet-600"
     : "text-[11px] font-semibold uppercase tracking-[0.16em] text-purple-300";
@@ -671,15 +666,6 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   function toggleTheme() {
     setTheme((current) => (current === "light" ? "dark" : "light"));
   }
-
-  const mobileTopBar = (
-    <div className="fixed inset-x-0 top-0 z-65 flex h-11 items-center border-b border-white/10 bg-black px-3 sm:hidden">
-      <div className="flex items-center gap-2">
-        <SiOpenai className="h-4 w-4 text-white" />
-        <span className="text-xs font-semibold tracking-[0.08em] text-white">{copy.title}</span>
-      </div>
-    </div>
-  );
 
   const topActionMenu = (
     <div ref={topMenuRef} className="fixed top-1 right-2 z-80 sm:top-4 sm:right-4">
@@ -786,11 +772,9 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   if (mode === "image") {
     return (
       <main className={mainClass}>
-        {mobileTopBar}
         {topActionMenu}
         <section className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-0 py-0 sm:px-6 sm:py-8 lg:px-8 lg:py-10">
-          <div className="h-11 sm:hidden" />
-          <header className={`hidden sm:block ${headerClass}`}>
+          <header className={headerClass}>
             <div
               className={`absolute -top-16 -right-10 h-44 w-44 rounded-full blur-3xl ${
                 isLight ? "bg-cyan-200/50" : "bg-cyan-500/20"
@@ -802,12 +786,12 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
               }`}
             />
 
-            <div className="mt-4 flex items-center gap-2 text-2xl font-semibold sm:text-3xl">
-              <SiOpenai className="h-8 w-8 text-purple-300" />
+            <div className="mt-2 flex items-center gap-2 text-lg font-semibold sm:mt-4 sm:text-3xl">
+              <SiOpenai className="h-6 w-6 text-purple-300 sm:h-8 sm:w-8" />
               <h1>{copy.title}</h1>
             </div>
-            <p className={subtitleClass}>{copy.subtitle}</p>
-            <p className={modelClass}>Modelo: {IMAGE_MODEL_LABEL}</p>
+            <p className={`text-xs sm:text-sm ${subtitleClass}`}>{copy.subtitle}</p>
+            <p className={`text-[11px] sm:text-xs ${modelClass}`}>Modelo: {IMAGE_MODEL_LABEL}</p>
           </header>
 
           <div
@@ -1208,11 +1192,9 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
   return (
     <main className={mainClass}>
-      {mobileTopBar}
       {topActionMenu}
       <section className="mx-auto flex h-dvh min-h-dvh w-full max-w-6xl flex-col px-0 pt-0 pb-0 sm:h-screen sm:min-h-screen sm:px-5 sm:pt-3 sm:pb-6 lg:px-6 lg:pt-4">
-        <div className="h-11 sm:hidden" />
-        <header className={`hidden sm:block ${headerClass}`}>
+        <header className={chatHeaderClass}>
           <div
             className={`absolute -top-16 -right-10 h-44 w-44 rounded-full blur-3xl ${
               isLight ? "bg-cyan-200/50" : "bg-cyan-500/20"
@@ -1224,12 +1206,10 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
             }`}
           />
 
-          <div className="mt-3 flex items-center gap-2 text-2xl font-semibold sm:text-3xl">
-            <SiOpenai className="h-7 w-7 text-purple-300" />
-            <h1>{copy.title}</h1>
+          <div className="mt-1 flex items-center gap-2 font-semibold sm:mt-2">
+            <SiOpenai className="h-5 w-5 text-purple-300 sm:h-6 sm:w-6" />
+            <h1 className="text-base sm:text-2xl">{copy.title}</h1>
           </div>
-          <p className={subtitleClass}>{copy.subtitle}</p>
-          <p className={modelClass}>Modelo: {CHAT_TEXT_MODEL_LABEL}</p>
         </header>
 
         <div
