@@ -1018,7 +1018,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   return (
     <main className={mainClass}>
       {topActionMenu}
-      <section className="mx-auto flex h-screen w-full max-w-6xl flex-col px-3 pt-2 pb-5 sm:px-5 sm:pt-3 sm:pb-6 lg:px-6 lg:pt-4">
+      <section className="mx-auto flex h-[100dvh] min-h-[100dvh] w-full max-w-6xl flex-col px-3 pt-2 pb-2 sm:h-screen sm:min-h-screen sm:px-5 sm:pt-3 sm:pb-6 lg:px-6 lg:pt-4">
         <header className={`hidden sm:block ${headerClass}`}>
           <div
             className={`absolute -top-16 -right-10 h-44 w-44 rounded-full blur-3xl ${
@@ -1112,7 +1112,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
           <form
             ref={formRef}
             onSubmit={handleSubmit}
-            className={`border-t px-4 py-4 sm:px-6 sm:py-5 ${
+            className={`border-t px-4 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:px-6 sm:py-5 ${
               isLight ? "border-slate-200 bg-white" : "border-gray-700/80 bg-gray-900/55"
             }`}
           >
