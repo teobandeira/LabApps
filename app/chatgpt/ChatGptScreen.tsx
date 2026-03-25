@@ -704,6 +704,8 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
   const historyLightboxItem =
     historyLightboxIndex !== null ? generatedHistory[historyLightboxIndex] ?? null : null;
+  const historyLightboxCaption =
+    historyLightboxItem?.revisedPrompt?.trim() || historyLightboxItem?.prompt?.trim() || "";
 
   function openHistoryLightbox(index: number) {
     setHistoryLightboxIndex(index);
@@ -1369,6 +1371,13 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                     {generatedHistory.length}
                   </p>
                 </div>
+                {historyLightboxCaption ? (
+                  <p
+                    className={`mt-2 text-xs leading-relaxed ${isLight ? "text-slate-700" : "text-gray-200"}`}
+                  >
+                    {historyLightboxCaption}
+                  </p>
+                ) : null}
               </div>
             </div>
           ) : null}
