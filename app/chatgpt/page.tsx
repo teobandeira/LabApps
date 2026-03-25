@@ -65,7 +65,7 @@ export default function ChatGptModesPage() {
             <Link
               key={card.title}
               href={card.href}
-              className={`group rounded-2xl border border-gray-700/80 bg-linear-to-br from-gray-900/80 via-slate-900/70 to-gray-950/70 p-6 transition hover:border-purple-400/45 ${
+              className={`group flex h-full flex-col rounded-2xl border border-gray-700/80 bg-linear-to-br from-gray-900/80 via-slate-900/70 to-gray-950/70 p-6 transition hover:border-purple-400/45 ${
                 card.style === "chat" ? "hover:bg-gray-900/95" : "hover:bg-purple-950/20"
               }`}
             >
@@ -90,7 +90,7 @@ export default function ChatGptModesPage() {
               <p className="mt-3 text-sm leading-relaxed text-gray-300">{card.description}</p>
 
               <span
-                className="mt-6 inline-flex items-center gap-2 rounded-lg border border-purple-400/35 bg-purple-500/15 px-3 py-1.5 text-sm font-semibold text-purple-100 transition hover:bg-purple-500/25"
+                className="mt-6 ml-auto inline-flex items-center gap-2 rounded-lg border border-purple-400/35 bg-purple-500/15 px-3 py-1.5 text-sm font-semibold text-purple-100 transition hover:bg-purple-500/25"
               >
                 Abrir modo
                 <MdArrowOutward className="h-4 w-4" />
