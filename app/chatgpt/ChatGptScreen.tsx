@@ -522,11 +522,11 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     : "rounded-2xl border border-gray-700/80 bg-linear-to-br from-gray-900/80 via-slate-900/70 to-gray-950/70 p-4";
   const mutedTextClass = isLight ? "text-[11px] text-slate-500" : "text-[11px] text-gray-400";
   const topMenuTriggerClass = isLight
-    ? "inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50"
-    : "inline-flex h-10 w-10 items-center justify-center rounded-xl border border-gray-600 bg-gray-900/85 text-gray-100 shadow transition hover:border-purple-300/60 hover:bg-gray-800";
+    ? "inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/20 bg-black/50 text-white shadow transition hover:bg-black/70 sm:h-10 sm:w-10 sm:rounded-xl sm:border-slate-300 sm:bg-white sm:text-slate-700 sm:hover:border-slate-400 sm:hover:bg-slate-50"
+    : "inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/20 bg-black/50 text-white shadow transition hover:bg-black/70 sm:h-10 sm:w-10 sm:rounded-xl sm:border-gray-600 sm:bg-gray-900/85 sm:text-gray-100 sm:hover:border-purple-300/60 sm:hover:bg-gray-800";
   const topMenuPanelClass = isLight
-    ? "absolute right-0 top-12 w-44 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg"
-    : "absolute right-0 top-12 w-44 overflow-hidden rounded-xl border border-gray-700 bg-gray-900/95 shadow-lg";
+    ? "absolute right-0 top-10 w-44 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg sm:top-12"
+    : "absolute right-0 top-10 w-44 overflow-hidden rounded-xl border border-gray-700 bg-gray-900/95 shadow-lg sm:top-12";
   const topMenuItemClass = isLight
     ? "inline-flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-slate-100"
     : "inline-flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-100 transition hover:bg-gray-800";
@@ -535,8 +535,17 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     setTheme((current) => (current === "light" ? "dark" : "light"));
   }
 
+  const mobileTopBar = (
+    <div className="fixed inset-x-0 top-0 z-[65] flex h-11 items-center border-b border-white/10 bg-black px-3 sm:hidden">
+      <div className="flex items-center gap-2">
+        <SiOpenai className="h-4 w-4 text-white" />
+        <span className="text-xs font-semibold tracking-[0.08em] text-white">{copy.title}</span>
+      </div>
+    </div>
+  );
+
   const topActionMenu = (
-    <div ref={topMenuRef} className="fixed top-4 right-4 z-[70]">
+    <div ref={topMenuRef} className="fixed top-1 right-2 z-[80] sm:top-4 sm:right-4">
       <button
         type="button"
         onClick={() => setIsTopMenuOpen((current) => !current)}
@@ -619,8 +628,10 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   if (mode === "image") {
     return (
       <main className={mainClass}>
+        {mobileTopBar}
         {topActionMenu}
-        <section className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
+        <section className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-0 py-0 sm:px-6 sm:py-8 lg:px-8 lg:py-10">
+          <div className="h-11 sm:hidden" />
           <header className={headerClass}>
             <div
               className={`absolute -top-16 -right-10 h-44 w-44 rounded-full blur-3xl ${
@@ -642,7 +653,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
           </header>
 
           <div
-            className={`mt-4 grid min-h-0 flex-1 gap-4 rounded-2xl p-4 sm:p-5 lg:grid-cols-[minmax(360px,0.95fr)_minmax(420px,1.05fr)] ${
+            className={`mt-4 grid min-h-0 flex-1 gap-4 rounded-none p-4 sm:rounded-2xl sm:p-5 lg:grid-cols-[minmax(360px,0.95fr)_minmax(420px,1.05fr)] ${
               isLight ? "border border-slate-200 bg-slate-50 shadow-sm" : "bg-gray-800 shadow"
             }`}
           >
@@ -1017,8 +1028,10 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
   return (
     <main className={mainClass}>
+      {mobileTopBar}
       {topActionMenu}
-      <section className="mx-auto flex h-[100dvh] min-h-[100dvh] w-full max-w-6xl flex-col px-3 pt-2 pb-2 sm:h-screen sm:min-h-screen sm:px-5 sm:pt-3 sm:pb-6 lg:px-6 lg:pt-4">
+      <section className="mx-auto flex h-[100dvh] min-h-[100dvh] w-full max-w-6xl flex-col px-0 pt-0 pb-0 sm:h-screen sm:min-h-screen sm:px-5 sm:pt-3 sm:pb-6 lg:px-6 lg:pt-4">
+        <div className="h-11 sm:hidden" />
         <header className={`hidden sm:block ${headerClass}`}>
           <div
             className={`absolute -top-16 -right-10 h-44 w-44 rounded-full blur-3xl ${
@@ -1040,7 +1053,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
         </header>
 
         <div
-          className={`mt-0 flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl sm:mt-4 ${
+          className={`mt-0 flex min-h-0 flex-1 flex-col overflow-hidden rounded-none sm:mt-4 sm:rounded-2xl ${
             isLight ? "border border-slate-200 bg-slate-50 shadow-sm" : "border border-gray-700/80 bg-gray-800 shadow"
           }`}
         >
