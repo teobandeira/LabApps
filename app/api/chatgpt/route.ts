@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { put } from "@vercel/blob";
+
+import { prisma } from "@/lib/prisma";
 
 const OPENAI_RESPONSES_API_URL = "https://api.openai.com/v1/responses";
 const OPENAI_IMAGES_API_URL = "https://api.openai.com/v1/images/generations";
@@ -77,6 +80,163 @@ type OpenAIOutputContent = {
 type OpenAIOutputItem = {
   content?: OpenAIOutputContent[];
 };
+
+type ResolvedGeneratedImage = {
+  bytes: Uint8Array;
+  contentType: string;
+  extension: string;
+  openaiImageUrl: string | null;
+};
+
+type PersistedGeneratedImage = {
+  recordId: string;
+  blobUrl: string;
+};
+
+function extensionFromImageContentType(contentType: string): string {
+  const normalized = contentType.toLowerCase();
+
+  if (normalized.includes("image/jpeg") || normalized.includes("image/jpg")) {
+    return "jpg";
+  }
+  if (normalized.includes("image/webp")) {
+    return "webp";
+  }
+  if (normalized.includes("image/gif")) {
+    return "gif";
+  }
+  if (normalized.includes("image/avif")) {
+    return "avif";
+  }
+  if (normalized.includes("image/svg+xml")) {
+    return "svg";
+  }
+  return "png";
+}
+
+function parseImageDataUrl(dataUrl: string): { bytes: Uint8Array; contentType: string } | null {
+  const match = dataUrl.match(/^data:([^;,]+);base64,([\s\S]+)$/);
+  if (!match) {
+    return null;
+  }
+
+  const contentType = (match[1] || "image/png").toLowerCase();
+  const payload = match[2] || "";
+
+  try {
+    return {
+      bytes: Uint8Array.from(Buffer.from(payload, "base64")),
+      contentType,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function resolveGeneratedImage(imageUrl: string): Promise<ResolvedGeneratedImage> {
+  if (imageUrl.startsWith("data:")) {
+    const parsedDataUrl = parseImageDataUrl(imageUrl);
+    if (!parsedDataUrl) {
+      throw new Error("Data URL da imagem gerada e invalida.");
+    }
+
+    if (!parsedDataUrl.contentType.startsWith("image/")) {
+      throw new Error("Data URL retornado nao contem imagem valida.");
+    }
+
+    if (parsedDataUrl.bytes.byteLength === 0) {
+      throw new Error("A imagem gerada veio vazia.");
+    }
+
+    return {
+      bytes: parsedDataUrl.bytes,
+      contentType: parsedDataUrl.contentType,
+      extension: extensionFromImageContentType(parsedDataUrl.contentType),
+      openaiImageUrl: null,
+    };
+  }
+
+  const upstreamResponse = await fetch(imageUrl, {
+    method: "GET",
+    cache: "no-store",
+  });
+
+  if (!upstreamResponse.ok) {
+    throw new Error("Nao foi possivel baixar a imagem gerada para salvar no Blob.");
+  }
+
+  const contentTypeHeader = upstreamResponse.headers.get("content-type");
+  const contentType = (contentTypeHeader?.split(";")[0]?.trim() || "image/png").toLowerCase();
+
+  if (!contentType.startsWith("image/")) {
+    throw new Error("A URL retornada pela OpenAI nao aponta para uma imagem valida.");
+  }
+
+  const bytes = new Uint8Array(await upstreamResponse.arrayBuffer());
+  if (bytes.byteLength === 0) {
+    throw new Error("A imagem gerada veio vazia.");
+  }
+
+  return {
+    bytes,
+    contentType,
+    extension: extensionFromImageContentType(contentType),
+    openaiImageUrl: imageUrl,
+  };
+}
+
+function buildGeneratedImageBlobPath(extension: string): string {
+  const datePath = new Date().toISOString().slice(0, 10);
+  return `chatgpt/generated/${datePath}/${crypto.randomUUID()}.${extension}`;
+}
+
+async function persistGeneratedImage(params: {
+  imageUrl: string;
+  prompt: string;
+  revisedPrompt: string | null;
+  imageSize: string;
+  imageAction: ImageAction;
+  sourceImageName: string | null;
+}): Promise<PersistedGeneratedImage> {
+  const blobToken = process.env.BLOB_READ_WRITE_TOKEN;
+  if (!blobToken) {
+    throw new Error("BLOB_READ_WRITE_TOKEN nao configurado no ambiente.");
+  }
+
+  const resolvedImage = await resolveGeneratedImage(params.imageUrl);
+  const blobPath = buildGeneratedImageBlobPath(resolvedImage.extension);
+  const blobBody = new Blob([Uint8Array.from(resolvedImage.bytes)], {
+    type: resolvedImage.contentType,
+  });
+
+  const blob = await put(blobPath, blobBody, {
+    access: "public",
+    contentType: resolvedImage.contentType,
+    token: blobToken,
+    addRandomSuffix: false,
+  });
+
+  const savedImage = await prisma.generatedImage.create({
+    data: {
+      prompt: params.prompt,
+      revisedPrompt: params.revisedPrompt,
+      model: DEFAULT_IMAGE_MODEL,
+      size: params.imageSize,
+      action: params.imageAction,
+      sourceImageName: params.sourceImageName,
+      openaiImageUrl: resolvedImage.openaiImageUrl,
+      blobUrl: blob.url,
+      blobPath: blob.pathname,
+      mimeType: resolvedImage.contentType,
+      bytes: resolvedImage.bytes.byteLength,
+    },
+  });
+
+  return {
+    recordId: savedImage.id,
+    blobUrl: blob.url,
+  };
+}
 
 function getFileExtension(filename: string): string {
   const lower = filename.toLowerCase();
@@ -392,6 +552,8 @@ export async function POST(request: NextRequest) {
           : typeof firstImage?.b64_json === "string"
             ? `data:image/png;base64,${firstImage.b64_json}`
             : "";
+      const revisedPrompt =
+        typeof firstImage?.revised_prompt === "string" ? firstImage.revised_prompt : null;
 
       if (!imageUrl) {
         return NextResponse.json(
@@ -405,11 +567,36 @@ export async function POST(request: NextRequest) {
         warnings.push("Arquivos foram ignorados no modo imagem.");
       }
 
+      let persistedImageUrl = imageUrl;
+      let storedImageId: string | null = null;
+
+      try {
+        const persistedImage = await persistGeneratedImage({
+          imageUrl,
+          prompt,
+          revisedPrompt,
+          imageSize,
+          imageAction,
+          sourceImageName: sourceImage?.name ?? null,
+        });
+
+        persistedImageUrl = persistedImage.blobUrl;
+        storedImageId = persistedImage.recordId;
+      } catch (persistError) {
+        const persistErrorMessage =
+          persistError instanceof Error
+            ? persistError.message
+            : "Erro ao salvar imagem no Blob/DB.";
+
+        warnings.push(`Imagem gerada, mas nao foi salva no Blob/DB: ${persistErrorMessage}`);
+      }
+
       return NextResponse.json({
         mode: "image",
         answer: imageAction === "edit" ? "Imagem modificada com sucesso." : "Imagem gerada com sucesso.",
-        imageUrl,
-        revisedPrompt: firstImage?.revised_prompt ?? null,
+        imageUrl: persistedImageUrl,
+        revisedPrompt,
+        storedImageId,
         warnings,
       });
     }

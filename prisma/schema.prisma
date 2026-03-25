@@ -6,3 +6,27 @@ datasource db {
   provider = "mysql"
   url      = env("DATABASE_URL")
 }
+
+enum ImageGenerationAction {
+  generate
+  edit
+}
+
+model GeneratedImage {
+  id              String                @id @default(cuid())
+  prompt          String                @db.Text
+  revisedPrompt   String?               @db.Text
+  model           String                @db.VarChar(80)
+  size            String                @db.VarChar(24)
+  action          ImageGenerationAction
+  sourceImageName String?               @db.VarChar(255)
+  openaiImageUrl  String?               @db.VarChar(2048)
+  blobUrl         String                @db.VarChar(2048)
+  blobPath        String                @db.VarChar(255)
+  mimeType        String                @db.VarChar(120)
+  bytes           Int
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  @@index([createdAt])
+}

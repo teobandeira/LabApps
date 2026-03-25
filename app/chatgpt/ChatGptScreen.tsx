@@ -931,26 +931,59 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
               <article className={`flex min-h-0 flex-1 flex-col ${cardClass}`}>
                 <p className={`mb-3 ${sectionTitleClass}`}>Historico de Geracoes</p>
-                <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
-                  {messages.map((message, index) => (
-                    <article
-                      key={`${message.role}-${index}`}
-                      className={`rounded-2xl border px-3 py-3 text-sm leading-relaxed ${
-                        message.role === "user"
-                          ? isLight
-                            ? "border-violet-200 bg-violet-50 text-violet-800"
-                            : "border-purple-400/45 bg-purple-500/15 text-purple-100"
-                          : isLight
-                            ? "border-slate-200 bg-white text-slate-800"
-                            : "border-gray-700/80 bg-gray-900/60 text-gray-100"
+                <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+                  {imageMessages.length > 0 ? (
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                      {[...imageMessages].reverse().map((message, index) => (
+                        <article
+                          key={`thumb-${index}-${message.imageUrl}`}
+                          className={`overflow-hidden rounded-xl border ${
+                            isLight ? "border-slate-200 bg-white" : "border-gray-700/80 bg-gray-900/70"
+                          }`}
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={message.imageUrl}
+                            alt={`Geracao ${index + 1}`}
+                            className="aspect-square h-auto w-full object-cover"
+                            loading="lazy"
+                          />
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <div
+                      className={`flex h-24 items-center justify-center rounded-xl border border-dashed text-xs ${
+                        isLight
+                          ? "border-slate-300 bg-slate-100 text-slate-500"
+                          : "border-purple-400/45 bg-purple-500/12 text-purple-100"
                       }`}
                     >
-                      <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] opacity-85">
-                        {message.role === "user" ? "Prompt" : "Assistente"}
-                      </p>
-                      <p className="whitespace-pre-wrap">{message.content}</p>
-                    </article>
-                  ))}
+                      Nenhuma imagem gerada ainda.
+                    </div>
+                  )}
+
+                  <div className="mt-3 space-y-3">
+                    {messages.map((message, index) => (
+                      <article
+                        key={`${message.role}-${index}`}
+                        className={`rounded-2xl border px-3 py-3 text-sm leading-relaxed ${
+                          message.role === "user"
+                            ? isLight
+                              ? "border-violet-200 bg-violet-50 text-violet-800"
+                              : "border-purple-400/45 bg-purple-500/15 text-purple-100"
+                            : isLight
+                              ? "border-slate-200 bg-white text-slate-800"
+                              : "border-gray-700/80 bg-gray-900/60 text-gray-100"
+                        }`}
+                      >
+                        <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] opacity-85">
+                          {message.role === "user" ? "Prompt" : "Assistente"}
+                        </p>
+                        <p className="whitespace-pre-wrap">{message.content}</p>
+                      </article>
+                    ))}
+                  </div>
 
                   <div ref={bottomRef} />
                 </div>
