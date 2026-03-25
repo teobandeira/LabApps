@@ -4,11 +4,13 @@ import Link from "next/link";
 import { ChangeEvent, FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import {
   MdAutoFixHigh,
+  MdArrowUpward,
   MdArrowBack,
   MdAttachFile,
   MdClose,
   MdDownload,
   MdImage,
+  MdMoreVert,
 } from "react-icons/md";
 import { SiOpenai } from "react-icons/si";
 
@@ -39,6 +41,7 @@ const CHAT_TEXT_MODEL_LABEL = "gpt-5.2";
 const IMAGE_MODEL_LABEL = "chatgpt-image-latest";
 const THEME_STORAGE_KEY = "chatgpt-theme-mode";
 const MOBILE_PREVIEW_BREAKPOINT = "(max-width: 1023px)";
+const CHAT_PROMPT_MAX_HEIGHT = 176;
 const BIBLE_LOADING_VERSES = [
   "Tudo posso naquele que me fortalece. (Filipenses 4:13)",
   "O Senhor e o meu pastor; nada me faltara. (Salmos 23:1)",
@@ -48,6 +51,48 @@ const BIBLE_LOADING_VERSES = [
   "Alegrai-vos na esperanca. (Romanos 12:12)",
   "Sede fortes e corajosos. (Josue 1:9)",
   "Em paz me deito e logo adormeco. (Salmos 4:8)",
+  "O choro pode durar uma noite, mas a alegria vem pela manha. (Salmos 30:5)",
+  "Lancando sobre ele toda a vossa ansiedade. (1 Pedro 5:7)",
+  "Nao temas, porque eu sou contigo. (Isaias 41:10)",
+  "Bem-aventurados os pacificadores. (Mateus 5:9)",
+  "O Senhor e a minha luz e a minha salvacao. (Salmos 27:1)",
+  "Clama a mim, e responder-te-ei. (Jeremias 33:3)",
+  "O Senhor pelejara por vos. (Exodo 14:14)",
+  "O amor jamais acaba. (1 Corintios 13:8)",
+  "Em tudo dai gracas. (1 Tessalonicenses 5:18)",
+  "A fe vem pelo ouvir. (Romanos 10:17)",
+  "O justo vivera pela fe. (Romanos 1:17)",
+  "Perto esta o Senhor dos que tem o coracao quebrantado. (Salmos 34:18)",
+  "Guarda o teu coracao. (Proverbios 4:23)",
+  "O temor do Senhor e o principio da sabedoria. (Proverbios 9:10)",
+  "Melhor e confiar no Senhor do que confiar no homem. (Salmos 118:8)",
+  "A resposta branda desvia o furor. (Proverbios 15:1)",
+  "O Senhor firma os passos de um homem bom. (Salmos 37:23)",
+  "Se Deus e por nos, quem sera contra nos? (Romanos 8:31)",
+  "Nao andeis ansiosos por coisa alguma. (Filipenses 4:6)",
+  "A palavra de Deus e viva e eficaz. (Hebreus 4:12)",
+  "O Senhor e bom, fortaleza no dia da angustia. (Naum 1:7)",
+  "Tudo tem o seu tempo determinado. (Eclesiastes 3:1)",
+  "A alegria do Senhor e a vossa forca. (Neemias 8:10)",
+  "O Senhor sustenta todos os que caem. (Salmos 145:14)",
+  "O meu socorro vem do Senhor. (Salmos 121:2)",
+  "Bem-aventurado o homem que confia no Senhor. (Jeremias 17:7)",
+  "Orai sem cessar. (1 Tessalonicenses 5:17)",
+  "Vigiai e orai. (Mateus 26:41)",
+  "Sede imitadores de Deus. (Efesios 5:1)",
+  "O Senhor e fiel para cumprir. (1 Tessalonicenses 5:24)",
+  "Deus e amor. (1 Joao 4:8)",
+  "O Senhor e minha rocha e minha fortaleza. (Salmos 18:2)",
+  "Bem-aventurados os limpos de coracao. (Mateus 5:8)",
+  "Pedi, e dar-se-vos-a. (Mateus 7:7)",
+  "A tua palavra e lampada para os meus pes. (Salmos 119:105)",
+  "O Senhor esta perto de todos os que o invocam. (Salmos 145:18)",
+  "Regozijai-vos sempre no Senhor. (Filipenses 4:4)",
+  "Nao te deixarei nem te desampararei. (Hebreus 13:5)",
+  "O fruto do Espirito e amor, alegria e paz. (Galatas 5:22)",
+  "O Senhor e misericordioso e compassivo. (Salmos 103:8)",
+  "Feliz e o povo cujo Deus e o Senhor. (Salmos 144:15)",
+  "Eu sou o caminho, a verdade e a vida. (Joao 14:6)",
 ];
 
 function getRandomBibleVerse(previous?: string): string {
@@ -107,12 +152,15 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const [loadingVerse, setLoadingVerse] = useState<string>(() => getRandomBibleVerse());
   const [isMobileViewport, setIsMobileViewport] = useState(false);
   const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
+  const [isTopMenuOpen, setIsTopMenuOpen] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>("dark");
   const [error, setError] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sourceImageInputRef = useRef<HTMLInputElement>(null);
+  const chatPromptRef = useRef<HTMLTextAreaElement>(null);
+  const topMenuRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const canSend =
@@ -123,6 +171,13 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, loading]);
+
+  useEffect(() => {
+    if (mode !== "chat" || !chatPromptRef.current) {
+      return;
+    }
+    autoResizeChatPrompt(chatPromptRef.current);
+  }, [mode, prompt]);
 
   useEffect(() => {
     try {
@@ -142,6 +197,34 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       // ignore storage issues
     }
   }, [theme]);
+
+  useEffect(() => {
+    if (!isTopMenuOpen) {
+      return;
+    }
+
+    function handleClickOutside(event: MouseEvent) {
+      if (!topMenuRef.current) {
+        return;
+      }
+      if (!topMenuRef.current.contains(event.target as Node)) {
+        setIsTopMenuOpen(false);
+      }
+    }
+
+    function handleEscape(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsTopMenuOpen(false);
+      }
+    }
+
+    window.addEventListener("mousedown", handleClickOutside);
+    window.addEventListener("keydown", handleEscape);
+    return () => {
+      window.removeEventListener("mousedown", handleClickOutside);
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [isTopMenuOpen]);
 
   useEffect(() => {
     if (mode !== "image") {
@@ -384,6 +467,13 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     }
   }
 
+  function autoResizeChatPrompt(textarea: HTMLTextAreaElement) {
+    textarea.style.height = "0px";
+    const nextHeight = Math.min(textarea.scrollHeight, CHAT_PROMPT_MAX_HEIGHT);
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > CHAT_PROMPT_MAX_HEIGHT ? "auto" : "hidden";
+  }
+
   const chatFocusClass = "focus:border-purple-400/60 focus:ring-4 focus:ring-purple-500/15";
   const imageFocusClass = "focus:border-violet-300/60 focus:ring-2 focus:ring-violet-300/30";
   const imageMessages = messages.filter((message) => Boolean(message.imageUrl));
@@ -431,16 +521,71 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     ? "rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
     : "rounded-2xl border border-gray-700/80 bg-linear-to-br from-gray-900/80 via-slate-900/70 to-gray-950/70 p-4";
   const mutedTextClass = isLight ? "text-[11px] text-slate-500" : "text-[11px] text-gray-400";
-  const backLinkClass = isLight
-    ? "inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-700 transition hover:border-slate-400 hover:text-slate-900 lg:w-auto lg:px-3 lg:py-1.5 lg:text-[10px]"
-    : "inline-flex w-full items-center justify-center gap-2 rounded-xl border border-gray-600 bg-gray-900/60 px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-gray-100 transition hover:border-cyan-400/40 hover:text-cyan-200 lg:w-auto lg:px-3 lg:py-1.5 lg:text-[10px]";
-  const toggleButtonClass = isLight
-    ? "inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-700 transition hover:border-slate-400 lg:w-auto lg:px-3 lg:py-1.5 lg:text-[10px]"
-    : "inline-flex w-full items-center justify-center gap-2 rounded-xl border border-gray-600 bg-gray-900/60 px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-gray-100 transition hover:border-purple-300/60 lg:w-auto lg:px-3 lg:py-1.5 lg:text-[10px]";
+  const topMenuTriggerClass = isLight
+    ? "inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50"
+    : "inline-flex h-10 w-10 items-center justify-center rounded-xl border border-gray-600 bg-gray-900/85 text-gray-100 shadow transition hover:border-purple-300/60 hover:bg-gray-800";
+  const topMenuPanelClass = isLight
+    ? "absolute right-0 top-12 w-44 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg"
+    : "absolute right-0 top-12 w-44 overflow-hidden rounded-xl border border-gray-700 bg-gray-900/95 shadow-lg";
+  const topMenuItemClass = isLight
+    ? "inline-flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-slate-100"
+    : "inline-flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-100 transition hover:bg-gray-800";
 
   function toggleTheme() {
     setTheme((current) => (current === "light" ? "dark" : "light"));
   }
+
+  const topActionMenu = (
+    <div ref={topMenuRef} className="fixed top-4 right-4 z-[70]">
+      <button
+        type="button"
+        onClick={() => setIsTopMenuOpen((current) => !current)}
+        aria-haspopup="menu"
+        aria-expanded={isTopMenuOpen}
+        aria-label="Abrir menu"
+        className={topMenuTriggerClass}
+      >
+        <MdMoreVert className="h-5 w-5" />
+      </button>
+
+      {isTopMenuOpen ? (
+        <div className={topMenuPanelClass} role="menu">
+          <button
+            type="button"
+            onClick={() => {
+              toggleTheme();
+              setIsTopMenuOpen(false);
+            }}
+            className={topMenuItemClass}
+            role="menuitem"
+          >
+            <span
+              className={`relative inline-flex h-5 w-10 rounded-full transition ${
+                isLight ? "bg-violet-500" : "bg-gray-600"
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition ${
+                  isLight ? "left-[22px]" : "left-0.5"
+                }`}
+              />
+            </span>
+            {isLight ? "Tema Claro" : "Tema Escuro"}
+          </button>
+
+          <Link
+            href="/chatgpt"
+            onClick={() => setIsTopMenuOpen(false)}
+            className={topMenuItemClass}
+            role="menuitem"
+          >
+            <MdArrowBack className="h-4 w-4" />
+            Voltar
+          </Link>
+        </div>
+      ) : null}
+    </div>
+  );
 
   async function handleDownloadImage() {
     const imageUrl = latestGenerated?.imageUrl;
@@ -474,6 +619,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   if (mode === "image") {
     return (
       <main className={mainClass}>
+        {topActionMenu}
         <section className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
           <header className={headerClass}>
             <div
@@ -864,29 +1010,6 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
               </div>
             </div>
           ) : null}
-          <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-2 lg:flex lg:justify-end">
-            <button type="button" onClick={toggleTheme} className={toggleButtonClass}>
-              <span
-                className={`relative inline-flex h-5 w-10 rounded-full transition ${
-                  isLight ? "bg-violet-500" : "bg-gray-600"
-                }`}
-              >
-                <span
-                  className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition ${
-                    isLight ? "left-[22px]" : "left-0.5"
-                  }`}
-                />
-              </span>
-              {isLight ? "Tema Claro" : "Tema Escuro"}
-            </button>
-            <Link
-              href="/chatgpt"
-              className={backLinkClass}
-            >
-              <MdArrowBack className="h-4 w-4" />
-              Voltar
-            </Link>
-          </div>
         </section>
       </main>
     );
@@ -894,8 +1017,9 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
   return (
     <main className={mainClass}>
-      <section className="mx-auto flex h-screen w-full max-w-6xl flex-col px-4 py-8 sm:px-6 lg:px-8">
-        <header className={headerClass}>
+      {topActionMenu}
+      <section className="mx-auto flex h-screen w-full max-w-6xl flex-col px-3 pt-2 pb-5 sm:px-5 sm:pt-3 sm:pb-6 lg:px-6 lg:pt-4">
+        <header className={`hidden sm:block ${headerClass}`}>
           <div
             className={`absolute -top-16 -right-10 h-44 w-44 rounded-full blur-3xl ${
               isLight ? "bg-cyan-200/50" : "bg-cyan-500/20"
@@ -916,7 +1040,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
         </header>
 
         <div
-          className={`mt-4 flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl ${
+          className={`mt-0 flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl sm:mt-4 ${
             isLight ? "border border-slate-200 bg-slate-50 shadow-sm" : "border border-gray-700/80 bg-gray-800 shadow"
           }`}
         >
@@ -935,7 +1059,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                       <SiOpenai className="h-9 w-9" />
                     </span>
                     <h2 className={`mt-5 text-xl font-semibold ${isLight ? "text-slate-900" : "text-white"}`}>
-                      Ola, como posso ajudar?
+                      Olá, como posso ajudar?
                     </h2>
                   </div>
                 </section>
@@ -944,7 +1068,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
               {messages.map((message, index) => (
                 <article
                   key={`${message.role}-${index}`}
-                  className={`max-w-[92%] rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-lg sm:max-w-[80%] ${
+                  className={`max-w-[92%] rounded-2xl px-4 py-3 text-[15px] leading-relaxed shadow-lg sm:max-w-[80%] ${
                     message.role === "user"
                       ? isLight
                         ? "ml-auto border border-violet-200 bg-violet-50 text-violet-800"
@@ -971,7 +1095,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
               {loading ? (
                 <article
-                  className={`mr-auto max-w-[92%] rounded-2xl px-4 py-3 text-sm shadow-lg sm:max-w-[80%] ${
+                  className={`mr-auto max-w-[92%] rounded-2xl px-4 py-3 text-[15px] shadow-lg sm:max-w-[80%] ${
                     isLight
                       ? "border border-violet-200 bg-violet-50 text-violet-700"
                       : "border border-purple-400/40 bg-purple-500/15 text-purple-100"
@@ -1048,81 +1172,60 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
               ) : null}
             </div>
 
-            <div className="flex flex-col gap-3">
+            <div className="flex items-end gap-2">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={loading}
+                aria-label="Anexar arquivos"
+                className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-xl font-semibold transition disabled:cursor-not-allowed ${
+                  isLight
+                    ? "border border-violet-300/60 bg-violet-50 text-violet-700 hover:bg-violet-100 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
+                    : "border border-purple-400/45 bg-purple-500/15 text-purple-100 hover:bg-purple-500/25 disabled:border-gray-600 disabled:bg-gray-700 disabled:text-gray-400"
+                }`}
+              >
+                +
+              </button>
+
               <label htmlFor="prompt" className="sr-only">
                 Prompt
               </label>
               <textarea
+                ref={chatPromptRef}
                 id="prompt"
                 name="prompt"
-                rows={4}
+                rows={1}
                 value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
+                onChange={(event) => {
+                  setPrompt(event.target.value);
+                  autoResizeChatPrompt(event.currentTarget);
+                }}
                 onKeyDown={handleTextareaKeyDown}
                 placeholder={copy.placeholder}
                 disabled={loading}
-                className={`min-h-28 w-full resize-y rounded-xl px-4 py-3 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                className={`h-11 min-h-11 max-h-44 flex-1 resize-none rounded-xl px-4 py-[10px] text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60 ${
                   isLight
                     ? "border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400"
                     : "border border-gray-700/90 bg-gray-900/85 text-gray-100 placeholder:text-gray-500"
                 } ${chatFocusClass}`}
               />
 
-              <div className="grid grid-cols-[20%_1fr] gap-3 lg:grid-cols-[10%_1fr]">
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={loading}
-                  aria-label="Anexar arquivos"
-                  className={`inline-flex h-11 w-full items-center justify-center rounded-xl text-xl font-semibold transition disabled:cursor-not-allowed ${
-                    isLight
-                      ? "border border-violet-300/60 bg-violet-50 text-violet-700 hover:bg-violet-100 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
-                      : "border border-purple-400/45 bg-purple-500/15 text-purple-100 hover:bg-purple-500/25 disabled:border-gray-600 disabled:bg-gray-700 disabled:text-gray-400"
-                  }`}
-                >
-                  +
-                </button>
-
-                <button
-                  type="submit"
-                  disabled={!canSend}
-                  className={`inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl px-5 text-sm font-semibold transition disabled:cursor-not-allowed ${
-                    isLight
-                      ? "border border-violet-400/45 bg-violet-500 text-white hover:bg-violet-600 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
-                      : "border border-purple-400/45 bg-purple-500/25 text-purple-100 hover:bg-purple-500/35 disabled:border-gray-600 disabled:bg-gray-700 disabled:text-gray-400"
-                  }`}
-                >
-                  {loading ? "Aguarde..." : "Enviar"}
-                  <SiOpenai className="h-4 w-4" />
-                </button>
-              </div>
+              <button
+                type="submit"
+                disabled={!canSend}
+                aria-label={loading ? "Aguarde" : "Enviar mensagem"}
+                className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition disabled:cursor-not-allowed ${
+                  isLight
+                    ? "border border-violet-400/45 bg-violet-500 text-white hover:bg-violet-600 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
+                    : "border border-purple-400/45 bg-purple-500/25 text-purple-100 hover:bg-purple-500/35 disabled:border-gray-600 disabled:bg-gray-700 disabled:text-gray-400"
+                }`}
+              >
+                <MdArrowUpward className="h-5 w-5" />
+              </button>
             </div>
 
             {copy.hint ? <p className={`mt-2 ${mutedTextClass}`}>{copy.hint}</p> : null}
           </form>
-        </div>
-        <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-2 lg:flex lg:justify-end">
-          <button type="button" onClick={toggleTheme} className={toggleButtonClass}>
-            <span
-              className={`relative inline-flex h-5 w-10 rounded-full transition ${
-                isLight ? "bg-violet-500" : "bg-gray-600"
-              }`}
-            >
-              <span
-                className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition ${
-                  isLight ? "left-[22px]" : "left-0.5"
-                }`}
-              />
-            </span>
-            {isLight ? "Tema Claro" : "Tema Escuro"}
-          </button>
-          <Link
-            href="/chatgpt"
-            className={backLinkClass}
-          >
-            <MdArrowBack className="h-4 w-4" />
-            Voltar
-          </Link>
         </div>
       </section>
     </main>
