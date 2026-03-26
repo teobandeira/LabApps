@@ -69,7 +69,15 @@ type MessageContentSegment = {
   language?: string;
 };
 
-type CodeTokenType = "plain" | "keyword" | "string" | "comment" | "number" | "builtin";
+type CodeTokenType =
+  | "plain"
+  | "keyword"
+  | "string"
+  | "comment"
+  | "number"
+  | "builtin"
+  | "function"
+  | "operator";
 
 type CodeToken = {
   text: string;
@@ -261,6 +269,9 @@ const CODE_BUILTINS_BY_LANGUAGE: Record<string, string[]> = {
   sql: [],
   json: [],
 };
+const CODE_FUNCTION_NAME_REGEX = /^[A-Za-z_$][\w$]*$/;
+const CODE_OPERATOR_TOKEN_REGEX =
+  /^(?:===|!==|==|!=|<=|>=|=>|\+\+|--|&&|\|\||\?\?|[-+*/%=<>!&|^~?:]+|[{}()[\].,;])$/;
 const BIBLE_LOADING_VERSES = [
   "Tudo posso naquele que me fortalece. (Filipenses 4:13)",
   "O Senhor e o meu pastor; nada me faltara. (Salmos 23:1)",
@@ -709,6 +720,9 @@ function getCodeTokenRegex(language: string): RegExp {
   const builtins = CODE_BUILTINS_BY_LANGUAGE[language] ?? [];
   const builtinsPattern =
     builtins.length > 0 ? `\\b(?:${builtins.map(escapeRegex).join("|")})\\b` : "";
+  const functionPattern = "\\b[A-Za-z_$][\\w$]*(?=\\s*\\()";
+  const operatorPattern =
+    "===|!==|==|!=|<=|>=|=>|\\+\\+|--|&&|\\|\\||\\?\\?|[-+*/%=<>!&|^~?:]+|[{}()\\[\\].,;]";
   const commentPattern =
     language === "python" || language === "bash"
       ? "#.*$"
@@ -725,7 +739,9 @@ function getCodeTokenRegex(language: string): RegExp {
   if (builtinsPattern) {
     pieces.push(builtinsPattern);
   }
+  pieces.push(functionPattern);
   pieces.push("\\b\\d+(?:\\.\\d+)?\\b");
+  pieces.push(operatorPattern);
 
   const pattern = pieces.filter(Boolean).join("|");
   if (language === "sql") {
@@ -765,6 +781,14 @@ function getTokenType(token: string, language: string): CodeTokenType {
 
   if (builtinSet.has(lowerToken)) {
     return "builtin";
+  }
+
+  if (CODE_FUNCTION_NAME_REGEX.test(token)) {
+    return "function";
+  }
+
+  if (CODE_OPERATOR_TOKEN_REGEX.test(token)) {
+    return "operator";
   }
 
   return "plain";
@@ -829,7 +853,7 @@ const MODE_COPY: Record<
   chat: {
     title: "ChatGPT",
     subtitle: "Converse com a IA usando texto e anexos",
-    placeholder: "Escreva seu prompt aqui...",
+    placeholder: "Pergunte alguma coisa",
     cta: "Enviar",
     hint: "",
     topTag: "Modo Chat",
@@ -1567,6 +1591,25 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     textarea.style.overflowY = textarea.scrollHeight > IMAGE_PROMPT_MAX_HEIGHT ? "auto" : "hidden";
   }
 
+  function focusChatPromptInput() {
+    if (mode !== "chat") {
+      return;
+    }
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      const input = chatPromptRef.current;
+      if (!input) {
+        return;
+      }
+      input.focus();
+      const length = input.value.length;
+      input.setSelectionRange(length, length);
+    });
+  }
+
   const chatFocusClass = "focus:border-purple-400/60 focus:ring-4 focus:ring-purple-500/15";
   const imageFocusClass = "focus:border-violet-300/60 focus:ring-2 focus:ring-violet-300/30";
   const imageMessages = messages.filter((message) => Boolean(message.imageUrl));
@@ -1827,6 +1870,8 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
+
+      focusChatPromptInput();
     } catch {
       setError("Nao foi possivel criar um novo chat agora.");
     }
@@ -1950,39 +1995,51 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   function getCodeTokenClass(type: CodeTokenType): string {
     if (isLight) {
       if (type === "keyword") {
-        return "text-violet-300";
+        return "text-fuchsia-300";
       }
       if (type === "string") {
-        return "text-emerald-300";
+        return "text-lime-300";
       }
       if (type === "comment") {
-        return "text-slate-400 italic";
+        return "text-slate-500 italic";
       }
       if (type === "number") {
-        return "text-amber-300";
+        return "text-orange-300";
       }
       if (type === "builtin") {
-        return "text-sky-300";
+        return "text-cyan-300";
       }
-      return "text-slate-100";
+      if (type === "function") {
+        return "text-blue-300";
+      }
+      if (type === "operator") {
+        return "text-pink-300";
+      }
+      return "text-slate-200";
     }
 
     if (type === "keyword") {
-      return "text-purple-200";
+      return "text-violet-300";
     }
     if (type === "string") {
-      return "text-emerald-200";
+      return "text-lime-300";
     }
     if (type === "comment") {
-      return "text-gray-400 italic";
+      return "text-slate-500 italic";
     }
     if (type === "number") {
-      return "text-amber-200";
+      return "text-orange-300";
     }
     if (type === "builtin") {
-      return "text-cyan-200";
+      return "text-cyan-300";
     }
-    return "text-gray-100";
+    if (type === "function") {
+      return "text-blue-300";
+    }
+    if (type === "operator") {
+      return "text-pink-300";
+    }
+    return "text-slate-200";
   }
 
   function renderHighlightedCode(content: string, language?: string, keyPrefix?: string) {
@@ -3082,20 +3139,24 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
               isLight ? "chat-scrollbar-light" : "chat-scrollbar-dark"
             }`}
           >
-            <div className="flex w-full flex-col gap-4">
+            <div className={`flex w-full flex-col gap-4 ${messages.length === 0 ? "min-h-full" : ""}`}>
               {messages.length === 0 ? (
-                <section className="flex min-h-full flex-1 items-center justify-center">
+                <section className="flex min-h-[62vh] flex-1 items-center justify-center sm:min-h-[66vh]">
                   <div className="flex max-w-md flex-col items-center justify-center text-center">
                     <span
-                      className={`inline-flex h-16 w-16 items-center justify-center rounded-2xl border ${
+                      className={`inline-flex h-20 w-20 items-center justify-center rounded-2xl border ${
                         isLight
                           ? "border-violet-200 bg-violet-50 text-violet-600"
                           : "border-purple-400/45 bg-purple-500/15 text-purple-200"
                       }`}
                     >
-                      <SiOpenai className="h-9 w-9" />
+                      <SiOpenai className="h-11 w-11" />
                     </span>
-                    <h2 className={`mt-5 text-xl font-semibold ${isLight ? "text-slate-900" : "text-white"}`}>
+                    <h2
+                      className={`chat-empty-greeting-title mt-6 font-medium ${
+                        isLight ? "text-slate-900" : "text-white"
+                      }`}
+                    >
                       Olá, como posso ajudar?
                     </h2>
                   </div>
@@ -3115,9 +3176,6 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                         : "mr-auto border border-gray-700/80 bg-gray-900/70 text-gray-100"
                   }`}
                 >
-                  <p className="chat-role-label mb-1 font-semibold uppercase tracking-[0.13em] opacity-75">
-                    {message.role === "user" ? "Voce" : "Assistente"}
-                  </p>
                   <div className="space-y-2">
                     {renderMessageContent(message.content, `message-${index}`)}
                   </div>

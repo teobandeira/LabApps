@@ -123,19 +123,22 @@ body {
   --chat-font-size: 15px;
 }
 
-.chat-font-scope[data-chat-font],
-.chat-font-scope[data-chat-font] * {
+.chat-font-scope[data-chat-font] {
   font-size: var(--chat-font-size) !important;
 }
 
-.chat-font-scope[data-chat-font="normal"] .chat-role-label {
-  font-size: 8px !important;
-  line-height: 1 !important;
+.chat-font-scope[data-chat-font] *:not(.chat-empty-greeting-title) {
+  font-size: var(--chat-font-size) !important;
 }
 
-.chat-font-scope[data-chat-font="large"] .chat-role-label {
-  font-size: 9px !important;
-  line-height: 1 !important;
+.chat-font-scope[data-chat-font="normal"] .chat-empty-greeting-title {
+  font-size: clamp(1.35rem, 3.2vw, 1.9rem) !important;
+  line-height: 1.1 !important;
+}
+
+.chat-font-scope[data-chat-font="large"] .chat-empty-greeting-title {
+  font-size: clamp(1.45rem, 3.6vw, 2.1rem) !important;
+  line-height: 1.1 !important;
 }
 
 @keyframes portfolio-fade-up {
