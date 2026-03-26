@@ -2751,7 +2751,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
           {historyLightboxItem ? (
             <div
-              className="fixed inset-0 z-[90] flex items-center justify-center bg-black/85 p-3 sm:p-6"
+              className="fixed inset-0 z-90 flex items-center justify-center bg-black/85 p-3 sm:p-6"
               onClick={closeHistoryLightbox}
             >
               <div
@@ -2836,7 +2836,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
           {!historyLightboxItem && previewLightboxImageUrl ? (
             <div
-              className="fixed inset-0 z-[90] flex items-center justify-center bg-black/85 p-3 sm:p-6"
+              className="fixed inset-0 z-90 flex items-center justify-center bg-black/85 p-3 sm:p-6"
               onClick={closePreviewLightbox}
             >
               <div
@@ -3330,7 +3330,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
       {chatIdPendingDelete ? (
         <div
-          className="fixed inset-0 z-[92] flex items-center justify-center bg-black/60 p-4"
+          className="fixed inset-0 z-92 flex items-center justify-center bg-black/60 p-4"
           onClick={closeDeleteChatModal}
         >
           <div

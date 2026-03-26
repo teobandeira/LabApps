@@ -132,12 +132,12 @@ body {
 }
 
 .chat-font-scope[data-chat-font="normal"] .chat-empty-greeting-title {
-  font-size: clamp(1.35rem, 3.2vw, 1.9rem) !important;
+  font-size: clamp(1.25rem, 2.9vw, 1.75rem) !important;
   line-height: 1.1 !important;
 }
 
 .chat-font-scope[data-chat-font="large"] .chat-empty-greeting-title {
-  font-size: clamp(1.45rem, 3.6vw, 2.1rem) !important;
+  font-size: clamp(1.35rem, 3.2vw, 1.95rem) !important;
   line-height: 1.1 !important;
 }
 
