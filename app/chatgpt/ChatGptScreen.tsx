@@ -15,6 +15,7 @@ import {
   MdDone,
   MdDownload,
   MdImage,
+  MdMenu,
   MdMoreVert,
   MdStop,
 } from "react-icons/md";
@@ -97,6 +98,7 @@ const IMAGE_SIZE_OPTIONS: Array<{ label: string; value: ImageSize }> = [
 const CHAT_TEXT_MODEL_LABEL = "gpt-5.2";
 const IMAGE_MODEL_LABEL = "chatgpt-image-latest";
 const THEME_STORAGE_KEY = "chatgpt-theme-mode";
+const CHAT_FONT_SIZE_STORAGE_KEY = "chatgpt-chat-font-large";
 const CHAT_DEVICE_ID_STORAGE_KEY = "chatgpt-device-id-v1";
 const CHAT_PROMPT_MAX_HEIGHT = 176;
 const IMAGE_PROMPT_MAX_HEIGHT = 220;
@@ -850,6 +852,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const [loadingVerse, setLoadingVerse] = useState<string>(() => getRandomBibleVerse());
   const [isTopMenuOpen, setIsTopMenuOpen] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>("dark");
+  const [isLargeChatFont, setIsLargeChatFont] = useState(false);
   const [error, setError] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
   const [generatedHistory, setGeneratedHistory] = useState<GeneratedImageHistoryItem[]>([]);
@@ -861,6 +864,9 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [chatDeviceId, setChatDeviceId] = useState<string>("");
   const [chatSessionsLoaded, setChatSessionsLoaded] = useState(false);
+  const [isMobileChatSidebarOpen, setIsMobileChatSidebarOpen] = useState(false);
+  const [chatIdPendingDelete, setChatIdPendingDelete] = useState<string | null>(null);
+  const [isDeletingChat, setIsDeletingChat] = useState(false);
   const [isChatStreamActive, setIsChatStreamActive] = useState(false);
   const [copiedCodeKey, setCopiedCodeKey] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -910,11 +916,33 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
   useEffect(() => {
     try {
+      const storedFontMode = window.localStorage.getItem(CHAT_FONT_SIZE_STORAGE_KEY);
+      if (storedFontMode === "1") {
+        setIsLargeChatFont(true);
+      }
+      if (storedFontMode === "0") {
+        setIsLargeChatFont(false);
+      }
+    } catch {
+      // ignore storage issues
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
       window.localStorage.setItem(THEME_STORAGE_KEY, theme);
     } catch {
       // ignore storage issues
     }
   }, [theme]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(CHAT_FONT_SIZE_STORAGE_KEY, isLargeChatFont ? "1" : "0");
+    } catch {
+      // ignore storage issues
+    }
+  }, [isLargeChatFont]);
 
   useEffect(() => {
     return () => {
@@ -1032,6 +1060,28 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       window.removeEventListener("keydown", handleEscape);
     };
   }, [isTopMenuOpen]);
+
+  useEffect(() => {
+    if (!isMobileChatSidebarOpen && !chatIdPendingDelete) {
+      return;
+    }
+
+    function handleEscape(event: globalThis.KeyboardEvent) {
+      if (event.key !== "Escape") {
+        return;
+      }
+
+      if (!isDeletingChat) {
+        setChatIdPendingDelete(null);
+      }
+      setIsMobileChatSidebarOpen(false);
+    }
+
+    window.addEventListener("keydown", handleEscape);
+    return () => {
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [isMobileChatSidebarOpen, chatIdPendingDelete, isDeletingChat]);
 
   useEffect(() => {
     if (mode !== "image") {
@@ -1621,6 +1671,10 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const topMenuActionButtonClass = isLight
     ? "inline-flex w-full items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-sm text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
     : "inline-flex w-full items-center gap-2 rounded-xl border border-gray-700 bg-gray-900/70 px-3 py-2 text-left text-sm text-gray-100 transition hover:border-gray-600 hover:bg-gray-800";
+  const mobileChatOverlayClass = "fixed inset-0 z-[70] bg-black/45 backdrop-blur-[1px] lg:hidden";
+  const mobileChatDrawerClass = isLight
+    ? "fixed top-0 left-0 z-[75] flex h-dvh w-[86vw] max-w-[330px] flex-col border-r border-slate-200 bg-white shadow-2xl lg:hidden"
+    : "fixed top-0 left-0 z-[75] flex h-dvh w-[86vw] max-w-[330px] flex-col border-r border-gray-700 bg-gray-950 shadow-2xl lg:hidden";
 
   function toggleTheme() {
     setTheme((current) => (current === "light" ? "dark" : "light"));
@@ -1628,6 +1682,10 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
   const historyLightboxItem =
     historyLightboxIndex !== null ? generatedHistory[historyLightboxIndex] ?? null : null;
+  const pendingDeleteSession =
+    chatIdPendingDelete !== null
+      ? chatSessions.find((session) => session.id === chatIdPendingDelete) ?? null
+      : null;
   const historyLightboxCaption =
     historyLightboxItem?.revisedPrompt?.trim() || historyLightboxItem?.prompt?.trim() || "";
 
@@ -1731,6 +1789,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     setSelectedFiles([]);
     setError("");
     setWarnings([]);
+    setIsMobileChatSidebarOpen(false);
 
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
@@ -1755,6 +1814,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       setSelectedFiles([]);
       setError("");
       setWarnings([]);
+      setIsMobileChatSidebarOpen(false);
 
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
@@ -1773,17 +1833,8 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       return;
     }
 
-    const targetSession = chatSessions.find((session) => session.id === sessionId);
-    if (!targetSession) {
-      return;
-    }
-
-    const shouldDelete = window.confirm(`Excluir o chat "${targetSession.title}"?`);
-    if (!shouldDelete) {
-      return;
-    }
-
     try {
+      setIsDeletingChat(true);
       await deleteChatSessionOnDb(chatDeviceId, sessionId);
 
       const remaining = chatSessions.filter((session) => session.id !== sessionId);
@@ -1800,13 +1851,35 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       setSelectedFiles([]);
       setError("");
       setWarnings([]);
+      setIsMobileChatSidebarOpen(false);
+      setChatIdPendingDelete(null);
 
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
     } catch {
       setError("Nao foi possivel excluir o chat agora.");
+    } finally {
+      setIsDeletingChat(false);
     }
+  }
+
+  function requestDeleteChat(sessionId: string) {
+    setChatIdPendingDelete(sessionId);
+  }
+
+  function closeDeleteChatModal() {
+    if (isDeletingChat) {
+      return;
+    }
+    setChatIdPendingDelete(null);
+  }
+
+  async function confirmDeleteChat() {
+    if (!chatIdPendingDelete) {
+      return;
+    }
+    await handleDeleteChat(chatIdPendingDelete);
   }
 
   async function handleCopyCode(code: string, codeKey: string) {
@@ -2119,6 +2192,26 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                 <MdArrowBack className="h-4 w-4" />
                 Escolher modo
               </Link>
+
+              <button
+                type="button"
+                onClick={() => setIsLargeChatFont((current) => !current)}
+                className={topMenuActionButtonClass}
+              >
+                <span>Fonte grande</span>
+                <span
+                  className={`relative inline-flex h-5 w-10 rounded-full transition ${
+                    isLargeChatFont ? "bg-violet-500" : "bg-gray-600"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition ${
+                      isLargeChatFont ? "left-5.5" : "left-0.5"
+                    }`}
+                  />
+                </span>
+              </button>
+
               <button
                 type="button"
                 onClick={() => {
@@ -2732,12 +2825,146 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
           />
 
           <div className="flex items-center gap-2 font-semibold">
+            <button
+              type="button"
+              onClick={() => setIsMobileChatSidebarOpen(true)}
+              className={`inline-flex h-8 w-8 items-center justify-center rounded-lg transition lg:hidden ${
+                isLight
+                  ? "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                  : "border border-gray-700 bg-gray-900/70 text-gray-100 hover:bg-gray-800"
+              }`}
+              aria-label="Abrir lista de chats"
+            >
+              <MdMenu className="h-4 w-4" />
+            </button>
             <SiOpenai className="h-5 w-5 text-purple-300 sm:h-6 sm:w-6" />
             <h1 className="text-base sm:text-2xl">{copy.title}</h1>
           </div>
         </header>
 
-        <div className="mt-0 flex min-h-0 flex-1 flex-col gap-4 sm:mt-4 lg:grid lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-4">
+        {isMobileChatSidebarOpen ? (
+          <>
+            <button
+              type="button"
+              onClick={() => setIsMobileChatSidebarOpen(false)}
+              className={mobileChatOverlayClass}
+              aria-label="Fechar lista de chats"
+            />
+
+            <aside className={mobileChatDrawerClass} role="dialog" aria-modal="true" aria-label="Chats salvos">
+              <div
+                className={`flex items-center justify-between border-b px-3 py-3 ${
+                  isLight ? "border-slate-200" : "border-gray-700"
+                }`}
+              >
+                <p className={`text-sm font-semibold ${isLight ? "text-slate-800" : "text-gray-100"}`}>
+                  Chats
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setIsMobileChatSidebarOpen(false)}
+                  className={topMenuCloseButtonClass}
+                  aria-label="Fechar chats"
+                >
+                  <MdClose className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className={`border-b px-3 py-3 ${isLight ? "border-slate-200" : "border-gray-700"}`}>
+                <button
+                  type="button"
+                  onClick={handleCreateNewChat}
+                  disabled={loading}
+                  className={`inline-flex w-full items-center justify-center rounded-xl px-3 py-2 text-sm font-semibold transition disabled:cursor-not-allowed ${
+                    isLight
+                      ? "border border-violet-300 bg-violet-500 text-white hover:bg-violet-600 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
+                      : "border border-purple-400/45 bg-purple-500/25 text-purple-100 hover:bg-purple-500/35 disabled:border-gray-600 disabled:bg-gray-700 disabled:text-gray-400"
+                  }`}
+                >
+                  + Novo chat
+                </button>
+              </div>
+
+              <div
+                className={`min-h-0 flex-1 space-y-2 overflow-y-auto px-2 py-3 chat-scrollbar ${
+                  isLight ? "chat-scrollbar-light" : "chat-scrollbar-dark"
+                }`}
+              >
+                {chatSessionsLoaded ? (
+                  chatSessions.map((session) => {
+                    const isActive = session.id === activeChatId;
+
+                    return (
+                      <article
+                        key={`mobile-${session.id}`}
+                        className={`w-full rounded-xl border px-3 py-2 text-left transition ${
+                          isActive
+                            ? isLight
+                              ? "border-violet-300 bg-violet-50 text-violet-900"
+                              : "border-purple-300/60 bg-purple-500/15 text-purple-100"
+                            : isLight
+                              ? "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+                              : "border-gray-700 bg-gray-900/70 text-gray-200 hover:border-gray-600 hover:bg-gray-800"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleSelectChat(session.id)}
+                            disabled={loading || isDeletingChat}
+                            className="min-w-0 flex-1 text-left"
+                            aria-label={`Abrir chat ${session.title}`}
+                          >
+                            <p className="truncate text-sm font-semibold">{session.title}</p>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => requestDeleteChat(session.id)}
+                            disabled={loading || isDeletingChat}
+                            className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${
+                              isLight
+                                ? "text-slate-500 hover:bg-slate-200 hover:text-slate-700"
+                                : "text-gray-400 hover:bg-gray-800 hover:text-gray-200"
+                            }`}
+                            aria-label={`Excluir chat ${session.title}`}
+                            title="Excluir chat"
+                          >
+                            <MdDeleteOutline className="h-4 w-4" />
+                          </button>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handleSelectChat(session.id)}
+                          disabled={loading || isDeletingChat}
+                          className="mt-1 w-full text-left"
+                          aria-label={`Abrir chat ${session.title}`}
+                        >
+                          <p className={`truncate text-xs ${isLight ? "text-slate-500" : "text-gray-400"}`}>
+                            {getChatSessionPreview(session.messages)}
+                          </p>
+                          <p className={`mt-1 text-[10px] ${isLight ? "text-slate-400" : "text-gray-500"}`}>
+                            {formatCreatedAt(session.updatedAt)}
+                          </p>
+                        </button>
+                      </article>
+                    );
+                  })
+                ) : (
+                  <p className={`px-2 text-xs ${isLight ? "text-slate-500" : "text-gray-400"}`}>
+                    Carregando chats...
+                  </p>
+                )}
+              </div>
+            </aside>
+          </>
+        ) : null}
+
+        <div
+          className="chat-font-scope mt-0 flex min-h-0 flex-1 flex-col gap-4 sm:mt-4 lg:grid lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-4"
+          data-chat-font={isLargeChatFont ? "large" : "normal"}
+        >
           <aside
             className={`hidden min-h-0 lg:flex lg:flex-col lg:overflow-hidden lg:rounded-2xl ${
               isLight
@@ -2786,7 +3013,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                         <button
                           type="button"
                           onClick={() => handleSelectChat(session.id)}
-                          disabled={loading}
+                          disabled={loading || isDeletingChat}
                           className="min-w-0 flex-1 text-left"
                           aria-label={`Abrir chat ${session.title}`}
                         >
@@ -2795,8 +3022,8 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
                         <button
                           type="button"
-                          onClick={() => handleDeleteChat(session.id)}
-                          disabled={loading}
+                          onClick={() => requestDeleteChat(session.id)}
+                          disabled={loading || isDeletingChat}
                           className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${
                             isLight
                               ? "text-slate-500 hover:bg-slate-200 hover:text-slate-700"
@@ -2812,7 +3039,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                       <button
                         type="button"
                         onClick={() => handleSelectChat(session.id)}
-                        disabled={loading}
+                        disabled={loading || isDeletingChat}
                         className="mt-1 w-full text-left"
                         aria-label={`Abrir chat ${session.title}`}
                       >
@@ -3034,6 +3261,58 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
         </div>
         </div>
       </section>
+
+      {chatIdPendingDelete ? (
+        <div
+          className="fixed inset-0 z-[92] flex items-center justify-center bg-black/60 p-4"
+          onClick={closeDeleteChatModal}
+        >
+          <div
+            className={`w-full max-w-md rounded-2xl border p-5 shadow-2xl ${
+              isLight ? "border-slate-200 bg-white text-slate-900" : "border-gray-700 bg-gray-900 text-gray-100"
+            }`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 className="text-base font-semibold">Excluir chat</h3>
+            <p className={`mt-2 text-sm leading-relaxed ${isLight ? "text-slate-600" : "text-gray-300"}`}>
+              Deseja realmente excluir
+              {" "}
+              <strong>{pendingDeleteSession?.title ?? "este chat"}</strong>
+              ?
+            </p>
+
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeDeleteChatModal}
+                disabled={isDeletingChat}
+                className={`inline-flex h-10 items-center justify-center rounded-xl px-4 text-sm font-medium transition disabled:cursor-not-allowed ${
+                  isLight
+                    ? "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:border-slate-200 disabled:text-slate-400"
+                    : "border border-gray-600 bg-gray-900/70 text-gray-200 hover:bg-gray-800 disabled:border-gray-700 disabled:text-gray-500"
+                }`}
+              >
+                Cancelar
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  void confirmDeleteChat();
+                }}
+                disabled={isDeletingChat}
+                className={`inline-flex h-10 items-center justify-center rounded-xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed ${
+                  isLight
+                    ? "border border-red-300 bg-red-500 text-white hover:bg-red-600 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
+                    : "border border-red-400/50 bg-red-500/20 text-red-100 hover:bg-red-500/30 disabled:border-gray-600 disabled:bg-gray-700 disabled:text-gray-500"
+                }`}
+              >
+                {isDeletingChat ? "Excluindo..." : "Excluir"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

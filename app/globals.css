@@ -115,6 +115,19 @@ body {
   background: linear-gradient(180deg, #c4b5fd 0%, #67e8f9 100%);
 }
 
+.chat-font-scope[data-chat-font="normal"] {
+  --chat-font-size: 13px;
+}
+
+.chat-font-scope[data-chat-font="large"] {
+  --chat-font-size: 15px;
+}
+
+.chat-font-scope[data-chat-font],
+.chat-font-scope[data-chat-font] * {
+  font-size: var(--chat-font-size) !important;
+}
+
 @keyframes portfolio-fade-up {
   from {
     opacity: 0;
