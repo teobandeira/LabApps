@@ -13,6 +13,7 @@ import {
 import {
   MdAutoFixHigh,
   MdArrowUpward,
+  MdArrowDownward,
   MdArrowBack,
   MdAttachFile,
   MdChevronLeft,
@@ -118,6 +119,7 @@ const CHAT_FONT_SIZE_STORAGE_KEY = "chatgpt-chat-font-large";
 const CHAT_DEVICE_ID_STORAGE_KEY = "chatgpt-device-id-v1";
 const CHAT_PROMPT_MAX_HEIGHT = 176;
 const IMAGE_PROMPT_MAX_HEIGHT = 220;
+const CHAT_AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 88;
 const CHAT_SESSION_TITLE_MAX_LENGTH = 56;
 const CHAT_SESSION_PREVIEW_MAX_LENGTH = 82;
 const CHAT_TITLE_NOISE_PREFIXES = [
@@ -455,6 +457,12 @@ function createMessageId(): string {
   }
 
   return `message-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function isNearChatBottom(container: HTMLDivElement): boolean {
+  const distanceToBottom =
+    container.scrollHeight - container.scrollTop - container.clientHeight;
+  return distanceToBottom <= CHAT_AUTO_SCROLL_BOTTOM_THRESHOLD_PX;
 }
 
 function getOrCreateChatDeviceId(): string {
@@ -900,16 +908,19 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const [chatIdPendingDelete, setChatIdPendingDelete] = useState<string | null>(null);
   const [isDeletingChat, setIsDeletingChat] = useState(false);
   const [isChatStreamActive, setIsChatStreamActive] = useState(false);
+  const [isChatNearBottom, setIsChatNearBottom] = useState(true);
   const [copiedCodeKey, setCopiedCodeKey] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sourceImageInputRef = useRef<HTMLInputElement>(null);
   const chatPromptRef = useRef<HTMLTextAreaElement>(null);
   const imagePromptRef = useRef<HTMLTextAreaElement>(null);
+  const chatMessagesContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const codeCopyResetTimeoutRef = useRef<number | null>(null);
   const chatStreamAbortRef = useRef<AbortController | null>(null);
   const chatSyncTimeoutRef = useRef<number | null>(null);
+  const shouldAutoScrollRef = useRef(true);
 
   const canSend =
     (mode === "image"
@@ -917,9 +928,18 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       : Boolean(activeChatId) && (prompt.trim().length > 0 || selectedFiles.length > 0)) && !loading;
   const canStopChatStream = mode === "chat" && loading && isChatStreamActive;
 
+  function setChatAutoScrollState(shouldAutoScroll: boolean) {
+    shouldAutoScrollRef.current = shouldAutoScroll;
+    setIsChatNearBottom((current) => (current === shouldAutoScroll ? current : shouldAutoScroll));
+  }
+
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, loading]);
+    if (mode !== "chat" || !shouldAutoScrollRef.current) {
+      return;
+    }
+
+    bottomRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
+  }, [mode, messages, loading]);
 
   useEffect(() => {
     if (mode !== "chat" || !chatPromptRef.current) {
@@ -1021,6 +1041,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
           return;
         }
 
+        setChatAutoScrollState(true);
         setChatSessions(sessions);
         setActiveChatId(sessions[0]?.id ?? null);
         setMessages(sessions[0]?.messages ?? []);
@@ -1029,6 +1050,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
           return;
         }
 
+        setChatAutoScrollState(true);
         setChatSessions([]);
         setActiveChatId(null);
         setMessages([]);
@@ -1230,6 +1252,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     }
 
     if (mode === "chat") {
+      setChatAutoScrollState(true);
       setPrompt("");
     }
     setSelectedFiles([]);
@@ -1824,6 +1847,20 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     }
   }
 
+  function handleChatMessagesScroll() {
+    const container = chatMessagesContainerRef.current;
+    if (!container) {
+      return;
+    }
+
+    setChatAutoScrollState(isNearChatBottom(container));
+  }
+
+  function handleScrollToChatBottom() {
+    setChatAutoScrollState(true);
+    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }
+
   function handleSelectChat(sessionId: string) {
     if (loading) {
       return;
@@ -1834,6 +1871,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       return;
     }
 
+    setChatAutoScrollState(true);
     setActiveChatId(selectedSession.id);
     setMessages(selectedSession.messages);
     setPrompt("");
@@ -1858,6 +1896,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
     try {
       const session = await createChatSessionOnDb(chatDeviceId);
+      setChatAutoScrollState(true);
       setChatSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
       setActiveChatId(session.id);
       setMessages(session.messages);
@@ -1896,6 +1935,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       if (remaining.length === 0) {
         await handleCreateNewChat();
       } else if (sessionId === activeChatId) {
+        setChatAutoScrollState(true);
         setActiveChatId(remaining[0].id);
         setMessages(remaining[0].messages);
       }
@@ -3135,6 +3175,8 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
             }`}
           >
           <div
+            ref={chatMessagesContainerRef}
+            onScroll={handleChatMessagesScroll}
             className={`min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 sm:py-6 chat-scrollbar ${
               isLight ? "chat-scrollbar-light" : "chat-scrollbar-dark"
             }`}
@@ -3209,10 +3251,26 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
           <form
             ref={formRef}
             onSubmit={handleSubmit}
-            className={`border-t px-4 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:px-6 sm:py-5 ${
+            className={`relative border-t px-4 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:px-6 sm:py-5 ${
               isLight ? "border-slate-200 bg-white" : "border-gray-700/80 bg-gray-900/55"
             }`}
           >
+            {!isChatNearBottom && messages.length > 0 ? (
+              <button
+                type="button"
+                onClick={handleScrollToChatBottom}
+                aria-label="Ir para o final da conversa"
+                title="Ir para o final"
+                className={`absolute -top-12 right-4 z-20 inline-flex h-10 w-10 items-center justify-center rounded-full border shadow-lg transition sm:right-6 ${
+                  isLight
+                    ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                    : "border-gray-600 bg-gray-900/95 text-gray-100 hover:bg-gray-800"
+                }`}
+              >
+                <MdArrowDownward className="h-5 w-5" />
+              </button>
+            ) : null}
+
             {error ? (
               <p className="mb-3 rounded-xl border border-red-500/40 bg-red-900/35 px-3 py-2 text-sm text-red-100">
                 {error}
