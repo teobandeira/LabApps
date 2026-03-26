@@ -2,7 +2,6 @@
   "name": "delivery-app",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
   "scripts": {
     "dev": "prisma generate && prisma db push && next dev",
     "build": "prisma generate && prisma db push && next build",
@@ -15,8 +14,7 @@
     "prisma:studio": "prisma studio"
   },
   "dependencies": {
-    "@prisma/adapter-mariadb": "^7.5.0",
-    "@prisma/client": "^7.5.0",
+    "@prisma/client": "^6.19.2",
     "@vercel/blob": "^2.3.1",
     "next": "16.1.6",
     "react": "19.2.3",
@@ -31,7 +29,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
-    "prisma": "^7.5.0",
+    "prisma": "^6.19.2",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

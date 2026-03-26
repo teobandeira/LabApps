@@ -1645,6 +1645,11 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       : null;
   const latestGenerated = latestSessionGenerated;
   const isLight = theme === "light";
+  const hasReturnedAssistantMessages = messages.some(
+    (message) =>
+      message.role === "assistant" &&
+      (message.content.trim().length > 0 || Boolean(message.imageUrl))
+  );
 
   useEffect(() => {
     if (mode !== "image" || !loading) {
@@ -3205,42 +3210,52 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                 </section>
               ) : null}
 
-              {messages.map((message, index) => (
-                <article
-                  key={message.id ?? `${message.role}-${index}`}
-                  className={`max-w-[92%] rounded-2xl px-4 py-3 text-base leading-relaxed shadow-lg sm:max-w-[80%] ${
-                    message.role === "user"
-                      ? isLight
-                        ? "ml-auto border border-violet-200 bg-violet-50 text-violet-800"
-                        : "ml-auto border border-purple-400/45 bg-purple-500/15 text-purple-100"
-                      : isLight
-                        ? "mr-auto border border-slate-200 bg-white text-slate-800 shadow-sm"
-                        : "mr-auto border border-gray-700/80 bg-gray-900/70 text-gray-100"
-                  }`}
-                >
-                  <div className="space-y-2">
-                    {renderMessageContent(message.content, `message-${index}`)}
-                  </div>
-                  {message.imageUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={message.imageUrl}
-                      alt="Imagem gerada pela IA"
-                      className="mt-3 w-full rounded-xl border border-white/20 object-cover"
-                    />
-                  ) : null}
-                </article>
-              ))}
+              {messages.map((message, index) => {
+                const isMessageEmpty =
+                  message.content.trim().length === 0 && !message.imageUrl;
+
+                if (isMessageEmpty) {
+                  return null;
+                }
+
+                return (
+                  <article
+                    key={message.id ?? `${message.role}-${index}`}
+                    className={`max-w-[92%] rounded-2xl px-4 py-3 text-base leading-relaxed shadow-lg sm:max-w-[80%] ${
+                      message.role === "user"
+                        ? isLight
+                          ? "ml-auto border border-violet-200 bg-violet-50 text-violet-800"
+                          : "ml-auto border border-purple-400/45 bg-purple-500/15 text-purple-100"
+                        : isLight
+                          ? "mr-auto border border-slate-200 bg-white text-slate-800 shadow-sm"
+                          : "mr-auto border border-gray-700/80 bg-gray-900/70 text-gray-100"
+                    }`}
+                  >
+                    <div className="space-y-2">
+                      {renderMessageContent(message.content, `message-${index}`)}
+                    </div>
+                    {message.imageUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={message.imageUrl}
+                        alt="Imagem gerada pela IA"
+                        className="mt-3 w-full rounded-xl border border-white/20 object-cover"
+                      />
+                    ) : null}
+                  </article>
+                );
+              })}
 
               {loading ? (
                 <article
-                  className={`mr-auto max-w-[92%] rounded-2xl px-4 py-3 text-base shadow-lg sm:max-w-[80%] ${
+                  className={`mr-auto inline-flex h-12 w-12 items-center justify-center rounded-full border shadow-lg ${
                     isLight
-                      ? "border border-violet-200 bg-violet-50 text-violet-700"
-                      : "border border-purple-400/40 bg-purple-500/15 text-purple-100"
+                      ? "border-violet-200 bg-violet-50 text-violet-700"
+                      : "border-purple-400/40 bg-purple-500/15 text-purple-100"
                   }`}
                 >
-                  <p className="font-medium">Gerando resposta...</p>
+                  <SiOpenai className="h-5 w-5 animate-spin" />
+                  <span className="sr-only">Gerando resposta...</span>
                 </article>
               ) : null}
 
@@ -3255,7 +3270,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
               isLight ? "border-slate-200 bg-white" : "border-gray-700/80 bg-gray-900/55"
             }`}
           >
-            {!isChatNearBottom && messages.length > 0 ? (
+            {!isChatNearBottom && hasReturnedAssistantMessages ? (
               <button
                 type="button"
                 onClick={handleScrollToChatBottom}
