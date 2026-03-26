@@ -128,6 +128,16 @@ body {
   font-size: var(--chat-font-size) !important;
 }
 
+.chat-font-scope[data-chat-font="normal"] .chat-role-label {
+  font-size: 8px !important;
+  line-height: 1 !important;
+}
+
+.chat-font-scope[data-chat-font="large"] .chat-role-label {
+  font-size: 9px !important;
+  line-height: 1 !important;
+}
+
 @keyframes portfolio-fade-up {
   from {
     opacity: 0;

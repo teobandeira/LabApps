@@ -3115,7 +3115,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                         : "mr-auto border border-gray-700/80 bg-gray-900/70 text-gray-100"
                   }`}
                 >
-                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] opacity-80">
+                  <p className="chat-role-label mb-1 font-semibold uppercase tracking-[0.13em] opacity-75">
                     {message.role === "user" ? "Voce" : "Assistente"}
                   </p>
                   <div className="space-y-2">
