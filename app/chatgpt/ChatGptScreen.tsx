@@ -221,6 +221,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const [loadingGeneratedHistory, setLoadingGeneratedHistory] = useState(false);
   const [generatedHistoryWarning, setGeneratedHistoryWarning] = useState("");
   const [historyLightboxIndex, setHistoryLightboxIndex] = useState<number | null>(null);
+  const [previewLightboxImageUrl, setPreviewLightboxImageUrl] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sourceImageInputRef = useRef<HTMLInputElement>(null);
@@ -683,13 +684,18 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   }, [mode, loading, chatLoadingHasFiles]);
 
   useEffect(() => {
-    if (historyLightboxIndex === null) {
+    if (historyLightboxIndex === null && !previewLightboxImageUrl) {
       return;
     }
 
     function handleLightboxKeyboard(event: globalThis.KeyboardEvent) {
       if (event.key === "Escape") {
         setHistoryLightboxIndex(null);
+        setPreviewLightboxImageUrl(null);
+        return;
+      }
+
+      if (historyLightboxIndex === null) {
         return;
       }
 
@@ -718,7 +724,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
     window.addEventListener("keydown", handleLightboxKeyboard);
     return () => window.removeEventListener("keydown", handleLightboxKeyboard);
-  }, [historyLightboxIndex, generatedHistory.length]);
+  }, [historyLightboxIndex, previewLightboxImageUrl, generatedHistory.length]);
 
   const mainClass = `font-(family-name:--font-montserrat) min-h-screen [&_button:enabled]:cursor-pointer [&_a]:cursor-pointer ${
     isLight ? "bg-slate-100 text-slate-900" : "bg-gray-900 text-white"
@@ -774,11 +780,35 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     historyLightboxItem?.revisedPrompt?.trim() || historyLightboxItem?.prompt?.trim() || "";
 
   function openHistoryLightbox(index: number) {
+    setPreviewLightboxImageUrl(null);
     setHistoryLightboxIndex(index);
   }
 
   function closeHistoryLightbox() {
     setHistoryLightboxIndex(null);
+  }
+
+  function openLatestPreviewLightbox() {
+    const imageUrl = latestGenerated?.imageUrl;
+    if (!imageUrl) {
+      return;
+    }
+
+    if (latestGenerated?.imageId) {
+      const indexInHistory = generatedHistory.findIndex((item) => item.id === latestGenerated.imageId);
+      if (indexInHistory >= 0) {
+        setPreviewLightboxImageUrl(null);
+        setHistoryLightboxIndex(indexInHistory);
+        return;
+      }
+    }
+
+    setHistoryLightboxIndex(null);
+    setPreviewLightboxImageUrl(imageUrl);
+  }
+
+  function closePreviewLightbox() {
+    setPreviewLightboxImageUrl(null);
   }
 
   function goToPreviousHistoryImage() {
@@ -1004,7 +1034,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     return (
       <main className={mainClass}>
         {topActionMenu}
-        <section className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-0 py-0">
+        <section className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-0 py-0 lg:px-8 lg:py-8">
           <header className={headerClass}>
             <div
               className={`absolute -top-16 -right-10 h-44 w-44 rounded-full blur-3xl ${
@@ -1112,14 +1142,21 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                     </p>
                   </div>
                 ) : latestGenerated?.imageUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={latestGenerated.imageUrl}
-                    alt="Imagem gerada mais recente"
-                    className={`mt-3 h-auto w-full rounded-2xl object-cover ${
+                  <button
+                    type="button"
+                    onClick={openLatestPreviewLightbox}
+                    className={`mt-3 block w-full overflow-hidden rounded-2xl ${
                       isLight ? "border border-slate-200" : "border border-gray-700"
                     }`}
-                  />
+                    aria-label="Abrir preview da imagem em lightbox"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={latestGenerated.imageUrl}
+                      alt="Imagem gerada mais recente"
+                      className="h-auto w-full object-cover transition hover:opacity-95"
+                    />
+                  </button>
                 ) : (
                   <div
                     className={`mt-3 flex h-44 items-center justify-center rounded-2xl border border-dashed text-sm ${
@@ -1128,7 +1165,10 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                         : "border-purple-400/45 bg-purple-500/12 text-purple-100"
                     }`}
                   >
-                    Sua primeira imagem vai aparecer aqui.
+                    <MdImage
+                      className={`h-10 w-10 ${isLight ? "text-slate-400" : "text-purple-200/80"}`}
+                    />
+                    <span className="sr-only">Sua primeira imagem vai aparecer aqui.</span>
                   </div>
                 )}
 
@@ -1274,14 +1314,21 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                     </p>
                   </div>
                 ) : latestGenerated?.imageUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={latestGenerated.imageUrl}
-                    alt="Imagem gerada mais recente"
-                    className={`mt-3 h-auto w-full rounded-2xl object-cover ${
+                  <button
+                    type="button"
+                    onClick={openLatestPreviewLightbox}
+                    className={`mt-3 block w-full overflow-hidden rounded-2xl ${
                       isLight ? "border border-slate-200" : "border border-gray-700"
                     }`}
-                  />
+                    aria-label="Abrir preview da imagem em lightbox"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={latestGenerated.imageUrl}
+                      alt="Imagem gerada mais recente"
+                      className="h-auto w-full object-cover transition hover:opacity-95"
+                    />
+                  </button>
                 ) : (
                   <div
                     className={`mt-3 flex h-52 items-center justify-center rounded-2xl border border-dashed text-sm ${
@@ -1290,7 +1337,10 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                         : "border-purple-400/45 bg-purple-500/12 text-purple-100"
                     }`}
                   >
-                    Sua primeira imagem vai aparecer aqui.
+                    <MdImage
+                      className={`h-11 w-11 ${isLight ? "text-slate-400" : "text-purple-200/80"}`}
+                    />
+                    <span className="sr-only">Sua primeira imagem vai aparecer aqui.</span>
                   </div>
                 )}
                 {latestGenerated?.imageUrl ? (
@@ -1458,6 +1508,41 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
               </div>
             </div>
           ) : null}
+
+          {!historyLightboxItem && previewLightboxImageUrl ? (
+            <div
+              className="fixed inset-0 z-[90] flex items-center justify-center bg-black/85 p-3 sm:p-6"
+              onClick={closePreviewLightbox}
+            >
+              <div
+                className={`relative w-full max-w-5xl rounded-2xl border p-3 shadow-2xl sm:p-4 ${
+                  isLight ? "border-slate-200 bg-white" : "border-gray-700 bg-gray-900"
+                }`}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  onClick={closePreviewLightbox}
+                  className={`absolute top-3 right-3 z-20 inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-full transition ${
+                    isLight
+                      ? "bg-slate-200 text-slate-700 hover:bg-slate-300"
+                      : "bg-gray-800 text-gray-200 hover:bg-gray-700"
+                  }`}
+                  aria-label="Fechar lightbox"
+                >
+                  <MdClose className="h-4 w-4" />
+                </button>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={previewLightboxImageUrl}
+                  alt="Preview ampliado da imagem gerada"
+                  className={`max-h-[80vh] w-full rounded-xl object-contain ${
+                    isLight ? "border border-slate-200" : "border border-gray-700"
+                  }`}
+                />
+              </div>
+            </div>
+          ) : null}
         </section>
       </main>
     );
@@ -1466,7 +1551,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   return (
     <main className={mainClass}>
       {topActionMenu}
-      <section className="mx-auto flex h-dvh min-h-dvh w-full max-w-6xl flex-col px-0 pt-0 pb-0 sm:h-screen sm:min-h-screen sm:px-5 sm:pt-3 sm:pb-6 lg:px-6 lg:pt-4">
+      <section className="mx-auto flex h-dvh min-h-dvh w-full max-w-6xl flex-col px-0 pt-0 pb-0 sm:h-screen sm:min-h-screen sm:px-5 sm:pt-3 sm:pb-6 lg:px-8 lg:pt-8 lg:pb-8">
         <header className={chatHeaderClass}>
           <div
             className={`absolute -top-16 -right-10 h-44 w-44 rounded-full blur-3xl ${
