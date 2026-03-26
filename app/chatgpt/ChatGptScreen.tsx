@@ -1,7 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { ChangeEvent, FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
+import {
+  ChangeEvent,
+  FormEvent,
+  KeyboardEvent,
+  ReactNode,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   MdAutoFixHigh,
   MdArrowUpward,
@@ -1980,7 +1988,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   function renderHighlightedCode(content: string, language?: string, keyPrefix?: string) {
     const normalizedLanguage = normalizeCodeLanguage(language);
     const lines = content.split("\n");
-    const nodes: Array<JSX.Element | string> = [];
+    const nodes: ReactNode[] = [];
 
     lines.forEach((line, lineIndex) => {
       const tokens = tokenizeCodeLine(line, normalizedLanguage);
