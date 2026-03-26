@@ -51,10 +51,24 @@ const IMAGE_SIZE_OPTIONS: Array<{ label: string; value: ImageSize }> = [
   { label: "Paisagem 1536x1024", value: "1536x1024" },
   { label: "Retrato 1024x1536", value: "1024x1536" },
 ];
+const CHAT_TEXT_MODEL_LABEL = "gpt-5.2";
 const IMAGE_MODEL_LABEL = "chatgpt-image-latest";
 const THEME_STORAGE_KEY = "chatgpt-theme-mode";
 const CHAT_PROMPT_MAX_HEIGHT = 176;
 const IMAGE_PROMPT_MAX_HEIGHT = 220;
+const CHAT_LOADING_STEPS = [
+  "Lendo sua mensagem...",
+  "Analisando o contexto da conversa...",
+  "Consultando web (quando necessario)...",
+  "Montando a resposta final...",
+] as const;
+const CHAT_LOADING_STEPS_WITH_FILES = [
+  "Lendo sua mensagem...",
+  "Processando anexos enviados...",
+  "Analisando o contexto da conversa...",
+  "Consultando web (quando necessario)...",
+  "Montando a resposta final...",
+] as const;
 const BIBLE_LOADING_VERSES = [
   "Tudo posso naquele que me fortalece. (Filipenses 4:13)",
   "O Senhor e o meu pastor; nada me faltara. (Salmos 23:1)",
@@ -197,6 +211,8 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const [loading, setLoading] = useState(false);
   const [downloadingImage, setDownloadingImage] = useState(false);
   const [loadingVerse, setLoadingVerse] = useState<string>(() => getRandomBibleVerse());
+  const [chatLoadingActions, setChatLoadingActions] = useState<string[]>([]);
+  const [chatLoadingHasFiles, setChatLoadingHasFiles] = useState(false);
   const [isTopMenuOpen, setIsTopMenuOpen] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>("dark");
   const [error, setError] = useState("");
@@ -210,7 +226,6 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const sourceImageInputRef = useRef<HTMLInputElement>(null);
   const chatPromptRef = useRef<HTMLTextAreaElement>(null);
   const imagePromptRef = useRef<HTMLTextAreaElement>(null);
-  const topMenuRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const canSend =
@@ -260,25 +275,14 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       return;
     }
 
-    function handleClickOutside(event: MouseEvent) {
-      if (!topMenuRef.current) {
-        return;
-      }
-      if (!topMenuRef.current.contains(event.target as Node)) {
-        setIsTopMenuOpen(false);
-      }
-    }
-
     function handleEscape(event: globalThis.KeyboardEvent) {
       if (event.key === "Escape") {
         setIsTopMenuOpen(false);
       }
     }
 
-    window.addEventListener("mousedown", handleClickOutside);
     window.addEventListener("keydown", handleEscape);
     return () => {
-      window.removeEventListener("mousedown", handleClickOutside);
       window.removeEventListener("keydown", handleEscape);
     };
   }, [isTopMenuOpen]);
@@ -357,6 +361,20 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     const filesToSend = mode === "chat" ? [...selectedFiles] : [];
     const sourceImageToSend = mode === "image" ? sourceImage : null;
     const imageAction = mode === "image" && sourceImageToSend ? "edit" : "generate";
+    const chatHistoryToSend =
+      mode === "chat"
+        ? messages
+            .filter(
+              (message) =>
+                (message.role === "user" || message.role === "assistant") &&
+                message.content.trim().length > 0
+            )
+            .map((message) => ({
+              role: message.role,
+              content: message.content.trim(),
+            }))
+            .slice(-20)
+        : [];
     const userMessageParts: string[] = [];
 
     if (cleanPrompt) {
@@ -381,6 +399,8 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
     if (mode === "chat") {
       setPrompt("");
+      setChatLoadingHasFiles(filesToSend.length > 0);
+      setChatLoadingActions([]);
     }
     setSelectedFiles([]);
     setLoading(true);
@@ -402,6 +422,9 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       formData.append("mode", mode);
       formData.append("imageSize", imageSize);
       formData.append("imageAction", imageAction);
+      if (mode === "chat" && chatHistoryToSend.length > 0) {
+        formData.append("chatHistory", JSON.stringify(chatHistoryToSend));
+      }
 
       for (const file of filesToSend) {
         formData.append("files", file);
@@ -627,6 +650,39 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   }, [mode, loading]);
 
   useEffect(() => {
+    if (mode !== "chat") {
+      return;
+    }
+
+    if (!loading) {
+      setChatLoadingActions([]);
+      return;
+    }
+
+    const steps = chatLoadingHasFiles ? CHAT_LOADING_STEPS_WITH_FILES : CHAT_LOADING_STEPS;
+    let stepIndex = 0;
+    setChatLoadingActions([steps[0]]);
+
+    const intervalId = window.setInterval(() => {
+      stepIndex += 1;
+      if (stepIndex >= steps.length) {
+        window.clearInterval(intervalId);
+        return;
+      }
+
+      setChatLoadingActions((current) => {
+        const nextStep = steps[stepIndex];
+        if (current[current.length - 1] === nextStep) {
+          return current;
+        }
+        return [...current, nextStep];
+      });
+    }, 1400);
+
+    return () => window.clearInterval(intervalId);
+  }, [mode, loading, chatLoadingHasFiles]);
+
+  useEffect(() => {
     if (historyLightboxIndex === null) {
       return;
     }
@@ -691,12 +747,22 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const topMenuTriggerClass = isLight
     ? "inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/20 bg-black/50 text-white shadow transition hover:bg-black/70 sm:h-10 sm:w-10 sm:rounded-xl sm:border-slate-300 sm:bg-white sm:text-slate-700 sm:hover:border-slate-400 sm:hover:bg-slate-50"
     : "inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/20 bg-black/50 text-white shadow transition hover:bg-black/70 sm:h-10 sm:w-10 sm:rounded-xl sm:border-gray-600 sm:bg-gray-900/85 sm:text-gray-100 sm:hover:border-purple-300/60 sm:hover:bg-gray-800";
-  const topMenuPanelClass = isLight
-    ? "absolute right-0 top-10 w-44 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg sm:top-12"
-    : "absolute right-0 top-10 w-44 overflow-hidden rounded-xl border border-gray-700 bg-gray-900/95 shadow-lg sm:top-12";
-  const topMenuItemClass = isLight
-    ? "inline-flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-slate-100"
-    : "inline-flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-100 transition hover:bg-gray-800";
+  const topMenuOverlayClass = "fixed inset-0 z-80 bg-black/45 backdrop-blur-[1px]";
+  const topMenuDrawerClass = isLight
+    ? "fixed top-0 right-0 z-[90] flex h-dvh w-[88vw] max-w-[360px] flex-col border-l border-slate-200 bg-white shadow-2xl"
+    : "fixed top-0 right-0 z-[90] flex h-dvh w-[88vw] max-w-[360px] flex-col border-l border-gray-700 bg-gray-950 shadow-2xl";
+  const topMenuModeButtonClass = isLight
+    ? "group flex w-full items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-left transition hover:border-violet-300 hover:bg-violet-50"
+    : "group flex w-full items-center gap-3 rounded-2xl border border-gray-700 bg-gray-900/70 px-3 py-3 text-left transition hover:border-purple-300/60 hover:bg-purple-500/10";
+  const topMenuModeButtonActiveClass = isLight
+    ? "border-violet-300 bg-violet-50"
+    : "border-purple-300/60 bg-purple-500/15";
+  const topMenuCloseButtonClass = isLight
+    ? "inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:border-slate-300 hover:bg-slate-50"
+    : "inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-700 bg-gray-900/70 text-gray-200 transition hover:border-gray-600 hover:bg-gray-800";
+  const topMenuActionButtonClass = isLight
+    ? "inline-flex w-full items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-sm text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+    : "inline-flex w-full items-center gap-2 rounded-xl border border-gray-700 bg-gray-900/70 px-3 py-2 text-left text-sm text-gray-100 transition hover:border-gray-600 hover:bg-gray-800";
 
   function toggleTheme() {
     setTheme((current) => (current === "light" ? "dark" : "light"));
@@ -742,55 +808,146 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   }
 
   const topActionMenu = (
-    <div ref={topMenuRef} className="fixed top-1 right-2 z-80 sm:top-4 sm:right-4">
-      <button
-        type="button"
-        onClick={() => setIsTopMenuOpen((current) => !current)}
-        aria-haspopup="menu"
-        aria-expanded={isTopMenuOpen}
-        aria-label="Abrir menu"
-        className={topMenuTriggerClass}
-      >
-        <MdMoreVert className="h-5 w-5" />
-      </button>
+    <>
+      <div className="fixed top-1 right-2 z-80 sm:top-4 sm:right-4">
+        <button
+          type="button"
+          onClick={() => setIsTopMenuOpen((current) => !current)}
+          aria-haspopup="dialog"
+          aria-expanded={isTopMenuOpen}
+          aria-label="Abrir menu"
+          className={topMenuTriggerClass}
+        >
+          <MdMoreVert className="h-5 w-5" />
+        </button>
+      </div>
 
       {isTopMenuOpen ? (
-        <div className={topMenuPanelClass} role="menu">
+        <>
           <button
             type="button"
-            onClick={() => {
-              toggleTheme();
-              setIsTopMenuOpen(false);
-            }}
-            className={topMenuItemClass}
-            role="menuitem"
-          >
-            <span
-              className={`relative inline-flex h-5 w-10 rounded-full transition ${
-                isLight ? "bg-violet-500" : "bg-gray-600"
+            onClick={() => setIsTopMenuOpen(false)}
+            className={topMenuOverlayClass}
+            aria-label="Fechar menu lateral"
+          />
+
+          <aside className={topMenuDrawerClass} role="dialog" aria-modal="true" aria-label="Menu GPT">
+            <div
+              className={`flex items-center justify-between border-b px-4 py-4 ${
+                isLight ? "border-slate-200" : "border-gray-700"
               }`}
             >
-              <span
-                className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition ${
-                  isLight ? "left-5.5" : "left-0.5"
-                }`}
-              />
-            </span>
-            {isLight ? "Tema Claro" : "Tema Escuro"}
-          </button>
+              <p className={`text-sm font-semibold ${isLight ? "text-slate-800" : "text-gray-100"}`}>
+                Acesso rapido
+              </p>
+              <button
+                type="button"
+                onClick={() => setIsTopMenuOpen(false)}
+                className={topMenuCloseButtonClass}
+                aria-label="Fechar menu"
+              >
+                <MdClose className="h-4 w-4" />
+              </button>
+            </div>
 
-          <Link
-            href="/chatgpt"
-            onClick={() => setIsTopMenuOpen(false)}
-            className={topMenuItemClass}
-            role="menuitem"
-          >
-            <MdArrowBack className="h-4 w-4" />
-            Voltar
-          </Link>
-        </div>
+            <div className="space-y-3 p-4">
+              <Link
+                href="/chatgpt/chat"
+                onClick={() => setIsTopMenuOpen(false)}
+                className={`${topMenuModeButtonClass} ${mode === "chat" ? topMenuModeButtonActiveClass : ""}`}
+              >
+                <span
+                  className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
+                    mode === "chat"
+                      ? isLight
+                        ? "bg-violet-500 text-white"
+                        : "bg-purple-500/35 text-purple-100"
+                      : isLight
+                        ? "border border-violet-200 bg-white text-violet-600"
+                        : "border border-gray-700 bg-gray-800 text-purple-200"
+                  }`}
+                >
+                  <SiOpenai className="h-5 w-5" />
+                </span>
+                <span className="min-w-0">
+                  <span className={`block text-sm font-semibold ${isLight ? "text-slate-900" : "text-gray-100"}`}>
+                    ChatGPT
+                  </span>
+                  <span className={`block truncate text-[11px] ${isLight ? "text-slate-500" : "text-gray-400"}`}>
+                    Modelo: {CHAT_TEXT_MODEL_LABEL}
+                  </span>
+                </span>
+              </Link>
+
+              <Link
+                href="/chatgpt/imagem"
+                onClick={() => setIsTopMenuOpen(false)}
+                className={`${topMenuModeButtonClass} ${mode === "image" ? topMenuModeButtonActiveClass : ""}`}
+              >
+                <span
+                  className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
+                    mode === "image"
+                      ? isLight
+                        ? "bg-violet-500 text-white"
+                        : "bg-purple-500/35 text-purple-100"
+                      : isLight
+                        ? "border border-violet-200 bg-white text-violet-600"
+                        : "border border-gray-700 bg-gray-800 text-purple-200"
+                  }`}
+                >
+                  <MdImage className="h-5 w-5" />
+                </span>
+                <span className="min-w-0">
+                  <span className={`block text-sm font-semibold ${isLight ? "text-slate-900" : "text-gray-100"}`}>
+                    Image Designer Pro
+                  </span>
+                  <span className={`block truncate text-[11px] ${isLight ? "text-slate-500" : "text-gray-400"}`}>
+                    Modelo: {IMAGE_MODEL_LABEL}
+                  </span>
+                </span>
+              </Link>
+
+              <Link
+                href="/chatgpt"
+                onClick={() => setIsTopMenuOpen(false)}
+                className={topMenuActionButtonClass}
+              >
+                <MdArrowBack className="h-4 w-4" />
+                Escolher modo
+              </Link>
+            </div>
+
+            <div
+              className={`mt-auto border-t p-4 ${
+                isLight ? "border-slate-200 bg-slate-50" : "border-gray-700 bg-gray-900/70"
+              }`}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  toggleTheme();
+                  setIsTopMenuOpen(false);
+                }}
+                className={topMenuActionButtonClass}
+              >
+                <span
+                  className={`relative inline-flex h-5 w-10 rounded-full transition ${
+                    isLight ? "bg-violet-500" : "bg-gray-600"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition ${
+                      isLight ? "left-5.5" : "left-0.5"
+                    }`}
+                  />
+                </span>
+                {isLight ? "Tema Claro" : "Tema Escuro"}
+              </button>
+            </div>
+          </aside>
+        </>
       ) : null}
-    </div>
+    </>
   );
 
   async function handleDownloadImage() {
@@ -930,69 +1087,29 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                 <p className={sectionTitleClass}>Preview Atual</p>
                 {loading ? (
                   <div
-                    className={`relative mt-3 h-44 overflow-hidden rounded-2xl ${
+                    className={`mt-3 flex h-44 flex-col items-center justify-center gap-3 rounded-2xl ${
                       isLight
-                        ? "border border-violet-300/35 bg-violet-100/60"
-                        : "border border-purple-400/35 bg-purple-500/10"
+                        ? "border border-violet-300/35 bg-violet-100/60 text-slate-800"
+                        : "border border-purple-400/35 bg-purple-500/10 text-purple-100"
                     }`}
                   >
-                    {latestGenerated?.imageUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={latestGenerated.imageUrl}
-                        alt="Preview anterior"
-                        className="h-full w-full object-cover opacity-35 blur-[1px]"
-                      />
-                    ) : null}
-                    <div className={`absolute inset-0 ${isLight ? "bg-slate-200/35" : "bg-slate-900/45"}`} />
-                    <div className="pointer-events-none absolute inset-0">
-                      <span
-                        className={`absolute left-1/2 top-1/2 h-28 w-28 -translate-x-1/2 -translate-y-1/2 rounded-full animate-[ping_2s_ease-in-out_infinite] ${
-                          isLight ? "bg-slate-300/45" : "bg-slate-400/20"
-                        }`}
-                      />
-                      <span
-                        className={`absolute left-1/2 top-1/2 h-16 w-16 -translate-x-1/2 -translate-y-1/2 rounded-2xl animate-pulse ${
-                          isLight ? "bg-slate-300/55" : "bg-slate-400/30"
-                        }`}
-                      />
-                    </div>
-                    <div
-                      className={`absolute inset-0 flex flex-col items-center justify-center gap-3 px-4 ${
-                        isLight ? "text-slate-800" : "text-purple-100"
+                    <span
+                      className={`inline-flex h-11 w-11 items-center justify-center rounded-full ${
+                        isLight ? "bg-white/70 text-violet-600" : "bg-black/30 text-purple-200"
                       }`}
                     >
-                      <p className="text-sm font-medium">
-                        {sourceImage ? "Modificando imagem..." : "Criando nova imagem..."}
-                      </p>
-                      <div className="space-y-2">
-                        <span
-                          className={`mx-auto block h-2 w-40 rounded-full animate-pulse ${
-                            isLight ? "bg-slate-400/45" : "bg-slate-300/35"
-                          }`}
-                          style={{ animationDuration: "1.4s" }}
-                        />
-                        <span
-                          className={`mx-auto block h-2 w-28 rounded-full animate-pulse ${
-                            isLight ? "bg-slate-400/45" : "bg-slate-300/35"
-                          }`}
-                          style={{ animationDuration: "1.8s" }}
-                        />
-                        <span
-                          className={`mx-auto block h-2 w-20 rounded-full animate-pulse ${
-                            isLight ? "bg-slate-400/45" : "bg-slate-300/35"
-                          }`}
-                          style={{ animationDuration: "1.2s" }}
-                        />
-                      </div>
-                      <p
-                        className={`max-w-sm text-center text-xs leading-relaxed ${
-                          isLight ? "text-slate-600" : "text-purple-200/90"
-                        }`}
-                      >
-                        {loadingVerse}
-                      </p>
-                    </div>
+                      <MdAutoFixHigh className="h-6 w-6 animate-pulse" />
+                    </span>
+                    <p className="text-sm font-medium">
+                      {sourceImage ? "Modificando imagem..." : "Criando nova imagem..."}
+                    </p>
+                    <p
+                      className={`max-w-sm px-4 text-center text-sm leading-relaxed ${
+                        isLight ? "text-slate-700" : "text-purple-100"
+                      }`}
+                    >
+                      {loadingVerse}
+                    </p>
                   </div>
                 ) : latestGenerated?.imageUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -1132,69 +1249,29 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                 <p className={sectionTitleClass}>Preview Atual</p>
                 {loading ? (
                   <div
-                    className={`relative mt-3 h-52 overflow-hidden rounded-2xl ${
+                    className={`mt-3 flex h-52 flex-col items-center justify-center gap-3 rounded-2xl ${
                       isLight
-                        ? "border border-violet-300/35 bg-violet-100/60"
-                        : "border border-purple-400/35 bg-purple-500/10"
+                        ? "border border-violet-300/35 bg-violet-100/60 text-slate-800"
+                        : "border border-purple-400/35 bg-purple-500/10 text-purple-100"
                     }`}
                   >
-                    {latestGenerated?.imageUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={latestGenerated.imageUrl}
-                        alt="Preview anterior"
-                        className="h-full w-full object-cover opacity-35 blur-[1px]"
-                      />
-                    ) : null}
-                    <div className={`absolute inset-0 ${isLight ? "bg-slate-200/35" : "bg-slate-900/45"}`} />
-                    <div className="pointer-events-none absolute inset-0">
-                      <span
-                        className={`absolute left-1/2 top-1/2 h-28 w-28 -translate-x-1/2 -translate-y-1/2 rounded-full animate-[ping_2s_ease-in-out_infinite] ${
-                          isLight ? "bg-slate-300/45" : "bg-slate-400/20"
-                        }`}
-                      />
-                      <span
-                        className={`absolute left-1/2 top-1/2 h-16 w-16 -translate-x-1/2 -translate-y-1/2 rounded-2xl animate-pulse ${
-                          isLight ? "bg-slate-300/55" : "bg-slate-400/30"
-                        }`}
-                      />
-                    </div>
-                    <div
-                      className={`absolute inset-0 flex flex-col items-center justify-center gap-3 px-4 ${
-                        isLight ? "text-slate-800" : "text-purple-100"
+                    <span
+                      className={`inline-flex h-12 w-12 items-center justify-center rounded-full ${
+                        isLight ? "bg-white/70 text-violet-600" : "bg-black/30 text-purple-200"
                       }`}
                     >
-                      <p className="text-sm font-medium">
-                        {sourceImage ? "Modificando imagem..." : "Criando nova imagem..."}
-                      </p>
-                      <div className="space-y-2">
-                        <span
-                          className={`mx-auto block h-2 w-40 rounded-full animate-pulse ${
-                            isLight ? "bg-slate-400/45" : "bg-slate-300/35"
-                          }`}
-                          style={{ animationDuration: "1.4s" }}
-                        />
-                        <span
-                          className={`mx-auto block h-2 w-28 rounded-full animate-pulse ${
-                            isLight ? "bg-slate-400/45" : "bg-slate-300/35"
-                          }`}
-                          style={{ animationDuration: "1.8s" }}
-                        />
-                        <span
-                          className={`mx-auto block h-2 w-20 rounded-full animate-pulse ${
-                            isLight ? "bg-slate-400/45" : "bg-slate-300/35"
-                          }`}
-                          style={{ animationDuration: "1.2s" }}
-                        />
-                      </div>
-                      <p
-                        className={`max-w-sm text-center text-xs leading-relaxed ${
-                          isLight ? "text-slate-600" : "text-purple-200/90"
-                        }`}
-                      >
-                        {loadingVerse}
-                      </p>
-                    </div>
+                      <MdAutoFixHigh className="h-7 w-7 animate-pulse" />
+                    </span>
+                    <p className="text-sm font-medium">
+                      {sourceImage ? "Modificando imagem..." : "Criando nova imagem..."}
+                    </p>
+                    <p
+                      className={`max-w-md px-4 text-center text-sm leading-relaxed ${
+                        isLight ? "text-slate-700" : "text-purple-100"
+                      }`}
+                    >
+                      {loadingVerse}
+                    </p>
                   </div>
                 ) : latestGenerated?.imageUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -1437,7 +1514,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
               {messages.map((message, index) => (
                 <article
                   key={`${message.role}-${index}`}
-                  className={`max-w-[92%] rounded-2xl px-4 py-3 text-[15px] leading-relaxed shadow-lg sm:max-w-[80%] ${
+                  className={`max-w-[92%] rounded-2xl px-4 py-3 text-base leading-relaxed shadow-lg sm:max-w-[80%] ${
                     message.role === "user"
                       ? isLight
                         ? "ml-auto border border-violet-200 bg-violet-50 text-violet-800"
@@ -1464,13 +1541,22 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
               {loading ? (
                 <article
-                  className={`mr-auto max-w-[92%] rounded-2xl px-4 py-3 text-[15px] shadow-lg sm:max-w-[80%] ${
+                  className={`mr-auto max-w-[92%] rounded-2xl px-4 py-3 text-base shadow-lg sm:max-w-[80%] ${
                     isLight
                       ? "border border-violet-200 bg-violet-50 text-violet-700"
                       : "border border-purple-400/40 bg-purple-500/15 text-purple-100"
                   }`}
                 >
-                  Gerando resposta...
+                  <p className="font-medium">
+                    {chatLoadingActions[chatLoadingActions.length - 1] ?? "Gerando resposta..."}
+                  </p>
+                  {chatLoadingActions.length > 1 ? (
+                    <div className="mt-2 space-y-1 text-xs opacity-90">
+                      {chatLoadingActions.slice(-3).map((action, index) => (
+                        <p key={`${action}-${index}`}>• {action}</p>
+                      ))}
+                    </div>
+                  ) : null}
                 </article>
               ) : null}
 
@@ -1572,7 +1658,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                 onKeyDown={handleTextareaKeyDown}
                 placeholder={copy.placeholder}
                 disabled={loading}
-                className={`h-11 min-h-11 max-h-44 flex-1 resize-none rounded-xl px-4 py-2.5 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                className={`h-12 min-h-12 max-h-44 flex-1 resize-none rounded-xl px-4 py-3 text-base outline-none transition disabled:cursor-not-allowed disabled:opacity-60 ${
                   isLight
                     ? "border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400"
                     : "border border-gray-700/90 bg-gray-900/85 text-gray-100 placeholder:text-gray-500"

@@ -20,6 +20,9 @@ const MAX_FILES = 5;
 const MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024;
 const MAX_FILE_TEXT_CHARS = 30_000;
 const MAX_TOTAL_FILE_TEXT_CHARS = 90_000;
+const MAX_CHAT_HISTORY_MESSAGES = 20;
+const MAX_CHAT_HISTORY_MESSAGE_CHARS = 4_000;
+const MAX_CHAT_HISTORY_TOTAL_CHARS = 24_000;
 
 const SUPPORTED_FILE_EXTENSIONS = new Set([
   ".txt",
@@ -50,6 +53,10 @@ const SUPPORTED_FILE_EXTENSIONS = new Set([
 
 type GenerationMode = "chat" | "image";
 type ImageAction = "generate" | "edit";
+type ChatHistoryMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
 
 type ChatRequestBody = {
   prompt?: string;
@@ -57,6 +64,7 @@ type ChatRequestBody = {
   mode?: string;
   imageSize?: string;
   imageAction?: string;
+  chatHistory?: unknown;
 };
 
 type ParsedRequest = {
@@ -67,6 +75,7 @@ type ParsedRequest = {
   imageAction: ImageAction;
   sourceImage: File | null;
   files: File[];
+  chatHistory: ChatHistoryMessage[];
 };
 
 type PreparedFiles = {
@@ -366,6 +375,62 @@ function normalizeImageAction(value: FormDataEntryValue | null | undefined): Ima
   return value === "edit" ? "edit" : "generate";
 }
 
+function normalizeChatHistory(value: unknown): ChatHistoryMessage[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const normalized: ChatHistoryMessage[] = [];
+  let totalChars = 0;
+
+  for (const item of value) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    const role = (item as { role?: unknown }).role;
+    const content = (item as { content?: unknown }).content;
+    if ((role !== "user" && role !== "assistant") || typeof content !== "string") {
+      continue;
+    }
+
+    const trimmedContent = content.trim();
+    if (!trimmedContent) {
+      continue;
+    }
+
+    if (totalChars >= MAX_CHAT_HISTORY_TOTAL_CHARS) {
+      break;
+    }
+
+    const clippedByMessage = trimmedContent.slice(0, MAX_CHAT_HISTORY_MESSAGE_CHARS);
+    const remaining = MAX_CHAT_HISTORY_TOTAL_CHARS - totalChars;
+    const clippedContent = clippedByMessage.slice(0, remaining);
+    if (!clippedContent) {
+      break;
+    }
+
+    normalized.push({ role, content: clippedContent });
+    totalChars += clippedContent.length;
+  }
+
+  return normalized.slice(-MAX_CHAT_HISTORY_MESSAGES);
+}
+
+function parseChatHistoryFromFormData(
+  value: FormDataEntryValue | null | undefined
+): ChatHistoryMessage[] {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return [];
+  }
+
+  try {
+    return normalizeChatHistory(JSON.parse(value));
+  } catch {
+    return [];
+  }
+}
+
 function isSupportedSourceImage(file: File): boolean {
   const extension = getFileExtension(file.name);
   if (SUPPORTED_SOURCE_IMAGE_EXTENSIONS.has(extension)) {
@@ -395,6 +460,7 @@ async function parseIncomingRequest(request: NextRequest): Promise<ParsedRequest
       imageAction: normalizeImageAction(formData.get("imageAction")),
       sourceImage,
       files,
+      chatHistory: parseChatHistoryFromFormData(formData.get("chatHistory")),
     };
   }
 
@@ -408,7 +474,16 @@ async function parseIncomingRequest(request: NextRequest): Promise<ParsedRequest
       : DEFAULT_IMAGE_SIZE;
   const imageAction = payload.imageAction === "edit" ? "edit" : "generate";
 
-  return { prompt, model, mode, imageSize, imageAction, sourceImage: null, files: [] };
+  return {
+    prompt,
+    model,
+    mode,
+    imageSize,
+    imageAction,
+    sourceImage: null,
+    files: [],
+    chatHistory: normalizeChatHistory(payload.chatHistory),
+  };
 }
 
 async function prepareFileContext(files: File[]): Promise<PreparedFiles> {
@@ -469,22 +544,36 @@ async function prepareFileContext(files: File[]): Promise<PreparedFiles> {
   return { names, sections, warnings };
 }
 
-function buildInput(prompt: string, fileSections: string[]): string {
-  if (fileSections.length === 0) {
-    return prompt;
+function buildInput(prompt: string, fileSections: string[], chatHistory: ChatHistoryMessage[]): string {
+  const sections: string[] = [];
+
+  if (chatHistory.length > 0) {
+    sections.push(
+      "Contexto da conversa anterior (ordem cronologica):",
+      ...chatHistory.map(
+        (message, index) =>
+          `${index + 1}. ${message.role === "user" ? "Usuario" : "Assistente"}: ${message.content}`
+      ),
+      ""
+    );
   }
 
-  const intro =
+  if (fileSections.length > 0) {
+    sections.push(
+      "Arquivos anexados pelo usuario:",
+      ...fileSections.map((section, index) => `\n### Anexo ${index + 1}\n${section}`),
+      ""
+    );
+  }
+
+  sections.push(
+    "Mensagem atual do usuario:",
     prompt.length > 0
       ? prompt
-      : "Analise os arquivos anexados e responda em portugues de forma objetiva.";
+      : "Analise os arquivos anexados e responda em portugues de forma objetiva."
+  );
 
-  return [
-    intro,
-    "",
-    "Arquivos anexados pelo usuario:",
-    ...fileSections.map((section, index) => `\n### Anexo ${index + 1}\n${section}`),
-  ].join("\n");
+  return sections.join("\n");
 }
 
 function extractOutputText(output: unknown): string {
@@ -550,7 +639,8 @@ export async function POST(request: NextRequest) {
       "Content-Type": "application/json",
     };
 
-    const { prompt, model, mode, imageSize, imageAction, sourceImage, files } = parsedRequest;
+    const { prompt, model, mode, imageSize, imageAction, sourceImage, files, chatHistory } =
+      parsedRequest;
 
     if (mode === "image") {
       if (!prompt) {
@@ -705,7 +795,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const input = buildInput(prompt, preparedFiles.sections);
+    const input = buildInput(prompt, preparedFiles.sections, chatHistory);
 
     const textResponse = await fetch(OPENAI_RESPONSES_API_URL, {
       method: "POST",
