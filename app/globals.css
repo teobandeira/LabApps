@@ -3,6 +3,12 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  --scrollbar-track: #e8ecff;
+  --scrollbar-thumb-start: #7c3aed;
+  --scrollbar-thumb-end: #06b6d4;
+  --scrollbar-thumb-hover-start: #6d28d9;
+  --scrollbar-thumb-hover-end: #0891b2;
+  --scrollbar-thumb-border: #f8fafc;
 }
 
 @theme inline {
@@ -16,6 +22,12 @@
   :root {
     --background: #0a0a0a;
     --foreground: #ededed;
+    --scrollbar-track: #111827;
+    --scrollbar-thumb-start: #8b5cf6;
+    --scrollbar-thumb-end: #06b6d4;
+    --scrollbar-thumb-hover-start: #a78bfa;
+    --scrollbar-thumb-hover-end: #22d3ee;
+    --scrollbar-thumb-border: #0f172a;
   }
 }
 
@@ -23,6 +35,84 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-montserrat), Arial, Helvetica, sans-serif;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb-start) var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+  border: 2px solid var(--scrollbar-thumb-border);
+  background: linear-gradient(
+    180deg,
+    var(--scrollbar-thumb-start) 0%,
+    var(--scrollbar-thumb-end) 100%
+  );
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(
+    180deg,
+    var(--scrollbar-thumb-hover-start) 0%,
+    var(--scrollbar-thumb-hover-end) 100%
+  );
+}
+
+.chat-scrollbar {
+  scrollbar-width: thin;
+}
+
+.chat-scrollbar::-webkit-scrollbar {
+  width: 11px;
+}
+
+.chat-scrollbar::-webkit-scrollbar-thumb {
+  border-width: 2px;
+}
+
+.chat-scrollbar-light {
+  scrollbar-color: #7c3aed #e2e8f0;
+}
+
+.chat-scrollbar-light::-webkit-scrollbar-track {
+  background: linear-gradient(180deg, #eef2ff 0%, #e2e8f0 100%);
+}
+
+.chat-scrollbar-light::-webkit-scrollbar-thumb {
+  border-color: #f8fafc;
+  background: linear-gradient(180deg, #8b5cf6 0%, #06b6d4 100%);
+}
+
+.chat-scrollbar-light::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #7c3aed 0%, #0891b2 100%);
+}
+
+.chat-scrollbar-dark {
+  scrollbar-color: #8b5cf6 #1f2937;
+}
+
+.chat-scrollbar-dark::-webkit-scrollbar-track {
+  background: linear-gradient(180deg, #111827 0%, #1f2937 100%);
+}
+
+.chat-scrollbar-dark::-webkit-scrollbar-thumb {
+  border-color: #0f172a;
+  background: linear-gradient(180deg, #a78bfa 0%, #22d3ee 100%);
+}
+
+.chat-scrollbar-dark::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #c4b5fd 0%, #67e8f9 100%);
 }
 
 @keyframes portfolio-fade-up {

@@ -9,10 +9,14 @@ import {
   MdAttachFile,
   MdChevronLeft,
   MdChevronRight,
+  MdContentCopy,
+  MdDeleteOutline,
   MdClose,
+  MdDone,
   MdDownload,
   MdImage,
   MdMoreVert,
+  MdStop,
 } from "react-icons/md";
 import { SiOpenai } from "react-icons/si";
 
@@ -21,6 +25,7 @@ type ImageSize = "1024x1024" | "1536x1024" | "1024x1536";
 type ThemeMode = "dark" | "light";
 
 type ChatMessage = {
+  id?: string;
   role: "user" | "assistant";
   content: string;
   imageUrl?: string;
@@ -38,9 +43,47 @@ type GeneratedImageHistoryItem = {
   action: "generate" | "edit";
 };
 
+type ChatSession = {
+  id: string;
+  title: string;
+  updatedAt: string;
+  messages: ChatMessage[];
+};
+
 type ChatGptScreenProps = {
   mode: GenerationMode;
 };
+
+type MessageContentSegment = {
+  type: "text" | "code";
+  content: string;
+  language?: string;
+};
+
+type CodeTokenType = "plain" | "keyword" | "string" | "comment" | "number" | "builtin";
+
+type CodeToken = {
+  text: string;
+  type: CodeTokenType;
+};
+
+type ChatStreamChunk =
+  | {
+      type: "delta";
+      delta: string;
+    }
+  | {
+      type: "meta";
+      warnings?: string[];
+      filesUsed?: string[];
+    }
+  | {
+      type: "done";
+    }
+  | {
+      type: "error";
+      error: string;
+    };
 
 const MAX_FILES = 5;
 const ACCEPTED_FILE_TYPES =
@@ -54,21 +97,160 @@ const IMAGE_SIZE_OPTIONS: Array<{ label: string; value: ImageSize }> = [
 const CHAT_TEXT_MODEL_LABEL = "gpt-5.2";
 const IMAGE_MODEL_LABEL = "chatgpt-image-latest";
 const THEME_STORAGE_KEY = "chatgpt-theme-mode";
+const CHAT_DEVICE_ID_STORAGE_KEY = "chatgpt-device-id-v1";
 const CHAT_PROMPT_MAX_HEIGHT = 176;
 const IMAGE_PROMPT_MAX_HEIGHT = 220;
-const CHAT_LOADING_STEPS = [
-  "Lendo sua mensagem...",
-  "Analisando o contexto da conversa...",
-  "Consultando web (quando necessario)...",
-  "Montando a resposta final...",
-] as const;
-const CHAT_LOADING_STEPS_WITH_FILES = [
-  "Lendo sua mensagem...",
-  "Processando anexos enviados...",
-  "Analisando o contexto da conversa...",
-  "Consultando web (quando necessario)...",
-  "Montando a resposta final...",
-] as const;
+const CHAT_SESSION_TITLE_MAX_LENGTH = 56;
+const CHAT_SESSION_PREVIEW_MAX_LENGTH = 82;
+const CHAT_TITLE_NOISE_PREFIXES = [
+  "arquivos enviados:",
+  "arquivos usados no contexto:",
+  "acao:",
+  "resolucao:",
+  "imagem base:",
+  "prompt revisado:",
+  "nao consegui processar agora",
+];
+const CODE_KEYWORDS_BY_LANGUAGE: Record<string, string[]> = {
+  javascript: [
+    "const",
+    "let",
+    "var",
+    "function",
+    "return",
+    "if",
+    "else",
+    "for",
+    "while",
+    "switch",
+    "case",
+    "break",
+    "continue",
+    "try",
+    "catch",
+    "finally",
+    "class",
+    "extends",
+    "new",
+    "import",
+    "from",
+    "export",
+    "default",
+    "async",
+    "await",
+    "throw",
+    "typeof",
+    "instanceof",
+    "in",
+    "of",
+    "true",
+    "false",
+    "null",
+    "undefined",
+  ],
+  python: [
+    "def",
+    "return",
+    "if",
+    "elif",
+    "else",
+    "for",
+    "while",
+    "in",
+    "try",
+    "except",
+    "finally",
+    "class",
+    "import",
+    "from",
+    "as",
+    "with",
+    "lambda",
+    "yield",
+    "raise",
+    "and",
+    "or",
+    "not",
+    "is",
+    "None",
+    "True",
+    "False",
+  ],
+  bash: [
+    "if",
+    "then",
+    "else",
+    "fi",
+    "for",
+    "in",
+    "do",
+    "done",
+    "case",
+    "esac",
+    "while",
+    "until",
+    "function",
+    "export",
+    "local",
+    "readonly",
+    "echo",
+    "source",
+    "set",
+    "cd",
+    "mkdir",
+    "rm",
+    "cp",
+    "mv",
+    "cat",
+  ],
+  sql: [
+    "select",
+    "from",
+    "where",
+    "join",
+    "left",
+    "right",
+    "inner",
+    "outer",
+    "on",
+    "and",
+    "or",
+    "not",
+    "insert",
+    "into",
+    "values",
+    "update",
+    "set",
+    "delete",
+    "create",
+    "table",
+    "alter",
+    "drop",
+    "group",
+    "by",
+    "order",
+    "limit",
+    "having",
+    "as",
+    "distinct",
+    "count",
+    "sum",
+    "avg",
+    "min",
+    "max",
+    "true",
+    "false",
+    "null",
+  ],
+  json: ["true", "false", "null"],
+};
+const CODE_BUILTINS_BY_LANGUAGE: Record<string, string[]> = {
+  javascript: ["console", "Promise", "Array", "Object", "JSON", "Math", "Date"],
+  python: ["print", "len", "range", "str", "int", "float", "dict", "list"],
+  bash: ["sudo", "npm", "node", "npx", "git", "curl", "wget", "docker"],
+  sql: [],
+  json: [],
+};
 const BIBLE_LOADING_VERSES = [
   "Tudo posso naquele que me fortalece. (Filipenses 4:13)",
   "O Senhor e o meu pastor; nada me faltara. (Salmos 23:1)",
@@ -168,6 +350,461 @@ function formatCreatedAt(value: string): string {
   }).format(parsedDate);
 }
 
+function truncateText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return `${value.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function getChatSessionTitle(messages: ChatMessage[]): string {
+  const userMessages = messages
+    .filter((message) => message.role === "user" && message.content.trim().length > 0)
+    .slice()
+    .reverse();
+
+  const assistantMessages = messages
+    .filter((message) => message.role === "assistant" && message.content.trim().length > 0)
+    .slice()
+    .reverse();
+
+  const candidates = [...userMessages, ...assistantMessages];
+
+  for (const candidate of candidates) {
+    const withoutCodeBlocks = candidate.content
+      .replace(/```[\s\S]*?```/g, " ")
+      .replace(/`([^`]+)`/g, "$1");
+
+    const textParts = withoutCodeBlocks.split(/\n|[.!?]\s+/g);
+
+    for (const part of textParts) {
+      const normalized = part
+        .replace(/[#>*_~[\]()]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+      if (normalized.length < 8) {
+        continue;
+      }
+
+      const lowerNormalized = normalized.toLowerCase();
+      const isNoise = CHAT_TITLE_NOISE_PREFIXES.some((prefix) =>
+        lowerNormalized.startsWith(prefix)
+      );
+
+      if (isNoise) {
+        continue;
+      }
+
+      return truncateText(normalized, CHAT_SESSION_TITLE_MAX_LENGTH);
+    }
+  }
+
+  return "Novo chat";
+}
+
+function getChatSessionPreview(messages: ChatMessage[]): string {
+  if (messages.length === 0) {
+    return "Sem mensagens ainda";
+  }
+
+  const lastMessage = messages[messages.length - 1];
+  const content = lastMessage.content
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!content) {
+    return lastMessage.role === "user" ? "Mensagem do usuario" : "Resposta do assistente";
+  }
+
+  return truncateText(content, CHAT_SESSION_PREVIEW_MAX_LENGTH);
+}
+
+function createChatSessionId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  return `chat-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function createMessageId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  return `message-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function getOrCreateChatDeviceId(): string {
+  if (typeof window === "undefined") {
+    return createChatSessionId();
+  }
+
+  try {
+    const stored = window.localStorage.getItem(CHAT_DEVICE_ID_STORAGE_KEY);
+    if (stored && stored.trim().length > 0) {
+      return stored.trim();
+    }
+  } catch {
+    // ignore storage issues
+  }
+
+  const nextId = createChatSessionId();
+  try {
+    window.localStorage.setItem(CHAT_DEVICE_ID_STORAGE_KEY, nextId);
+  } catch {
+    // ignore storage issues
+  }
+
+  return nextId;
+}
+
+async function fetchChatSessionsFromDb(deviceId: string): Promise<ChatSession[]> {
+  const response = await fetch(`/api/chatgpt/chats?deviceId=${encodeURIComponent(deviceId)}`, {
+    method: "GET",
+    cache: "no-store",
+  });
+
+  const payload = (await response.json()) as {
+    sessions?: unknown;
+    error?: string;
+  };
+
+  if (!response.ok) {
+    throw new Error(payload.error ?? "Falha ao carregar chats salvos.");
+  }
+
+  return normalizeStoredChatSessions(payload.sessions);
+}
+
+async function createChatSessionOnDb(deviceId: string): Promise<ChatSession> {
+  const response = await fetch("/api/chatgpt/chats", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ deviceId }),
+  });
+
+  const payload = (await response.json()) as {
+    session?: unknown;
+    error?: string;
+  };
+
+  if (!response.ok) {
+    throw new Error(payload.error ?? "Falha ao criar chat.");
+  }
+
+  const normalized = normalizeStoredChatSessions(payload.session ? [payload.session] : []);
+  if (normalized.length === 0) {
+    throw new Error("Falha ao criar chat.");
+  }
+
+  return normalized[0];
+}
+
+async function saveChatSessionOnDb(deviceId: string, session: ChatSession): Promise<void> {
+  const response = await fetch(`/api/chatgpt/chats/${encodeURIComponent(session.id)}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      deviceId,
+      title: session.title,
+      messages: session.messages.map((message) => ({
+        role: message.role,
+        content: message.content,
+        imageUrl: message.imageUrl,
+        imageId: message.imageId,
+      })),
+    }),
+  });
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error ?? "Falha ao salvar chat.");
+  }
+}
+
+async function deleteChatSessionOnDb(deviceId: string, sessionId: string): Promise<void> {
+  const response = await fetch(
+    `/api/chatgpt/chats/${encodeURIComponent(sessionId)}?deviceId=${encodeURIComponent(deviceId)}`,
+    {
+      method: "DELETE",
+    }
+  );
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error ?? "Falha ao excluir chat.");
+  }
+}
+
+function normalizeStoredChatSessions(input: unknown): ChatSession[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+
+  const sessions: ChatSession[] = [];
+
+  for (const item of input) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    const castItem = item as {
+      id?: unknown;
+      title?: unknown;
+      updatedAt?: unknown;
+      messages?: unknown;
+    };
+
+    if (typeof castItem.id !== "string" || castItem.id.trim().length === 0) {
+      continue;
+    }
+
+    const normalizedMessages: ChatMessage[] = [];
+    if (Array.isArray(castItem.messages)) {
+      for (const rawMessage of castItem.messages) {
+        if (!rawMessage || typeof rawMessage !== "object") {
+          continue;
+        }
+
+        const castMessage = rawMessage as {
+          id?: unknown;
+          role?: unknown;
+          content?: unknown;
+          imageUrl?: unknown;
+          imageId?: unknown;
+        };
+
+        if (
+          (castMessage.role !== "user" && castMessage.role !== "assistant") ||
+          typeof castMessage.content !== "string"
+        ) {
+          continue;
+        }
+
+        normalizedMessages.push({
+          id: typeof castMessage.id === "string" && castMessage.id.trim().length > 0
+            ? castMessage.id
+            : createMessageId(),
+          role: castMessage.role,
+          content: castMessage.content,
+          imageUrl: typeof castMessage.imageUrl === "string" ? castMessage.imageUrl : undefined,
+          imageId: typeof castMessage.imageId === "string" ? castMessage.imageId : undefined,
+        });
+      }
+    }
+
+    const normalizedTitle =
+      typeof castItem.title === "string" && castItem.title.trim().length > 0
+        ? truncateText(castItem.title.trim(), CHAT_SESSION_TITLE_MAX_LENGTH)
+        : getChatSessionTitle(normalizedMessages);
+
+    const normalizedUpdatedAt =
+      typeof castItem.updatedAt === "string" && castItem.updatedAt.trim().length > 0
+        ? castItem.updatedAt
+        : new Date().toISOString();
+
+    sessions.push({
+      id: castItem.id,
+      title: normalizedTitle,
+      updatedAt: normalizedUpdatedAt,
+      messages: normalizedMessages,
+    });
+  }
+
+  return sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+function parseMessageContentSegments(content: string): MessageContentSegment[] {
+  const normalized = content.replace(/\r\n/g, "\n");
+  const segments: MessageContentSegment[] = [];
+  const codeBlockRegex = /```([a-zA-Z0-9_-]+)?\n?([\s\S]*?)```/g;
+  let currentIndex = 0;
+  let match: RegExpExecArray | null = codeBlockRegex.exec(normalized);
+
+  while (match) {
+    const [fullMatch, languageMatch, codeMatch] = match;
+    const blockStart = match.index;
+    const blockEnd = blockStart + fullMatch.length;
+
+    if (blockStart > currentIndex) {
+      const textChunk = normalized.slice(currentIndex, blockStart);
+      if (textChunk) {
+        segments.push({
+          type: "text",
+          content: textChunk,
+        });
+      }
+    }
+
+    segments.push({
+      type: "code",
+      content: (codeMatch ?? "").replace(/\n$/, ""),
+      language: languageMatch?.trim() || undefined,
+    });
+
+    currentIndex = blockEnd;
+    match = codeBlockRegex.exec(normalized);
+  }
+
+  if (currentIndex < normalized.length) {
+    segments.push({
+      type: "text",
+      content: normalized.slice(currentIndex),
+    });
+  }
+
+  if (segments.length === 0) {
+    return [{ type: "text", content: normalized }];
+  }
+
+  return segments;
+}
+
+function normalizeCodeLanguage(language?: string): string {
+  const normalized = (language || "").toLowerCase().trim();
+
+  if (["js", "jsx", "ts", "tsx", "typescript", "javascript"].includes(normalized)) {
+    return "javascript";
+  }
+  if (["py", "python"].includes(normalized)) {
+    return "python";
+  }
+  if (["bash", "sh", "shell", "zsh"].includes(normalized)) {
+    return "bash";
+  }
+  if (["sql", "mysql", "postgresql", "postgres"].includes(normalized)) {
+    return "sql";
+  }
+  if (["json", "jsonc"].includes(normalized)) {
+    return "json";
+  }
+
+  return normalized || "text";
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getCodeTokenRegex(language: string): RegExp {
+  const keywords = CODE_KEYWORDS_BY_LANGUAGE[language] ?? [];
+  const keywordsPattern =
+    keywords.length > 0 ? `\\b(?:${keywords.map(escapeRegex).join("|")})\\b` : "";
+  const builtins = CODE_BUILTINS_BY_LANGUAGE[language] ?? [];
+  const builtinsPattern =
+    builtins.length > 0 ? `\\b(?:${builtins.map(escapeRegex).join("|")})\\b` : "";
+  const commentPattern =
+    language === "python" || language === "bash"
+      ? "#.*$"
+      : language === "sql"
+        ? "--.*$"
+        : language === "json"
+          ? ""
+          : "//.*$";
+
+  const pieces = [commentPattern, "\"(?:[^\"\\\\]|\\\\.)*\"", "'(?:[^'\\\\]|\\\\.)*'", "`(?:[^`\\\\]|\\\\.)*`"];
+  if (keywordsPattern) {
+    pieces.push(keywordsPattern);
+  }
+  if (builtinsPattern) {
+    pieces.push(builtinsPattern);
+  }
+  pieces.push("\\b\\d+(?:\\.\\d+)?\\b");
+
+  const pattern = pieces.filter(Boolean).join("|");
+  if (language === "sql") {
+    return new RegExp(pattern, "gi");
+  }
+  return new RegExp(pattern, "g");
+}
+
+function getTokenType(token: string, language: string): CodeTokenType {
+  const lowerToken = token.toLowerCase();
+  const keywordSet = new Set((CODE_KEYWORDS_BY_LANGUAGE[language] ?? []).map((item) => item.toLowerCase()));
+  const builtinSet = new Set((CODE_BUILTINS_BY_LANGUAGE[language] ?? []).map((item) => item.toLowerCase()));
+
+  if (
+    token.startsWith("//") ||
+    token.startsWith("#") ||
+    token.startsWith("--")
+  ) {
+    return "comment";
+  }
+
+  if (
+    (token.startsWith('"') && token.endsWith('"')) ||
+    (token.startsWith("'") && token.endsWith("'")) ||
+    (token.startsWith("`") && token.endsWith("`"))
+  ) {
+    return "string";
+  }
+
+  if (/^\d+(?:\.\d+)?$/.test(token)) {
+    return "number";
+  }
+
+  if (keywordSet.has(lowerToken)) {
+    return "keyword";
+  }
+
+  if (builtinSet.has(lowerToken)) {
+    return "builtin";
+  }
+
+  return "plain";
+}
+
+function tokenizeCodeLine(line: string, language: string): CodeToken[] {
+  const regex = getCodeTokenRegex(language);
+  const tokens: CodeToken[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null = regex.exec(line);
+
+  while (match) {
+    const tokenText = match[0];
+    const index = match.index;
+
+    if (index > lastIndex) {
+      tokens.push({
+        text: line.slice(lastIndex, index),
+        type: "plain",
+      });
+    }
+
+    tokens.push({
+      text: tokenText,
+      type: getTokenType(tokenText, language),
+    });
+
+    lastIndex = index + tokenText.length;
+
+    if (regex.lastIndex <= index) {
+      regex.lastIndex = index + 1;
+    }
+
+    match = regex.exec(line);
+  }
+
+  if (lastIndex < line.length) {
+    tokens.push({
+      text: line.slice(lastIndex),
+      type: "plain",
+    });
+  }
+
+  if (tokens.length === 0) {
+    return [{ text: line, type: "plain" }];
+  }
+
+  return tokens;
+}
+
 const MODE_COPY: Record<
   GenerationMode,
   {
@@ -211,8 +848,6 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const [loading, setLoading] = useState(false);
   const [downloadingImage, setDownloadingImage] = useState(false);
   const [loadingVerse, setLoadingVerse] = useState<string>(() => getRandomBibleVerse());
-  const [chatLoadingActions, setChatLoadingActions] = useState<string[]>([]);
-  const [chatLoadingHasFiles, setChatLoadingHasFiles] = useState(false);
   const [isTopMenuOpen, setIsTopMenuOpen] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>("dark");
   const [error, setError] = useState("");
@@ -222,17 +857,27 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const [generatedHistoryWarning, setGeneratedHistoryWarning] = useState("");
   const [historyLightboxIndex, setHistoryLightboxIndex] = useState<number | null>(null);
   const [previewLightboxImageUrl, setPreviewLightboxImageUrl] = useState<string | null>(null);
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [chatDeviceId, setChatDeviceId] = useState<string>("");
+  const [chatSessionsLoaded, setChatSessionsLoaded] = useState(false);
+  const [isChatStreamActive, setIsChatStreamActive] = useState(false);
+  const [copiedCodeKey, setCopiedCodeKey] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sourceImageInputRef = useRef<HTMLInputElement>(null);
   const chatPromptRef = useRef<HTMLTextAreaElement>(null);
   const imagePromptRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const codeCopyResetTimeoutRef = useRef<number | null>(null);
+  const chatStreamAbortRef = useRef<AbortController | null>(null);
+  const chatSyncTimeoutRef = useRef<number | null>(null);
 
   const canSend =
     (mode === "image"
       ? prompt.trim().length > 0
-      : prompt.trim().length > 0 || selectedFiles.length > 0) && !loading;
+      : Boolean(activeChatId) && (prompt.trim().length > 0 || selectedFiles.length > 0)) && !loading;
+  const canStopChatStream = mode === "chat" && loading && isChatStreamActive;
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -270,6 +915,106 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       // ignore storage issues
     }
   }, [theme]);
+
+  useEffect(() => {
+    return () => {
+      if (codeCopyResetTimeoutRef.current !== null) {
+        window.clearTimeout(codeCopyResetTimeoutRef.current);
+      }
+
+      if (chatStreamAbortRef.current) {
+        chatStreamAbortRef.current.abort();
+        chatStreamAbortRef.current = null;
+      }
+
+      if (chatSyncTimeoutRef.current !== null) {
+        window.clearTimeout(chatSyncTimeoutRef.current);
+        chatSyncTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (mode !== "chat") {
+      return;
+    }
+
+    let active = true;
+    setChatSessionsLoaded(false);
+
+    async function bootstrapChatSessions() {
+      const deviceId = getOrCreateChatDeviceId();
+      if (!active) {
+        return;
+      }
+
+      setChatDeviceId(deviceId);
+
+      try {
+        let sessions = await fetchChatSessionsFromDb(deviceId);
+        if (sessions.length === 0) {
+          const createdSession = await createChatSessionOnDb(deviceId);
+          sessions = [createdSession];
+        }
+
+        if (!active) {
+          return;
+        }
+
+        setChatSessions(sessions);
+        setActiveChatId(sessions[0]?.id ?? null);
+        setMessages(sessions[0]?.messages ?? []);
+      } catch {
+        if (!active) {
+          return;
+        }
+
+        setChatSessions([]);
+        setActiveChatId(null);
+        setMessages([]);
+        setError("Nao foi possivel carregar chats do banco agora.");
+      } finally {
+        if (active) {
+          setChatSessionsLoaded(true);
+        }
+      }
+    }
+
+    void bootstrapChatSessions();
+
+    return () => {
+      active = false;
+    };
+  }, [mode]);
+
+  useEffect(() => {
+    if (mode !== "chat" || !chatSessionsLoaded || !chatDeviceId || !activeChatId) {
+      return;
+    }
+
+    const activeSession = chatSessions.find((session) => session.id === activeChatId);
+    if (!activeSession) {
+      return;
+    }
+
+    if (chatSyncTimeoutRef.current !== null) {
+      window.clearTimeout(chatSyncTimeoutRef.current);
+      chatSyncTimeoutRef.current = null;
+    }
+
+    chatSyncTimeoutRef.current = window.setTimeout(() => {
+      void saveChatSessionOnDb(chatDeviceId, activeSession).catch(() => {
+        setError("Nao foi possivel salvar o chat no banco.");
+      });
+    }, 550);
+
+    return () => {
+      if (chatSyncTimeoutRef.current !== null) {
+        window.clearTimeout(chatSyncTimeoutRef.current);
+        chatSyncTimeoutRef.current = null;
+      }
+    };
+  }, [mode, chatSessions, chatSessionsLoaded, chatDeviceId, activeChatId]);
 
   useEffect(() => {
     if (!isTopMenuOpen) {
@@ -359,6 +1104,10 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       return;
     }
 
+    if (mode === "chat" && !activeChatId) {
+      return;
+    }
+
     const filesToSend = mode === "chat" ? [...selectedFiles] : [];
     const sourceImageToSend = mode === "image" ? sourceImage : null;
     const imageAction = mode === "image" && sourceImageToSend ? "edit" : "generate";
@@ -400,8 +1149,6 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
     if (mode === "chat") {
       setPrompt("");
-      setChatLoadingHasFiles(filesToSend.length > 0);
-      setChatLoadingActions([]);
     }
     setSelectedFiles([]);
     setLoading(true);
@@ -412,10 +1159,24 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       fileInputRef.current.value = "";
     }
 
-    setMessages((current) => [
-      ...current,
-      { role: "user", content: userMessageParts.join("\n\n") },
-    ]);
+    const userMessageId = createMessageId();
+    appendMessageToChat({
+      id: userMessageId,
+      role: "user",
+      content: userMessageParts.join("\n\n"),
+    });
+
+    const pendingAssistantMessageId = mode === "chat" ? createMessageId() : null;
+    let chatStreamHasDelta = false;
+    let chatStreamStoppedByUser = false;
+
+    if (mode === "chat" && pendingAssistantMessageId) {
+      appendMessageToChat({
+        id: pendingAssistantMessageId,
+        role: "assistant",
+        content: "",
+      });
+    }
 
     try {
       const formData = new FormData();
@@ -432,6 +1193,121 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       }
       if (sourceImageToSend) {
         formData.append("sourceImage", sourceImageToSend);
+      }
+
+      if (mode === "chat" && pendingAssistantMessageId) {
+        const streamController = new AbortController();
+        chatStreamAbortRef.current = streamController;
+        setIsChatStreamActive(true);
+
+        let streamWarnings: string[] = [];
+        let streamFilesUsed: string[] = [];
+
+        try {
+          const response = await fetch("/api/chatgpt?stream=1", {
+            method: "POST",
+            body: formData,
+            signal: streamController.signal,
+          });
+
+          if (!response.ok) {
+            const errorPayload = (await response.json().catch(() => null)) as {
+              error?: string;
+            } | null;
+            throw new Error(errorPayload?.error ?? "Falha ao gerar resposta.");
+          }
+
+          if (!response.body) {
+            throw new Error("A resposta de streaming veio vazia.");
+          }
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+
+          const processChunkLine = (line: string) => {
+            const trimmed = line.trim();
+            if (!trimmed) {
+              return;
+            }
+
+            const chunk = JSON.parse(trimmed) as ChatStreamChunk;
+            if (chunk.type === "delta" && typeof chunk.delta === "string" && chunk.delta.length > 0) {
+              chatStreamHasDelta = true;
+              updateMessageContentById(pendingAssistantMessageId, (currentContent) => `${currentContent}${chunk.delta}`);
+              return;
+            }
+
+            if (chunk.type === "meta") {
+              streamWarnings = Array.isArray(chunk.warnings) ? chunk.warnings : [];
+              streamFilesUsed = Array.isArray(chunk.filesUsed) ? chunk.filesUsed : [];
+              return;
+            }
+
+            if (chunk.type === "error") {
+              throw new Error(chunk.error || "Erro no streaming da resposta.");
+            }
+          };
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+              break;
+            }
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() ?? "";
+
+            for (const line of lines) {
+              processChunkLine(line);
+            }
+          }
+
+          buffer += decoder.decode();
+          if (buffer.trim().length > 0) {
+            const lines = buffer.split("\n");
+            for (const line of lines) {
+              processChunkLine(line);
+            }
+          }
+
+          setWarnings(streamWarnings);
+          if (streamFilesUsed.length > 0) {
+            appendMessageToChat({
+              id: createMessageId(),
+              role: "assistant",
+              content: `Arquivos usados no contexto: ${streamFilesUsed.join(", ")}`,
+            });
+          }
+
+          if (!chatStreamHasDelta) {
+            throw new Error("A API retornou resposta vazia.");
+          }
+        } catch (streamError) {
+          if (
+            streamError instanceof DOMException &&
+            streamError.name === "AbortError"
+          ) {
+            chatStreamStoppedByUser = true;
+            if (!chatStreamHasDelta) {
+              removeMessageById(pendingAssistantMessageId);
+            }
+          } else {
+            throw streamError;
+          }
+        } finally {
+          setIsChatStreamActive(false);
+          if (chatStreamAbortRef.current === streamController) {
+            chatStreamAbortRef.current = null;
+          }
+        }
+
+        if (chatStreamStoppedByUser) {
+          return;
+        }
+
+        return;
       }
 
       const response = await fetch("/api/chatgpt", {
@@ -476,15 +1352,13 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
         answerParts.push(`Prompt revisado: ${revisedPrompt}`);
       }
 
-      setMessages((current) => [
-        ...current,
-        {
-          role: "assistant",
-          content: answerParts.join("\n\n"),
-          imageUrl: hasImage ? data.imageUrl : undefined,
-          imageId: hasImage ? storedImageId : undefined,
-        },
-      ]);
+      appendMessageToChat({
+        id: createMessageId(),
+        role: "assistant",
+        content: answerParts.join("\n\n"),
+        imageUrl: hasImage ? data.imageUrl : undefined,
+        imageId: hasImage ? storedImageId : undefined,
+      });
 
       if (mode === "image" && hasImage && storedImageId) {
         setGeneratedHistory((current) => {
@@ -510,26 +1384,37 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       }
 
       if (mode === "chat" && usedFiles.length > 0) {
-        setMessages((current) => [
-          ...current,
-          {
-            role: "assistant",
-            content: `Arquivos usados no contexto: ${usedFiles.join(", ")}`,
-          },
-        ]);
+        appendMessageToChat({
+          id: createMessageId(),
+          role: "assistant",
+          content: `Arquivos usados no contexto: ${usedFiles.join(", ")}`,
+        });
       }
     } catch (submitError) {
       const message =
         submitError instanceof Error ? submitError.message : "Erro inesperado na requisicao.";
 
       setError(message);
-      setMessages((current) => [
-        ...current,
-        {
+      if (mode === "chat" && pendingAssistantMessageId) {
+        if (chatStreamHasDelta) {
+          updateMessageContentById(
+            pendingAssistantMessageId,
+            (currentContent) =>
+              `${currentContent}\n\n[Falha ao continuar a resposta. Tente novamente.]`
+          );
+        } else {
+          updateMessageContentById(
+            pendingAssistantMessageId,
+            () => "Nao consegui processar agora. Confira OPENAI_API_KEY e tente novamente."
+          );
+        }
+      } else {
+        appendMessageToChat({
+          id: createMessageId(),
           role: "assistant",
           content: "Nao consegui processar agora. Confira OPENAI_API_KEY e tente novamente.",
-        },
-      ]);
+        });
+      }
     } finally {
       setLoading(false);
     }
@@ -649,39 +1534,6 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
     return () => window.clearInterval(intervalId);
   }, [mode, loading]);
-
-  useEffect(() => {
-    if (mode !== "chat") {
-      return;
-    }
-
-    if (!loading) {
-      setChatLoadingActions([]);
-      return;
-    }
-
-    const steps = chatLoadingHasFiles ? CHAT_LOADING_STEPS_WITH_FILES : CHAT_LOADING_STEPS;
-    let stepIndex = 0;
-    setChatLoadingActions([steps[0]]);
-
-    const intervalId = window.setInterval(() => {
-      stepIndex += 1;
-      if (stepIndex >= steps.length) {
-        window.clearInterval(intervalId);
-        return;
-      }
-
-      setChatLoadingActions((current) => {
-        const nextStep = steps[stepIndex];
-        if (current[current.length - 1] === nextStep) {
-          return current;
-        }
-        return [...current, nextStep];
-      });
-    }, 1400);
-
-    return () => window.clearInterval(intervalId);
-  }, [mode, loading, chatLoadingHasFiles]);
 
   useEffect(() => {
     if (historyLightboxIndex === null && !previewLightboxImageUrl) {
@@ -809,6 +1661,328 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
   function closePreviewLightbox() {
     setPreviewLightboxImageUrl(null);
+  }
+
+  function syncActiveChatSession(nextMessages: ChatMessage[]) {
+    if (mode !== "chat" || !activeChatId) {
+      return;
+    }
+
+    const updatedAt = new Date().toISOString();
+    const nextTitle = getChatSessionTitle(nextMessages);
+
+    setChatSessions((current) => {
+      const activeSession = current.find((session) => session.id === activeChatId);
+      const updatedSession: ChatSession = {
+        id: activeChatId,
+        title: nextTitle || activeSession?.title || "Novo chat",
+        updatedAt,
+        messages: nextMessages,
+      };
+
+      return [updatedSession, ...current.filter((session) => session.id !== activeChatId)];
+    });
+  }
+
+  function setMessagesAndSync(updater: (current: ChatMessage[]) => ChatMessage[]) {
+    setMessages((current) => {
+      const next = updater(current);
+      syncActiveChatSession(next);
+      return next;
+    });
+  }
+
+  function appendMessageToChat(message: ChatMessage) {
+    setMessagesAndSync((current) => [...current, message]);
+  }
+
+  function updateMessageContentById(messageId: string, updater: (currentContent: string) => string) {
+    setMessagesAndSync((current) =>
+      current.map((message) =>
+        message.id === messageId ? { ...message, content: updater(message.content) } : message
+      )
+    );
+  }
+
+  function removeMessageById(messageId: string) {
+    setMessagesAndSync((current) => current.filter((message) => message.id !== messageId));
+  }
+
+  function handleStopChatStream() {
+    if (chatStreamAbortRef.current) {
+      chatStreamAbortRef.current.abort();
+      chatStreamAbortRef.current = null;
+    }
+  }
+
+  function handleSelectChat(sessionId: string) {
+    if (loading) {
+      return;
+    }
+
+    const selectedSession = chatSessions.find((session) => session.id === sessionId);
+    if (!selectedSession) {
+      return;
+    }
+
+    setActiveChatId(selectedSession.id);
+    setMessages(selectedSession.messages);
+    setPrompt("");
+    setSelectedFiles([]);
+    setError("");
+    setWarnings([]);
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }
+
+  async function handleCreateNewChat() {
+    if (loading) {
+      return;
+    }
+
+    if (!chatDeviceId) {
+      return;
+    }
+
+    try {
+      const session = await createChatSessionOnDb(chatDeviceId);
+      setChatSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
+      setActiveChatId(session.id);
+      setMessages(session.messages);
+      setPrompt("");
+      setSelectedFiles([]);
+      setError("");
+      setWarnings([]);
+
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    } catch {
+      setError("Nao foi possivel criar um novo chat agora.");
+    }
+  }
+
+  async function handleDeleteChat(sessionId: string) {
+    if (loading) {
+      return;
+    }
+
+    if (!chatDeviceId) {
+      return;
+    }
+
+    const targetSession = chatSessions.find((session) => session.id === sessionId);
+    if (!targetSession) {
+      return;
+    }
+
+    const shouldDelete = window.confirm(`Excluir o chat "${targetSession.title}"?`);
+    if (!shouldDelete) {
+      return;
+    }
+
+    try {
+      await deleteChatSessionOnDb(chatDeviceId, sessionId);
+
+      const remaining = chatSessions.filter((session) => session.id !== sessionId);
+      setChatSessions(remaining);
+
+      if (remaining.length === 0) {
+        await handleCreateNewChat();
+      } else if (sessionId === activeChatId) {
+        setActiveChatId(remaining[0].id);
+        setMessages(remaining[0].messages);
+      }
+
+      setPrompt("");
+      setSelectedFiles([]);
+      setError("");
+      setWarnings([]);
+
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    } catch {
+      setError("Nao foi possivel excluir o chat agora.");
+    }
+  }
+
+  async function handleCopyCode(code: string, codeKey: string) {
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(code);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = code;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "fixed";
+        textarea.style.left = "-9999px";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        const copied = document.execCommand("copy");
+        textarea.remove();
+
+        if (!copied) {
+          throw new Error("copy_failed");
+        }
+      }
+
+      setCopiedCodeKey(codeKey);
+
+      if (codeCopyResetTimeoutRef.current !== null) {
+        window.clearTimeout(codeCopyResetTimeoutRef.current);
+      }
+
+      codeCopyResetTimeoutRef.current = window.setTimeout(() => {
+        setCopiedCodeKey((current) => (current === codeKey ? null : current));
+      }, 1600);
+    } catch {
+      setError("Nao foi possivel copiar o codigo.");
+    }
+  }
+
+  function renderInlineCode(text: string, keyPrefix: string) {
+    const inlineCodeParts = text.split(/`([^`]+)`/g);
+
+    return inlineCodeParts.map((part, index) => {
+      if (index % 2 === 1) {
+        return (
+          <code
+            key={`${keyPrefix}-inline-${index}`}
+            className={`rounded px-1.5 py-0.5 font-mono text-[0.92em] ${
+              isLight ? "bg-slate-200 text-slate-800" : "bg-black/35 text-purple-100"
+            }`}
+          >
+            {part}
+          </code>
+        );
+      }
+
+      return <span key={`${keyPrefix}-text-${index}`}>{part}</span>;
+    });
+  }
+
+  function getCodeTokenClass(type: CodeTokenType): string {
+    if (isLight) {
+      if (type === "keyword") {
+        return "text-violet-300";
+      }
+      if (type === "string") {
+        return "text-emerald-300";
+      }
+      if (type === "comment") {
+        return "text-slate-400 italic";
+      }
+      if (type === "number") {
+        return "text-amber-300";
+      }
+      if (type === "builtin") {
+        return "text-sky-300";
+      }
+      return "text-slate-100";
+    }
+
+    if (type === "keyword") {
+      return "text-purple-200";
+    }
+    if (type === "string") {
+      return "text-emerald-200";
+    }
+    if (type === "comment") {
+      return "text-gray-400 italic";
+    }
+    if (type === "number") {
+      return "text-amber-200";
+    }
+    if (type === "builtin") {
+      return "text-cyan-200";
+    }
+    return "text-gray-100";
+  }
+
+  function renderHighlightedCode(content: string, language?: string, keyPrefix?: string) {
+    const normalizedLanguage = normalizeCodeLanguage(language);
+    const lines = content.split("\n");
+    const nodes: Array<JSX.Element | string> = [];
+
+    lines.forEach((line, lineIndex) => {
+      const tokens = tokenizeCodeLine(line, normalizedLanguage);
+      tokens.forEach((token, tokenIndex) => {
+        nodes.push(
+          <span
+            key={`${keyPrefix || "code"}-line-${lineIndex}-token-${tokenIndex}`}
+            className={getCodeTokenClass(token.type)}
+          >
+            {token.text}
+          </span>
+        );
+      });
+
+      if (lineIndex < lines.length - 1) {
+        nodes.push("\n");
+      }
+    });
+
+    return nodes;
+  }
+
+  function renderMessageContent(content: string, keyPrefix: string) {
+    const segments = parseMessageContentSegments(content);
+
+    return segments.map((segment, index) => {
+      if (segment.type === "code") {
+        const blockKey = `${keyPrefix}-code-${index}`;
+        const isCodeCopied = copiedCodeKey === blockKey;
+
+        return (
+          <div
+            key={blockKey}
+            className={`overflow-hidden rounded-xl border ${
+              isLight ? "border-slate-300 bg-slate-950 text-slate-100" : "border-gray-600 bg-black/55 text-gray-100"
+            }`}
+          >
+            <div
+              className={`flex items-center justify-between gap-2 border-b px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                isLight ? "border-slate-700/60 text-slate-300" : "border-gray-700 text-gray-300"
+              }`}
+            >
+              <span>{segment.language || "code"}</span>
+              <button
+                type="button"
+                onClick={() => {
+                  void handleCopyCode(segment.content, blockKey);
+                }}
+                className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-semibold normal-case tracking-normal transition ${
+                  isLight
+                    ? "border-slate-600/70 bg-slate-800/80 text-slate-100 hover:bg-slate-700"
+                    : "border-gray-600 bg-gray-900/80 text-gray-100 hover:bg-gray-800"
+                }`}
+                aria-label={isCodeCopied ? "Codigo copiado" : "Copiar codigo"}
+                title={isCodeCopied ? "Codigo copiado" : "Copiar codigo"}
+              >
+                {isCodeCopied ? <MdDone className="h-3.5 w-3.5" /> : <MdContentCopy className="h-3.5 w-3.5" />}
+                {isCodeCopied ? "Copiado" : "Copiar"}
+              </button>
+            </div>
+            <pre className="overflow-x-auto px-3 py-3 text-[13px] leading-relaxed">
+              <code className="font-mono">
+                {renderHighlightedCode(segment.content, segment.language, blockKey)}
+              </code>
+            </pre>
+          </div>
+        );
+      }
+
+      return (
+        <p key={`${keyPrefix}-paragraph-${index}`} className="whitespace-pre-wrap">
+          {renderInlineCode(segment.content, `${keyPrefix}-segment-${index}`)}
+        </p>
+      );
+    });
   }
 
   function goToPreviousHistoryImage() {
@@ -945,13 +2119,6 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                 <MdArrowBack className="h-4 w-4" />
                 Escolher modo
               </Link>
-            </div>
-
-            <div
-              className={`mt-auto border-t p-4 ${
-                isLight ? "border-slate-200 bg-slate-50" : "border-gray-700 bg-gray-900/70"
-              }`}
-            >
               <button
                 type="button"
                 onClick={() => {
@@ -959,11 +2126,11 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                   setIsTopMenuOpen(false);
                 }}
                 className={topMenuActionButtonClass}
-              >
-                <span
-                  className={`relative inline-flex h-5 w-10 rounded-full transition ${
-                    isLight ? "bg-violet-500" : "bg-gray-600"
-                  }`}
+                >
+                  <span
+                    className={`relative inline-flex h-5 w-10 rounded-full transition ${
+                      isLight ? "bg-violet-500" : "bg-gray-600"
+                    }`}
                 >
                   <span
                     className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition ${
@@ -1551,7 +2718,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   return (
     <main className={mainClass}>
       {topActionMenu}
-      <section className="mx-auto flex h-dvh min-h-dvh w-full max-w-6xl flex-col px-0 pt-0 pb-0 sm:h-screen sm:min-h-screen sm:px-5 sm:pt-3 sm:pb-6 lg:px-8 lg:pt-8 lg:pb-8">
+      <section className="flex h-dvh min-h-dvh w-full flex-col px-0 pt-0 pb-0 sm:h-screen sm:min-h-screen">
         <header className={chatHeaderClass}>
           <div
             className={`absolute -top-16 -right-10 h-44 w-44 rounded-full blur-3xl ${
@@ -1570,13 +2737,117 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
           </div>
         </header>
 
-        <div
-          className={`mt-0 flex min-h-0 flex-1 flex-col overflow-hidden rounded-none sm:mt-4 sm:rounded-2xl ${
-            isLight ? "border border-slate-200 bg-slate-50 shadow-sm" : "border border-gray-700/80 bg-gray-800 shadow"
-          }`}
-        >
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 sm:py-6">
-            <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
+        <div className="mt-0 flex min-h-0 flex-1 flex-col gap-4 sm:mt-4 lg:grid lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-4">
+          <aside
+            className={`hidden min-h-0 lg:flex lg:flex-col lg:overflow-hidden lg:rounded-2xl ${
+              isLight
+                ? "border border-slate-200 bg-white shadow-sm"
+                : "border border-gray-700/80 bg-gray-900/70"
+            }`}
+          >
+            <div className={`border-b px-3 py-3 ${isLight ? "border-slate-200" : "border-gray-700"}`}>
+              <button
+                type="button"
+                onClick={handleCreateNewChat}
+                disabled={loading}
+                className={`inline-flex w-full items-center justify-center rounded-xl px-3 py-2 text-sm font-semibold transition disabled:cursor-not-allowed ${
+                  isLight
+                    ? "border border-violet-300 bg-violet-500 text-white hover:bg-violet-600 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
+                    : "border border-purple-400/45 bg-purple-500/25 text-purple-100 hover:bg-purple-500/35 disabled:border-gray-600 disabled:bg-gray-700 disabled:text-gray-400"
+                }`}
+              >
+                + Novo chat
+              </button>
+            </div>
+
+            <div
+              className={`min-h-0 flex-1 space-y-2 overflow-y-auto px-2 py-3 chat-scrollbar ${
+                isLight ? "chat-scrollbar-light" : "chat-scrollbar-dark"
+              }`}
+            >
+              {chatSessionsLoaded ? (
+                chatSessions.map((session) => {
+                  const isActive = session.id === activeChatId;
+
+                  return (
+                    <article
+                      key={session.id}
+                      className={`w-full rounded-xl border px-3 py-2 text-left transition disabled:cursor-not-allowed ${
+                        isActive
+                          ? isLight
+                            ? "border-violet-300 bg-violet-50 text-violet-900"
+                            : "border-purple-300/60 bg-purple-500/15 text-purple-100"
+                          : isLight
+                            ? "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+                            : "border-gray-700 bg-gray-900/70 text-gray-200 hover:border-gray-600 hover:bg-gray-800"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleSelectChat(session.id)}
+                          disabled={loading}
+                          className="min-w-0 flex-1 text-left"
+                          aria-label={`Abrir chat ${session.title}`}
+                        >
+                          <p className="truncate text-sm font-semibold">{session.title}</p>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteChat(session.id)}
+                          disabled={loading}
+                          className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${
+                            isLight
+                              ? "text-slate-500 hover:bg-slate-200 hover:text-slate-700"
+                              : "text-gray-400 hover:bg-gray-800 hover:text-gray-200"
+                          }`}
+                          aria-label={`Excluir chat ${session.title}`}
+                          title="Excluir chat"
+                        >
+                          <MdDeleteOutline className="h-4 w-4" />
+                        </button>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleSelectChat(session.id)}
+                        disabled={loading}
+                        className="mt-1 w-full text-left"
+                        aria-label={`Abrir chat ${session.title}`}
+                      >
+                        <p className={`truncate text-xs ${isLight ? "text-slate-500" : "text-gray-400"}`}>
+                          {getChatSessionPreview(session.messages)}
+                        </p>
+                        <p className={`mt-1 text-[10px] ${isLight ? "text-slate-400" : "text-gray-500"}`}>
+                          {formatCreatedAt(session.updatedAt)}
+                        </p>
+                      </button>
+                    </article>
+                  );
+                })
+              ) : (
+                <p className={`px-2 text-xs ${isLight ? "text-slate-500" : "text-gray-400"}`}>
+                  Carregando chats...
+                </p>
+              )}
+            </div>
+
+          </aside>
+
+          <div
+            className={`mt-0 flex min-h-0 flex-1 flex-col overflow-hidden rounded-none sm:rounded-2xl ${
+              isLight
+                ? "border border-slate-200 bg-slate-50 shadow-sm"
+                : "border border-gray-700/80 bg-gray-800 shadow"
+            }`}
+          >
+          <div
+            className={`min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 sm:py-6 chat-scrollbar ${
+              isLight ? "chat-scrollbar-light" : "chat-scrollbar-dark"
+            }`}
+          >
+            <div className="flex w-full flex-col gap-4">
               {messages.length === 0 ? (
                 <section className="flex min-h-full flex-1 items-center justify-center">
                   <div className="flex max-w-md flex-col items-center justify-center text-center">
@@ -1598,7 +2869,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
               {messages.map((message, index) => (
                 <article
-                  key={`${message.role}-${index}`}
+                  key={message.id ?? `${message.role}-${index}`}
                   className={`max-w-[92%] rounded-2xl px-4 py-3 text-base leading-relaxed shadow-lg sm:max-w-[80%] ${
                     message.role === "user"
                       ? isLight
@@ -1612,7 +2883,9 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                   <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] opacity-80">
                     {message.role === "user" ? "Voce" : "Assistente"}
                   </p>
-                  <p className="whitespace-pre-wrap">{message.content}</p>
+                  <div className="space-y-2">
+                    {renderMessageContent(message.content, `message-${index}`)}
+                  </div>
                   {message.imageUrl ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
@@ -1632,16 +2905,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                       : "border border-purple-400/40 bg-purple-500/15 text-purple-100"
                   }`}
                 >
-                  <p className="font-medium">
-                    {chatLoadingActions[chatLoadingActions.length - 1] ?? "Gerando resposta..."}
-                  </p>
-                  {chatLoadingActions.length > 1 ? (
-                    <div className="mt-2 space-y-1 text-xs opacity-90">
-                      {chatLoadingActions.slice(-3).map((action, index) => (
-                        <p key={`${action}-${index}`}>• {action}</p>
-                      ))}
-                    </div>
-                  ) : null}
+                  <p className="font-medium">Gerando resposta...</p>
                 </article>
               ) : null}
 
@@ -1718,7 +2982,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                 onClick={() => fileInputRef.current?.click()}
                 disabled={loading}
                 aria-label="Anexar arquivos"
-                className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-xl font-semibold transition disabled:cursor-not-allowed ${
+                className={`inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-xl font-semibold transition disabled:cursor-not-allowed ${
                   isLight
                     ? "border border-violet-300/60 bg-violet-50 text-violet-700 hover:bg-violet-100 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
                     : "border border-purple-400/45 bg-purple-500/15 text-purple-100 hover:bg-purple-500/25 disabled:border-gray-600 disabled:bg-gray-700 disabled:text-gray-400"
@@ -1751,21 +3015,23 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
               />
 
               <button
-                type="submit"
-                disabled={!canSend}
-                aria-label={loading ? "Aguarde" : "Enviar mensagem"}
-                className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition disabled:cursor-not-allowed ${
+                type={canStopChatStream ? "button" : "submit"}
+                onClick={canStopChatStream ? handleStopChatStream : undefined}
+                disabled={canStopChatStream ? false : !canSend}
+                aria-label={canStopChatStream ? "Parar geracao" : loading ? "Aguarde" : "Enviar mensagem"}
+                className={`inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-xl transition disabled:cursor-not-allowed ${
                   isLight
                     ? "border border-violet-400/45 bg-violet-500 text-white hover:bg-violet-600 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
                     : "border border-purple-400/45 bg-purple-500/25 text-purple-100 hover:bg-purple-500/35 disabled:border-gray-600 disabled:bg-gray-700 disabled:text-gray-400"
                 }`}
               >
-                <MdArrowUpward className="h-5 w-5" />
+                {canStopChatStream ? <MdStop className="h-5 w-5" /> : <MdArrowUpward className="h-5 w-5" />}
               </button>
             </div>
 
             {copy.hint ? <p className={`mt-2 ${mutedTextClass}`}>{copy.hint}</p> : null}
           </form>
+        </div>
         </div>
       </section>
     </main>

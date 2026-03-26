@@ -93,6 +93,24 @@ type OpenAIOutputItem = {
   content?: OpenAIOutputContent[];
 };
 
+type ChatStreamChunk =
+  | {
+      type: "meta";
+      warnings: string[];
+      filesUsed: string[];
+    }
+  | {
+      type: "delta";
+      delta: string;
+    }
+  | {
+      type: "done";
+    }
+  | {
+      type: "error";
+      error: string;
+    };
+
 type ResolvedGeneratedImage = {
   bytes: Uint8Array;
   contentType: string;
@@ -573,6 +591,13 @@ function buildInput(prompt: string, fileSections: string[], chatHistory: ChatHis
       : "Analise os arquivos anexados e responda em portugues de forma objetiva."
   );
 
+  sections.push(
+    "",
+    "Formato obrigatorio da resposta:",
+    "- Quando houver codigo, use bloco Markdown com crases triplas e linguagem (ex: ```bash).",
+    "- Para comandos curtos no meio do texto, use `inline code`."
+  );
+
   return sections.join("\n");
 }
 
@@ -601,6 +626,33 @@ function extractOutputText(output: unknown): string {
   }
 
   return parts.join("\n").trim();
+}
+
+function extractOutputTextDeltaFromStreamEvent(eventPayload: unknown): string {
+  if (!eventPayload || typeof eventPayload !== "object") {
+    return "";
+  }
+
+  const event = eventPayload as {
+    type?: unknown;
+    delta?: unknown;
+    text?: unknown;
+  };
+  const eventType = typeof event.type === "string" ? event.type : "";
+
+  if (
+    eventType.includes("output_text") &&
+    eventType.endsWith(".delta") &&
+    typeof event.delta === "string"
+  ) {
+    return event.delta;
+  }
+
+  if (eventType === "response.output_text.delta" && typeof event.text === "string") {
+    return event.text;
+  }
+
+  return "";
 }
 
 export async function POST(request: NextRequest) {
@@ -638,6 +690,7 @@ export async function POST(request: NextRequest) {
       ...authHeaders,
       "Content-Type": "application/json",
     };
+    const streamRequested = request.nextUrl.searchParams.get("stream") === "1";
 
     const { prompt, model, mode, imageSize, imageAction, sourceImage, files, chatHistory } =
       parsedRequest;
@@ -797,6 +850,149 @@ export async function POST(request: NextRequest) {
 
     const input = buildInput(prompt, preparedFiles.sections, chatHistory);
 
+    if (streamRequested) {
+      const streamResponse = await fetch(OPENAI_RESPONSES_API_URL, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          model,
+          input,
+          stream: true,
+        }),
+        signal: request.signal,
+      });
+
+      if (!streamResponse.ok) {
+        const streamErrorPayload = (await streamResponse.json()) as {
+          error?: { message?: string };
+        };
+
+        return NextResponse.json(
+          {
+            error: streamErrorPayload.error?.message ?? "Falha ao chamar a API da OpenAI.",
+          },
+          { status: streamResponse.status }
+        );
+      }
+
+      if (!streamResponse.body) {
+        return NextResponse.json(
+          { error: "A API de streaming retornou corpo vazio." },
+          { status: 502 }
+        );
+      }
+
+      const encoder = new TextEncoder();
+      const decoder = new TextDecoder();
+      const upstreamReader = streamResponse.body.getReader();
+
+      const stream = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          const emit = (chunk: ChatStreamChunk) => {
+            controller.enqueue(encoder.encode(`${JSON.stringify(chunk)}\n`));
+          };
+
+          try {
+            emit({
+              type: "meta",
+              warnings: preparedFiles.warnings,
+              filesUsed: preparedFiles.names,
+            });
+
+            let buffer = "";
+            while (true) {
+              const { done, value } = await upstreamReader.read();
+              if (done) {
+                break;
+              }
+
+              buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+
+              while (true) {
+                const eventBoundary = buffer.indexOf("\n\n");
+                if (eventBoundary < 0) {
+                  break;
+                }
+
+                const rawEvent = buffer.slice(0, eventBoundary);
+                buffer = buffer.slice(eventBoundary + 2);
+
+                const dataPayload = rawEvent
+                  .split("\n")
+                  .filter((line) => line.startsWith("data:"))
+                  .map((line) => line.slice(5).trimStart())
+                  .join("\n");
+
+                if (!dataPayload) {
+                  continue;
+                }
+
+                if (dataPayload === "[DONE]") {
+                  emit({ type: "done" });
+                  controller.close();
+                  return;
+                }
+
+                try {
+                  const parsedEvent = JSON.parse(dataPayload) as unknown;
+                  const delta = extractOutputTextDeltaFromStreamEvent(parsedEvent);
+                  if (delta) {
+                    emit({ type: "delta", delta });
+                  }
+                } catch {
+                  // Ignora eventos nao-JSON ou sem delta textual.
+                }
+              }
+            }
+
+            const remainingPayload = buffer.trim();
+            if (remainingPayload) {
+              const remainingDataPayload = remainingPayload
+                .split("\n")
+                .filter((line) => line.startsWith("data:"))
+                .map((line) => line.slice(5).trimStart())
+                .join("\n");
+
+              if (remainingDataPayload && remainingDataPayload !== "[DONE]") {
+                try {
+                  const parsedEvent = JSON.parse(remainingDataPayload) as unknown;
+                  const delta = extractOutputTextDeltaFromStreamEvent(parsedEvent);
+                  if (delta) {
+                    emit({ type: "delta", delta });
+                  }
+                } catch {
+                  // Ignora payload final invalido.
+                }
+              }
+            }
+
+            emit({ type: "done" });
+            controller.close();
+          } catch (streamError) {
+            emit({
+              type: "error",
+              error:
+                streamError instanceof Error
+                  ? streamError.message
+                  : "Erro ao transmitir resposta em streaming.",
+            });
+            controller.close();
+          } finally {
+            upstreamReader.releaseLock();
+          }
+        },
+      });
+
+      return new Response(stream, {
+        status: 200,
+        headers: {
+          "Content-Type": "application/x-ndjson; charset=utf-8",
+          "Cache-Control": "no-cache, no-transform",
+          Connection: "keep-alive",
+        },
+      });
+    }
+
     const textResponse = await fetch(OPENAI_RESPONSES_API_URL, {
       method: "POST",
       headers: jsonHeaders,
@@ -804,6 +1000,7 @@ export async function POST(request: NextRequest) {
         model,
         input,
       }),
+      signal: request.signal,
     });
 
     const textResult = (await textResponse.json()) as {
