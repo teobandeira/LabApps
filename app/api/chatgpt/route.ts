@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { put } from "@vercel/blob";
 import sharp from "sharp";
+import pdfParse from "pdf-parse/lib/pdf-parse.js";
+import { read, utils } from "xlsx";
 
 import { prisma } from "@/lib/prisma";
 
@@ -17,39 +19,18 @@ const MAX_SOURCE_IMAGE_SIZE_BYTES = 50 * 1024 * 1024;
 const SUPPORTED_SOURCE_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
 
 const MAX_FILES = 5;
-const MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024;
+const MAX_DEFAULT_FILE_SIZE_BYTES = 2 * 1024 * 1024;
+const MAX_PDF_FILE_SIZE_BYTES = 20 * 1024 * 1024;
 const MAX_FILE_TEXT_CHARS = 30_000;
 const MAX_TOTAL_FILE_TEXT_CHARS = 90_000;
 const MAX_CHAT_HISTORY_MESSAGES = 20;
 const MAX_CHAT_HISTORY_MESSAGE_CHARS = 4_000;
 const MAX_CHAT_HISTORY_TOTAL_CHARS = 24_000;
-
-const SUPPORTED_FILE_EXTENSIONS = new Set([
-  ".txt",
-  ".md",
-  ".csv",
-  ".json",
-  ".xml",
-  ".yml",
-  ".yaml",
-  ".log",
-  ".js",
-  ".jsx",
-  ".ts",
-  ".tsx",
-  ".py",
-  ".java",
-  ".c",
-  ".cpp",
-  ".h",
-  ".hpp",
-  ".go",
-  ".rs",
-  ".sql",
-  ".html",
-  ".css",
-  ".scss",
-]);
+const MAX_TABLE_PREVIEW_SHEETS = 3;
+const MAX_TABLE_PREVIEW_ROWS = 12;
+const MAX_TABLE_PREVIEW_COLUMNS = 12;
+const EXCEL_FILE_EXTENSIONS = new Set([".xls", ".xlsx", ".xlsm", ".xlsb", ".ods"]);
+const PDF_FILE_EXTENSIONS = new Set([".pdf"]);
 
 type GenerationMode = "chat" | "image";
 type ImageAction = "generate" | "edit";
@@ -78,10 +59,21 @@ type ParsedRequest = {
   chatHistory: ChatHistoryMessage[];
 };
 
+type PreparedTable = {
+  fileName: string;
+  sheetName: string;
+  headers: string[];
+  rows: string[][];
+  rowCount: number;
+  rowsTruncated: boolean;
+  columnsTruncated: boolean;
+};
+
 type PreparedFiles = {
   names: string[];
   sections: string[];
   warnings: string[];
+  tables: PreparedTable[];
 };
 
 type OpenAIOutputContent = {
@@ -98,6 +90,7 @@ type ChatStreamChunk =
       type: "meta";
       warnings: string[];
       filesUsed: string[];
+      tables?: PreparedTable[];
     }
   | {
       type: "delta";
@@ -353,19 +346,183 @@ function getFileExtension(filename: string): string {
   return lastDot === -1 ? "" : lower.slice(lastDot);
 }
 
-function isSupportedTextFile(file: File): boolean {
+function getMaxFileSizeBytes(file: File): number {
   const extension = getFileExtension(file.name);
-  if (SUPPORTED_FILE_EXTENSIONS.has(extension)) {
-    return true;
+  if (PDF_FILE_EXTENSIONS.has(extension)) {
+    return MAX_PDF_FILE_SIZE_BYTES;
+  }
+  return MAX_DEFAULT_FILE_SIZE_BYTES;
+}
+
+function formatMegabyteLimit(sizeInBytes: number): string {
+  return `${Math.floor(sizeInBytes / (1024 * 1024))}MB`;
+}
+
+type ExtractedFile = {
+  text: string;
+  warnings: string[];
+  tables: PreparedTable[];
+};
+
+function normalizeCellValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "";
   }
 
-  const mimeType = file.type.toLowerCase();
-  return (
-    mimeType.startsWith("text/") ||
-    mimeType === "application/json" ||
-    mimeType === "application/xml" ||
-    mimeType === "application/javascript"
-  );
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+
+  return String(value);
+}
+
+async function extractFileText(file: File): Promise<ExtractedFile> {
+  const extension = getFileExtension(file.name);
+  if (PDF_FILE_EXTENSIONS.has(extension)) {
+    return extractPdfText(file);
+  }
+  if (EXCEL_FILE_EXTENSIONS.has(extension)) {
+    return extractSpreadsheetText(file);
+  }
+
+  const raw = (await file.text()).replace(/\u0000/g, "");
+  return { text: raw.trim(), warnings: [], tables: [] };
+}
+
+async function extractPdfText(file: File): Promise<ExtractedFile> {
+  try {
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const result = await pdfParse(buffer);
+    const text = typeof result?.text === "string" ? result.text.replace(/\u0000/g, "").trim() : "";
+
+    if (!text) {
+      return {
+        text: "",
+        warnings: [`PDF ${file.name} nao retornou texto legivel.`],
+        tables: [],
+      };
+    }
+
+    return {
+      text,
+      warnings: [],
+      tables: [],
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Erro desconhecido ao ler PDF.";
+    return {
+      text: "",
+      warnings: [`Nao foi possivel ler o PDF ${file.name}: ${message}`],
+      tables: [],
+    };
+  }
+}
+
+async function extractSpreadsheetText(file: File): Promise<ExtractedFile> {
+  try {
+    const workbook = read(Buffer.from(await file.arrayBuffer()), {
+      type: "buffer",
+      cellDates: true,
+    });
+
+    const sections: string[] = [];
+    const tables: PreparedTable[] = [];
+
+    for (const sheetName of workbook.SheetNames) {
+      const sheet = workbook.Sheets[sheetName];
+      if (!sheet) {
+        continue;
+      }
+
+      const csv = utils.sheet_to_csv(sheet, { blankrows: false });
+      if (!csv.trim()) {
+        continue;
+      }
+
+      sections.push(`Planilha ${sheetName}:\n${csv}`);
+
+      if (tables.length >= MAX_TABLE_PREVIEW_SHEETS) {
+        continue;
+      }
+
+      const rawRows = utils.sheet_to_json(sheet, {
+        header: 1,
+        blankrows: false,
+        defval: "",
+      }) as unknown[][];
+
+      if (rawRows.length === 0) {
+        continue;
+      }
+
+      const maxColumnsRaw = Math.max(
+        0,
+        ...rawRows.map((row) => (Array.isArray(row) ? row.length : 0))
+      );
+      if (maxColumnsRaw === 0) {
+        continue;
+      }
+
+      const columnCount = Math.min(maxColumnsRaw, MAX_TABLE_PREVIEW_COLUMNS);
+      const columnsTruncated = maxColumnsRaw > columnCount;
+
+      const normalizedRows = rawRows.map((row) => {
+        const cells = Array.isArray(row) ? row : [];
+        return Array.from({ length: columnCount }, (_, columnIndex) =>
+          normalizeCellValue(cells[columnIndex])
+        );
+      });
+
+      const headerRow = normalizedRows[0] ?? Array.from({ length: columnCount }, () => "");
+      const hasHeaderLabels = headerRow.some((cell) => cell.trim().length > 0);
+
+      const headers = hasHeaderLabels
+        ? headerRow.map((cell, index) => (cell.trim() ? cell : `Col ${index + 1}`))
+        : Array.from({ length: columnCount }, (_, index) => `Col ${index + 1}`);
+
+      const dataRows = hasHeaderLabels ? normalizedRows.slice(1) : normalizedRows;
+      const totalRowCount = dataRows.length;
+
+      const rowsTruncated = totalRowCount > MAX_TABLE_PREVIEW_ROWS;
+      const limitedRows = dataRows.slice(0, Math.min(dataRows.length, MAX_TABLE_PREVIEW_ROWS));
+
+      tables.push({
+        fileName: file.name,
+        sheetName,
+        headers,
+        rows: limitedRows,
+        rowCount: totalRowCount,
+        rowsTruncated,
+        columnsTruncated,
+      });
+    }
+
+    const text = sections.join("\n\n").trim();
+    if (!text) {
+      return {
+        text: "",
+        warnings: [`Planilha ${file.name} nao tem dados legiveis.`],
+        tables,
+      };
+    }
+
+    return { text, warnings: [], tables };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Erro desconhecido ao ler planilha.";
+    return {
+      text: "",
+      warnings: [`Nao foi possivel ler o arquivo ${file.name}: ${message}`],
+      tables: [],
+    };
+  }
 }
 
 function normalizePrompt(value: FormDataEntryValue | null | undefined): string {
@@ -512,29 +669,40 @@ async function prepareFileContext(files: File[]): Promise<PreparedFiles> {
   const names: string[] = [];
   const sections: string[] = [];
   const warnings: string[] = [];
+  const tables: PreparedTable[] = [];
   let totalChars = 0;
 
   for (const file of files) {
-    if (!isSupportedTextFile(file)) {
-      warnings.push(`Arquivo ignorado por tipo nao suportado: ${file.name}`);
-      continue;
-    }
-
     if (file.size === 0) {
       warnings.push(`Arquivo vazio ignorado: ${file.name}`);
       continue;
     }
 
-    if (file.size > MAX_FILE_SIZE_BYTES) {
-      warnings.push(`Arquivo ignorado por exceder 2MB: ${file.name}`);
+    const maxFileSizeBytes = getMaxFileSizeBytes(file);
+    if (file.size > maxFileSizeBytes) {
+      warnings.push(
+        `Arquivo ignorado por exceder ${formatMegabyteLimit(maxFileSizeBytes)}: ${file.name}`
+      );
       continue;
     }
 
-    let text = (await file.text()).replace(/\u0000/g, "").trim();
-    if (!text) {
-      warnings.push(`Arquivo sem texto legivel: ${file.name}`);
+    const extraction = await extractFileText(file);
+    if (extraction.warnings.length > 0) {
+      warnings.push(...extraction.warnings);
+    }
+
+    if (extraction.tables.length > 0) {
+      tables.push(...extraction.tables);
+    }
+
+    if (!extraction.text) {
+      if (extraction.warnings.length === 0) {
+        warnings.push(`Arquivo sem texto legivel: ${file.name}`);
+      }
       continue;
     }
+
+    let text = extraction.text;
 
     if (text.length > MAX_FILE_TEXT_CHARS) {
       text = text.slice(0, MAX_FILE_TEXT_CHARS);
@@ -559,7 +727,7 @@ async function prepareFileContext(files: File[]): Promise<PreparedFiles> {
     sections.push(`[Arquivo: ${file.name}]\n${text}`);
   }
 
-  return { names, sections, warnings };
+  return { names, sections, warnings, tables };
 }
 
 function buildInput(prompt: string, fileSections: string[], chatHistory: ChatHistoryMessage[]): string {
@@ -653,6 +821,98 @@ function extractOutputTextDeltaFromStreamEvent(eventPayload: unknown): string {
   }
 
   return "";
+}
+
+function extractOutputTextFromStreamEvent(eventPayload: unknown): string {
+  if (!eventPayload || typeof eventPayload !== "object") {
+    return "";
+  }
+
+  const event = eventPayload as {
+    type?: unknown;
+    text?: unknown;
+    output_text?: unknown;
+    response?: unknown;
+  };
+  const eventType = typeof event.type === "string" ? event.type : "";
+
+  if (
+    eventType.includes("output_text") &&
+    eventType.endsWith(".done") &&
+    typeof event.text === "string"
+  ) {
+    return event.text.trim();
+  }
+
+  if (typeof event.output_text === "string" && event.output_text.trim().length > 0) {
+    return event.output_text.trim();
+  }
+
+  if (event.response && typeof event.response === "object") {
+    const response = event.response as {
+      output_text?: unknown;
+      output?: unknown;
+    };
+
+    if (typeof response.output_text === "string" && response.output_text.trim().length > 0) {
+      return response.output_text.trim();
+    }
+
+    const extracted = extractOutputText(response.output);
+    if (extracted) {
+      return extracted;
+    }
+  }
+
+  return "";
+}
+
+function extractStreamErrorFromEvent(eventPayload: unknown): string {
+  if (!eventPayload || typeof eventPayload !== "object") {
+    return "";
+  }
+
+  const event = eventPayload as {
+    type?: unknown;
+    error?: unknown;
+    response?: unknown;
+  };
+  const eventType = typeof event.type === "string" ? event.type : "";
+  const isErrorEvent =
+    eventType === "error" ||
+    eventType.endsWith(".error") ||
+    eventType === "response.failed";
+
+  if (!isErrorEvent) {
+    return "";
+  }
+
+  if (typeof event.error === "string" && event.error.trim().length > 0) {
+    return event.error.trim();
+  }
+
+  if (event.error && typeof event.error === "object") {
+    const errorMessage = (event.error as { message?: unknown }).message;
+    if (typeof errorMessage === "string" && errorMessage.trim().length > 0) {
+      return errorMessage.trim();
+    }
+  }
+
+  if (event.response && typeof event.response === "object") {
+    const responseError = (event.response as { error?: unknown }).error;
+    if (typeof responseError === "string" && responseError.trim().length > 0) {
+      return responseError.trim();
+    }
+
+    if (responseError && typeof responseError === "object") {
+      const message = (responseError as { message?: unknown }).message;
+      if (typeof message === "string" && message.trim().length > 0) {
+        return message.trim();
+      }
+    }
+  }
+
+  return "Falha no streaming da API da OpenAI.";
 }
 
 export async function POST(request: NextRequest) {
@@ -891,12 +1151,14 @@ export async function POST(request: NextRequest) {
           const emit = (chunk: ChatStreamChunk) => {
             controller.enqueue(encoder.encode(`${JSON.stringify(chunk)}\n`));
           };
+          let hasEmittedText = false;
 
           try {
             emit({
               type: "meta",
               warnings: preparedFiles.warnings,
               filesUsed: preparedFiles.names,
+              tables: preparedFiles.tables,
             });
 
             let buffer = "";
@@ -928,19 +1190,42 @@ export async function POST(request: NextRequest) {
                 }
 
                 if (dataPayload === "[DONE]") {
+                  if (!hasEmittedText) {
+                    throw new Error(
+                      "A API da OpenAI encerrou o streaming sem texto de resposta."
+                    );
+                  }
                   emit({ type: "done" });
                   controller.close();
                   return;
                 }
 
+                let parsedEvent: unknown;
                 try {
-                  const parsedEvent = JSON.parse(dataPayload) as unknown;
-                  const delta = extractOutputTextDeltaFromStreamEvent(parsedEvent);
-                  if (delta) {
-                    emit({ type: "delta", delta });
-                  }
+                  parsedEvent = JSON.parse(dataPayload) as unknown;
                 } catch {
-                  // Ignora eventos nao-JSON ou sem delta textual.
+                  // Ignora eventos nao-JSON.
+                  continue;
+                }
+
+                const streamErrorMessage = extractStreamErrorFromEvent(parsedEvent);
+                if (streamErrorMessage) {
+                  throw new Error(streamErrorMessage);
+                }
+
+                const delta = extractOutputTextDeltaFromStreamEvent(parsedEvent);
+                if (delta) {
+                  hasEmittedText = true;
+                  emit({ type: "delta", delta });
+                  continue;
+                }
+
+                if (!hasEmittedText) {
+                  const finalText = extractOutputTextFromStreamEvent(parsedEvent);
+                  if (finalText) {
+                    hasEmittedText = true;
+                    emit({ type: "delta", delta: finalText });
+                  }
                 }
               }
             }
@@ -954,16 +1239,39 @@ export async function POST(request: NextRequest) {
                 .join("\n");
 
               if (remainingDataPayload && remainingDataPayload !== "[DONE]") {
+                let parsedEvent: unknown;
                 try {
-                  const parsedEvent = JSON.parse(remainingDataPayload) as unknown;
-                  const delta = extractOutputTextDeltaFromStreamEvent(parsedEvent);
-                  if (delta) {
-                    emit({ type: "delta", delta });
-                  }
+                  parsedEvent = JSON.parse(remainingDataPayload) as unknown;
                 } catch {
                   // Ignora payload final invalido.
+                  parsedEvent = null;
+                }
+
+                if (parsedEvent) {
+                  const streamErrorMessage = extractStreamErrorFromEvent(parsedEvent);
+                  if (streamErrorMessage) {
+                    throw new Error(streamErrorMessage);
+                  }
+
+                  const delta = extractOutputTextDeltaFromStreamEvent(parsedEvent);
+                  if (delta) {
+                    hasEmittedText = true;
+                    emit({ type: "delta", delta });
+                  } else if (!hasEmittedText) {
+                    const finalText = extractOutputTextFromStreamEvent(parsedEvent);
+                    if (finalText) {
+                      hasEmittedText = true;
+                      emit({ type: "delta", delta: finalText });
+                    }
+                  }
                 }
               }
+            }
+
+            if (!hasEmittedText) {
+              throw new Error(
+                "A API da OpenAI encerrou o streaming sem texto de resposta."
+              );
             }
 
             emit({ type: "done" });
@@ -1035,6 +1343,7 @@ export async function POST(request: NextRequest) {
       answer,
       filesUsed: preparedFiles.names,
       warnings: preparedFiles.warnings,
+      tables: preparedFiles.tables,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Erro inesperado no servidor.";

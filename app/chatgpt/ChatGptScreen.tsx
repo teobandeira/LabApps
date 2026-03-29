@@ -40,6 +40,7 @@ type ChatMessage = {
   content: string;
   imageUrl?: string;
   imageId?: string;
+  tables?: TablePreview[];
 };
 
 type GeneratedImageHistoryItem = {
@@ -70,6 +71,16 @@ type MessageContentSegment = {
   language?: string;
 };
 
+type TablePreview = {
+  fileName: string;
+  sheetName: string;
+  headers: string[];
+  rows: string[][];
+  rowCount: number;
+  rowsTruncated: boolean;
+  columnsTruncated: boolean;
+};
+
 type CodeTokenType =
   | "plain"
   | "keyword"
@@ -94,6 +105,7 @@ type ChatStreamChunk =
       type: "meta";
       warnings?: string[];
       filesUsed?: string[];
+      tables?: TablePreview[];
     }
   | {
       type: "done";
@@ -104,8 +116,6 @@ type ChatStreamChunk =
     };
 
 const MAX_FILES = 5;
-const ACCEPTED_FILE_TYPES =
-  ".txt,.md,.csv,.json,.xml,.yml,.yaml,.log,.js,.jsx,.ts,.tsx,.py,.java,.c,.cpp,.h,.hpp,.go,.rs,.sql,.html,.css,.scss";
 
 const IMAGE_SIZE_OPTIONS: Array<{ label: string; value: ImageSize }> = [
   { label: "Quadrada 1024x1024", value: "1024x1024" },
@@ -1307,6 +1317,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
         let streamWarnings: string[] = [];
         let streamFilesUsed: string[] = [];
+        let streamTables: TablePreview[] = [];
 
         try {
           const response = await fetch("/api/chatgpt?stream=1", {
@@ -1346,6 +1357,10 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
             if (chunk.type === "meta") {
               streamWarnings = Array.isArray(chunk.warnings) ? chunk.warnings : [];
               streamFilesUsed = Array.isArray(chunk.filesUsed) ? chunk.filesUsed : [];
+              streamTables = Array.isArray(chunk.tables) ? chunk.tables : [];
+              if (pendingAssistantMessageId && streamTables.length > 0) {
+                updateMessageTablesById(pendingAssistantMessageId, streamTables);
+              }
               return;
             }
 
@@ -1428,6 +1443,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
         imageUrl?: string;
         revisedPrompt?: string | null;
         storedImageId?: string | null;
+        tables?: TablePreview[];
       };
 
       if (!response.ok) {
@@ -1439,6 +1455,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       }
 
       const usedFiles = Array.isArray(data.filesUsed) ? data.filesUsed : [];
+      const responseTables = Array.isArray(data.tables) ? data.tables : [];
       const responseWarnings = Array.isArray(data.warnings) ? data.warnings : [];
       setWarnings(responseWarnings);
 
@@ -1463,6 +1480,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
         content: answerParts.join("\n\n"),
         imageUrl: hasImage ? data.imageUrl : undefined,
         imageId: hasImage ? storedImageId : undefined,
+        tables: responseTables,
       });
 
       if (mode === "image" && hasImage && storedImageId) {
@@ -1841,6 +1859,12 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     );
   }
 
+  function updateMessageTablesById(messageId: string, tables: TablePreview[]) {
+    setMessagesAndSync((current) =>
+      current.map((message) => (message.id === messageId ? { ...message, tables } : message))
+    );
+  }
+
   function removeMessageById(messageId: string) {
     setMessagesAndSync((current) => current.filter((message) => message.id !== messageId));
   }
@@ -2016,7 +2040,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     }
   }
 
-  function renderInlineCode(text: string, keyPrefix: string) {
+  function renderInlineRichText(text: string, keyPrefix: string) {
     const inlineCodeParts = text.split(/`([^`]+)`/g);
 
     return inlineCodeParts.map((part, index) => {
@@ -2033,8 +2057,103 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
         );
       }
 
-      return <span key={`${keyPrefix}-text-${index}`}>{part}</span>;
+      const boldParts = part.split(/(\*\*[^*]+\*\*)/g);
+      return boldParts.map((chunk, boldIndex) => {
+        const isBold = chunk.startsWith("**") && chunk.endsWith("**") && chunk.length > 4;
+        if (isBold) {
+          return (
+            <strong key={`${keyPrefix}-bold-${index}-${boldIndex}`} className="font-semibold">
+              {chunk.slice(2, -2)}
+            </strong>
+          );
+        }
+
+        return <span key={`${keyPrefix}-text-${index}-${boldIndex}`}>{chunk}</span>;
+      });
     });
+  }
+
+  function renderMarkdownTextSegment(text: string, keyPrefix: string) {
+    const lines = text.replace(/\r\n/g, "\n").split("\n");
+    const nodes: ReactNode[] = [];
+    let lineIndex = 0;
+
+    while (lineIndex < lines.length) {
+      const currentLine = lines[lineIndex] ?? "";
+      const trimmedLine = currentLine.trim();
+
+      if (!trimmedLine) {
+        nodes.push(<div key={`${keyPrefix}-spacer-${lineIndex}`} className="h-2" />);
+        lineIndex += 1;
+        continue;
+      }
+
+      if (/^-{3,}$/.test(trimmedLine)) {
+        nodes.push(
+          <hr
+            key={`${keyPrefix}-divider-${lineIndex}`}
+            className={`my-2 border-0 border-t ${isLight ? "border-slate-300" : "border-gray-600"}`}
+          />
+        );
+        lineIndex += 1;
+        continue;
+      }
+
+      const headingMatch = trimmedLine.match(/^(#{1,6})\s+(.+)$/);
+      if (headingMatch) {
+        const headingLevel = headingMatch[1].length;
+        const headingText = headingMatch[2] ?? "";
+        const headingClass =
+          headingLevel <= 2
+            ? "text-base font-semibold"
+            : headingLevel === 3
+              ? "text-[0.95rem] font-semibold"
+              : "text-sm font-semibold";
+
+        nodes.push(
+          <p key={`${keyPrefix}-heading-${lineIndex}`} className={headingClass}>
+            {renderInlineRichText(headingText, `${keyPrefix}-heading-inline-${lineIndex}`)}
+          </p>
+        );
+        lineIndex += 1;
+        continue;
+      }
+
+      const listLines: string[] = [];
+      let listCursor = lineIndex;
+      while (listCursor < lines.length) {
+        const candidate = (lines[listCursor] ?? "").trim();
+        const listMatch = candidate.match(/^[-*]\s+(.+)$/);
+        if (!listMatch) {
+          break;
+        }
+        listLines.push(listMatch[1]);
+        listCursor += 1;
+      }
+
+      if (listLines.length > 0) {
+        nodes.push(
+          <ul key={`${keyPrefix}-list-${lineIndex}`} className="list-disc space-y-1 pl-5">
+            {listLines.map((item, itemIndex) => (
+              <li key={`${keyPrefix}-list-item-${lineIndex}-${itemIndex}`}>
+                {renderInlineRichText(item, `${keyPrefix}-list-inline-${lineIndex}-${itemIndex}`)}
+              </li>
+            ))}
+          </ul>
+        );
+        lineIndex = listCursor;
+        continue;
+      }
+
+      nodes.push(
+        <p key={`${keyPrefix}-paragraph-${lineIndex}`} className="whitespace-pre-wrap">
+          {renderInlineRichText(currentLine, `${keyPrefix}-paragraph-inline-${lineIndex}`)}
+        </p>
+      );
+      lineIndex += 1;
+    }
+
+    return nodes;
   }
 
   function getCodeTokenClass(type: CodeTokenType): string {
@@ -2161,11 +2280,91 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       }
 
       return (
-        <p key={`${keyPrefix}-paragraph-${index}`} className="whitespace-pre-wrap">
-          {renderInlineCode(segment.content, `${keyPrefix}-segment-${index}`)}
-        </p>
+        <div key={`${keyPrefix}-text-${index}`} className="space-y-1">
+          {renderMarkdownTextSegment(segment.content, `${keyPrefix}-segment-${index}`)}
+        </div>
       );
     });
+  }
+
+  function renderTablePreview(table: TablePreview, keyPrefix: string) {
+    const rowNoteSegments: string[] = [];
+    if (table.rowsTruncated) {
+      rowNoteSegments.push(`Exibindo ${table.rows.length}/${table.rowCount} linhas.`);
+    } else if (table.rowCount === 0) {
+      rowNoteSegments.push("Nenhuma linha de dados.");
+    } else {
+      rowNoteSegments.push(`${table.rowCount} linha${table.rowCount === 1 ? "" : "s"}.`);
+    }
+
+    if (table.columnsTruncated) {
+      rowNoteSegments.push("Colunas adicionais omitidas.");
+    }
+
+    const tableContainerClass = isLight
+      ? "rounded-2xl border border-slate-200 bg-white text-slate-800 shadow-sm"
+      : "rounded-2xl border border-gray-700 bg-gray-950 text-gray-100 shadow-sm";
+    const headerRowClass = isLight ? "bg-slate-100 text-slate-600" : "bg-gray-900 text-gray-300";
+    const noteClass = isLight ? "text-slate-500" : "text-gray-400";
+
+    return (
+      <div key={`${keyPrefix}-table`} className="mt-4 space-y-2">
+        <div className={tableContainerClass}>
+          <div className="flex flex-wrap items-center justify-between border-b px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.2em]">
+            <span className="truncate">
+              {table.fileName} · {table.sheetName || "Planilha sem nome"}
+            </span>
+            <span className="text-[11px] text-current">
+              {table.rowCount} linha{table.rowCount === 1 ? "" : "s"}
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-[12px]">
+              <thead className={`text-left text-[11px] font-semibold uppercase tracking-[0.2em] ${headerRowClass}`}>
+                <tr>
+                  {table.headers.length > 0 &&
+                    table.headers.map((header, headerIndex) => (
+                      <th key={`${keyPrefix}-header-${headerIndex}`} className="px-2 py-2">
+                        {header || `Col ${headerIndex + 1}`}
+                      </th>
+                    ))}
+                </tr>
+              </thead>
+              <tbody>
+                {table.rows.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={Math.max(1, table.headers.length)}
+                      className="px-2 py-2 text-xs italic text-slate-500"
+                    >
+                      Sem dados visiveis.
+                    </td>
+                  </tr>
+                ) : (
+                  table.rows.map((row, rowIndex) => (
+                    <tr
+                      key={`${keyPrefix}-row-${rowIndex}`}
+                      className={rowIndex % 2 === 0 ? "bg-white/5" : ""}
+                    >
+                      {table.headers.map((_, columnIndex) => (
+                        <td key={`${keyPrefix}-cell-${rowIndex}-${columnIndex}`} className="px-2 py-1 align-top">
+                          {row[columnIndex] ?? ""}
+                        </td>
+                      ))}
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        {rowNoteSegments.length > 0 ? (
+          <p className={`px-2 text-[11px] leading-tight ${noteClass}`}>
+            {rowNoteSegments.join(" ")}
+          </p>
+        ) : null}
+      </div>
+    );
   }
 
   function goToPreviousHistoryImage() {
@@ -3234,6 +3433,16 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                     <div className="space-y-2">
                       {renderMessageContent(message.content, `message-${index}`)}
                     </div>
+                    {message.tables && message.tables.length > 0 ? (
+                      <div className="mt-4 space-y-3">
+                        {message.tables.map((table, tableIndex) =>
+                          renderTablePreview(
+                            table,
+                            `${message.id ?? `message-${index}`}-table-${tableIndex}`
+                          )
+                        )}
+                      </div>
+                    ) : null}
                     {message.imageUrl ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
@@ -3306,7 +3515,6 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                 name="file-upload"
                 type="file"
                 multiple
-                accept={ACCEPTED_FILE_TYPES}
                 onChange={handleFilesChange}
                 disabled={loading}
                 className="hidden"
