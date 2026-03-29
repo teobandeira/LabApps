@@ -36,6 +36,25 @@ model GeneratedImage {
   @@index([createdAt])
 }
 
+model GeneratedVideo {
+  id              String   @id @default(cuid())
+  sourceImageId   String?  @db.VarChar(120)
+  operationName   String   @unique @db.VarChar(255)
+  model           String   @db.VarChar(80)
+  aspectRatio     String   @db.VarChar(8)
+  durationSeconds Int
+  resolution      String   @db.VarChar(16)
+  blobUrl         String   @db.VarChar(2048)
+  blobPath        String   @db.VarChar(255)
+  mimeType        String   @db.VarChar(120)
+  bytes           Int
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([sourceImageId, createdAt])
+  @@index([createdAt])
+}
+
 model ChatSession {
   id        String               @id @default(cuid())
   deviceId  String               @db.VarChar(120)

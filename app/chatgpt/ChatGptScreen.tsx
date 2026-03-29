@@ -56,6 +56,17 @@ type GeneratedImageHistoryItem = {
   action: "generate" | "edit";
 };
 
+type GeneratedVideoHistoryItem = {
+  id: string;
+  sourceImageId: string | null;
+  videoUrl: string;
+  createdAt: string;
+  model: string;
+  aspectRatio: string;
+  durationSeconds: number;
+  resolution: string;
+};
+
 type ChatSession = {
   id: string;
   title: string;
@@ -100,10 +111,13 @@ type CodeToken = {
 
 type VideoAspectRatio = "16:9" | "9:16";
 type VideoDurationSeconds = 4 | 6 | 8;
+type VideoResolution = "720p" | "1080p";
+type VideoModel = "veo-3.1-fast-generate-preview" | "veo-3.1-generate-preview";
 
 type VideoGenerationModalSource = {
   targetKey: string;
   imageUrl: string;
+  sourceImageId?: string | null;
   prompt: string;
   aspectRatio: VideoAspectRatio;
   durationSeconds: VideoDurationSeconds;
@@ -137,11 +151,35 @@ const IMAGE_SIZE_OPTIONS: Array<{ label: string; value: ImageSize }> = [
   { label: "Paisagem 1536x1024", value: "1536x1024" },
   { label: "Retrato 1024x1536", value: "1024x1536" },
 ];
-const VIDEO_ASPECT_RATIO_OPTIONS: Array<{ label: string; value: VideoAspectRatio }> = [
-  { label: "Paisagem 16:9", value: "16:9" },
-  { label: "Vertical 9:16", value: "9:16" },
+const SOCIAL_FORMAT_OPTIONS: Array<{
+  value: VideoAspectRatio;
+  label: string;
+  details: string;
+}> = [
+  {
+    value: "9:16",
+    label: "Story/Reels",
+    details: "1080x1920 (vertical)",
+  },
+  {
+    value: "16:9",
+    label: "Feed",
+    details: "1920x1080 (paisagem)",
+  },
+];
+const VIDEO_MODEL_OPTIONS: Array<{ value: VideoModel; label: string }> = [
+  {
+    value: "veo-3.1-fast-generate-preview",
+    label: "Veo 3.1 Fast",
+  },
+  {
+    value: "veo-3.1-generate-preview",
+    label: "Veo 3.1 Standard",
+  },
 ];
 const VIDEO_DURATION_OPTIONS: VideoDurationSeconds[] = [4, 6, 8];
+const VIDEO_PROMPT_GUARDRAIL =
+  "Regras obrigatorias: preserve exatamente a forma, proporcoes, rotulo e identidade visual do produto, sem deformar, sem redesenhar e sem alterar a embalagem. Nao inserir legendas, textos, tipografia, logotipos ou marcas d'agua, a menos que isso seja solicitado explicitamente no prompt.";
 const CHAT_TEXT_MODEL_LABEL = "gpt-5.2";
 const IMAGE_MODEL_LABEL = "chatgpt-image-latest";
 const THEME_STORAGE_KEY = "chatgpt-theme-mode";
@@ -418,6 +456,54 @@ function getVideoAspectRatioFromImageSize(sizeValue?: string | null): VideoAspec
   }
 
   return height > width ? "9:16" : "16:9";
+}
+
+function promptRequestsOnScreenText(promptValue: string): boolean {
+  const normalized = promptValue.toLowerCase();
+  return /(legenda|legendas|texto|textos|caption|captions|subtitle|subtitles|title|titulo|tipografia|typography|logo|logotipo|marca d(?:'|\u2019)?agua|watermark)/i.test(
+    normalized
+  );
+}
+
+function compareVersionParts(a: string, b: string): number {
+  const aParts = a.split(".").map((part) => Number(part) || 0);
+  const bParts = b.split(".").map((part) => Number(part) || 0);
+  const maxLength = Math.max(aParts.length, bParts.length);
+
+  for (let index = 0; index < maxLength; index += 1) {
+    const aPart = aParts[index] ?? 0;
+    const bPart = bParts[index] ?? 0;
+    if (aPart !== bPart) {
+      return aPart - bPart;
+    }
+  }
+
+  return 0;
+}
+
+const LATEST_VEO_VERSION_LABEL = (() => {
+  const versions = VIDEO_MODEL_OPTIONS.map(
+    (option) => option.value.match(/veo-(\d+(?:\.\d+)?)/i)?.[1] ?? ""
+  ).filter(Boolean);
+
+  if (!versions.length) {
+    return "Veo";
+  }
+
+  const latestVersion = [...versions].sort(compareVersionParts).at(-1);
+  return latestVersion ? `Veo ${latestVersion}` : "Veo";
+})();
+
+function getVideoFailureMessage(rawMessage?: string): string {
+  const message = (rawMessage || "").toLowerCase();
+  if (
+    message.includes("high demand") ||
+    message.includes("try again later") ||
+    message.includes("resource_exhausted")
+  ) {
+    return "O Veo esta com alta demanda no momento. Tente novamente em instantes.";
+  }
+  return "Nao foi possivel gerar o video agora. Tente novamente em instantes.";
 }
 
 function getHistoryVideoTargetKey(historyId: string): string {
@@ -918,7 +1004,7 @@ const MODE_COPY: Record<
     topTag: "Modo Chat",
   },
   image: {
-    title: "Gerador de Imagens",
+    title: "Insta Creator IA",
     subtitle: "Descreva a cena e gere imagens com IA",
     placeholder: "Descreva a imagem que voce quer gerar...",
     cta: "Gerar imagem",
@@ -956,13 +1042,25 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const [generatedHistory, setGeneratedHistory] = useState<GeneratedImageHistoryItem[]>([]);
   const [loadingGeneratedHistory, setLoadingGeneratedHistory] = useState(false);
   const [generatedHistoryWarning, setGeneratedHistoryWarning] = useState("");
+  const [generatedVideoHistory, setGeneratedVideoHistory] = useState<GeneratedVideoHistoryItem[]>(
+    []
+  );
+  const [generatedVideoHistoryWarning, setGeneratedVideoHistoryWarning] = useState("");
   const [videoGenerationModalSource, setVideoGenerationModalSource] =
     useState<VideoGenerationModalSource | null>(null);
   const [videoGenerationPromptInput, setVideoGenerationPromptInput] = useState("");
+  const [videoGenerationNegativePromptInput, setVideoGenerationNegativePromptInput] =
+    useState("");
+  const [videoGenerationModelInput, setVideoGenerationModelInput] = useState<VideoModel>(
+    VIDEO_MODEL_OPTIONS[0].value
+  );
+  const [videoGenerationResolutionInput, setVideoGenerationResolutionInput] =
+    useState<VideoResolution>("720p");
   const [videoGenerationAspectRatioInput, setVideoGenerationAspectRatioInput] =
     useState<VideoAspectRatio>("16:9");
   const [videoGenerationDurationInput, setVideoGenerationDurationInput] =
     useState<VideoDurationSeconds>(6);
+  const [videoGenerationErrorMessage, setVideoGenerationErrorMessage] = useState("");
   const [historyLightboxIndex, setHistoryLightboxIndex] = useState<number | null>(null);
   const [previewLightboxImageUrl, setPreviewLightboxImageUrl] = useState<string | null>(null);
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
@@ -1211,6 +1309,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     let active = true;
     setLoadingGeneratedHistory(true);
     setGeneratedHistoryWarning("");
+    setGeneratedVideoHistoryWarning("");
 
     async function loadGeneratedHistory() {
       try {
@@ -1234,6 +1333,40 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
         }
 
         setGeneratedHistory(images);
+
+        const videosResponse = await fetch("/api/chatgpt/generated-videos", {
+          method: "GET",
+          cache: "no-store",
+        });
+
+        const videosData = (await videosResponse.json()) as {
+          videos?: GeneratedVideoHistoryItem[];
+          error?: string;
+        };
+
+        if (!videosResponse.ok) {
+          throw new Error(videosData.error ?? "Falha ao carregar historico de videos.");
+        }
+
+        const videos = Array.isArray(videosData.videos) ? videosData.videos : [];
+        if (!active) {
+          return;
+        }
+
+        setGeneratedVideoHistory(videos);
+        setGeneratedVideoByHistoryId((current) => {
+          const merged = { ...current };
+          for (const videoItem of videos) {
+            if (!videoItem.sourceImageId) {
+              continue;
+            }
+            const historyKey = getHistoryVideoTargetKey(videoItem.sourceImageId);
+            if (!merged[historyKey]) {
+              merged[historyKey] = videoItem.videoUrl;
+            }
+          }
+          return merged;
+        });
       } catch (loadError) {
         if (!active) {
           return;
@@ -1242,8 +1375,9 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
         const message =
           loadError instanceof Error
             ? loadError.message
-            : "Nao foi possivel carregar historico de imagens.";
+            : "Nao foi possivel carregar historico.";
         setGeneratedHistoryWarning(message);
+        setGeneratedVideoHistoryWarning(message);
       } finally {
         if (active) {
           setLoadingGeneratedHistory(false);
@@ -1924,6 +2058,10 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     setVideoGenerationPromptInput(source.prompt);
     setVideoGenerationAspectRatioInput(source.aspectRatio);
     setVideoGenerationDurationInput(source.durationSeconds);
+    setVideoGenerationModelInput(VIDEO_MODEL_OPTIONS[0].value);
+    setVideoGenerationResolutionInput("720p");
+    setVideoGenerationNegativePromptInput("");
+    setVideoGenerationErrorMessage("");
     setError("");
   }
 
@@ -1931,6 +2069,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     openVideoGenerationModal({
       targetKey: getHistoryVideoTargetKey(item.id),
       imageUrl: item.imageUrl,
+      sourceImageId: item.id,
       prompt: item.revisedPrompt?.trim() || item.prompt.trim() || "",
       aspectRatio: getVideoAspectRatioFromImageSize(item.size),
       durationSeconds: 6,
@@ -1947,6 +2086,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     openVideoGenerationModal({
       targetKey: "latest",
       imageUrl: latestGenerated.imageUrl,
+      sourceImageId: latestGenerated.imageId || null,
       prompt:
         latestImagePrompt.trim() ||
         prompt.trim() ||
@@ -1954,7 +2094,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       aspectRatio: getVideoAspectRatioFromImageSize(imageSize),
       durationSeconds: 6,
       title: "Gerar video da imagem atual",
-      subtitle: "Configure prompt, formato e duracao antes de gerar.",
+      subtitle: "Configure prompt, modelo, formato, resolucao e duracao.",
     });
   }
 
@@ -1962,6 +2102,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     if (isGeneratingVideoGenerationModal) {
       return;
     }
+    setVideoGenerationErrorMessage("");
     setVideoGenerationModalSource(null);
   }
 
@@ -2824,19 +2965,50 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
   async function handleGenerateVideo(options?: {
     imageUrl?: string;
+    sourceImageId?: string | null;
     prompt?: string;
     aspectRatio?: VideoAspectRatio;
     durationSeconds?: VideoDurationSeconds;
+    model?: VideoModel;
+    resolution?: VideoResolution;
+    negativePrompt?: string;
     targetKey?: string;
   }) {
     const targetKey = options?.targetKey?.trim() || "latest";
     const imageUrl = options?.imageUrl || latestGenerated?.imageUrl;
+    const sourceImageId = options?.sourceImageId || latestGenerated?.imageId || null;
+    const promptValue =
+      options?.prompt?.trim() ||
+      latestImagePrompt.trim() ||
+      prompt.trim() ||
+      "Transforme esta imagem em um video cinematografico curto com movimento suave.";
+    const aspectRatio: VideoAspectRatio = options?.aspectRatio === "9:16" ? "9:16" : "16:9";
+    const durationSeconds: VideoDurationSeconds = options?.durationSeconds || 6;
+    const model: VideoModel = options?.model || VIDEO_MODEL_OPTIONS[0].value;
+    const resolution: VideoResolution = options?.resolution || "720p";
+    const negativePromptValue = (options?.negativePrompt || "").trim();
+
     if (!imageUrl || videoGenerationTarget) {
+      return;
+    }
+
+    if (!promptValue.trim()) {
+      const message = "Informe o prompt do video.";
+      setVideoGenerationErrorMessage(message);
+      setError(message);
+      return;
+    }
+
+    if (resolution === "1080p" && durationSeconds !== 8) {
+      const message = "Para 1080p, selecione duracao de 8s.";
+      setVideoGenerationErrorMessage(message);
+      setError(message);
       return;
     }
 
     try {
       setVideoGenerationTarget(targetKey);
+      setVideoGenerationErrorMessage("");
       if (targetKey === "latest") {
         setGeneratedVideoUrl("");
       } else {
@@ -2847,36 +3019,74 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       }
       setError("");
 
-      const startResponse = await fetch("/api/chatgpt/generate-video", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          imageUrl,
-          prompt:
-            options?.prompt?.trim() ||
-            latestImagePrompt.trim() ||
-            prompt.trim() ||
-            "Transforme esta imagem em um video cinematografico curto com movimento suave.",
-          aspectRatio: options?.aspectRatio === "9:16" ? "9:16" : "16:9",
-          durationSeconds: options?.durationSeconds || 6,
-          resolution: "720p",
-          model: "veo-3.1-fast-generate-preview",
-        }),
-      });
+      const baseVideoPrompt = promptValue.trim();
+      const allowOnScreenText = promptRequestsOnScreenText(baseVideoPrompt);
+      const finalVideoPrompt = `${baseVideoPrompt}\n\n${VIDEO_PROMPT_GUARDRAIL}`;
+      const finalNegativePrompt = [
+        negativePromptValue,
+        !allowOnScreenText
+          ? "sem texto na tela, sem legendas, sem tipografia, sem logotipos, sem marca d'agua"
+          : "",
+      ]
+        .filter(Boolean)
+        .join(", ");
 
-      const startPayload = (await startResponse.json()) as {
-        operationName?: string;
-        error?: string;
-      };
+      let operationName = "";
+      let startFailureMessage = "";
 
-      if (!startResponse.ok) {
-        throw new Error(startPayload.error || "Falha ao iniciar geracao de video.");
+      for (let startAttempt = 1; startAttempt <= 3; startAttempt += 1) {
+        const startResponse = await fetch("/api/chatgpt/generate-video", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            imageUrl,
+            sourceImageId,
+            prompt: finalVideoPrompt,
+            aspectRatio,
+            durationSeconds,
+            resolution,
+            model,
+            negativePrompt: finalNegativePrompt,
+          }),
+        });
+
+        const startPayload = (await startResponse.json().catch(() => null)) as
+          | {
+              operationName?: string;
+              error?: string;
+            }
+          | null;
+
+        if (startResponse.ok) {
+          operationName =
+            typeof startPayload?.operationName === "string" ? startPayload.operationName : "";
+          if (operationName) {
+            setGeneratedVideoHistoryWarning("");
+            break;
+          }
+          startFailureMessage = "Gemini nao retornou a operacao de video.";
+        } else {
+          startFailureMessage = startPayload?.error || "Falha ao iniciar geracao de video.";
+          const shouldRetryStart = [429, 500, 502, 503, 504].includes(startResponse.status);
+          if (!shouldRetryStart) {
+            break;
+          }
+          if (shouldRetryStart && startAttempt < 3) {
+            setGeneratedVideoHistoryWarning(
+              "Alta demanda no Veo. Tentando novamente automaticamente..."
+            );
+            await new Promise((resolve) => window.setTimeout(resolve, 1200 * startAttempt));
+            continue;
+          }
+        }
+
+        if (startAttempt < 3 && !operationName) {
+          await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        }
       }
 
-      const operationName =
-        typeof startPayload.operationName === "string" ? startPayload.operationName : "";
       if (!operationName) {
-        throw new Error("Gemini nao retornou a operacao de video.");
+        throw new Error(startFailureMessage || "Gemini nao retornou a operacao de video.");
       }
 
       const startedAt = Date.now();
@@ -2885,8 +3095,18 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       while (Date.now() - startedAt < timeoutMs) {
         await new Promise((resolve) => window.setTimeout(resolve, 8000));
 
+        const statusParams = new URLSearchParams();
+        statusParams.set("operationName", operationName);
+        if (sourceImageId) {
+          statusParams.set("sourceImageId", sourceImageId);
+        }
+        statusParams.set("aspectRatio", aspectRatio);
+        statusParams.set("durationSeconds", String(durationSeconds));
+        statusParams.set("resolution", resolution);
+        statusParams.set("model", model);
+
         const statusResponse = await fetch(
-          `/api/chatgpt/generate-video?operationName=${encodeURIComponent(operationName)}`,
+          `/api/chatgpt/generate-video?${statusParams.toString()}`,
           {
             method: "GET",
             cache: "no-store",
@@ -2897,6 +3117,9 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
           | {
               done?: boolean;
               videoUrl?: string;
+              videoId?: string;
+              persisted?: boolean;
+              warning?: string;
               error?: string;
             }
           | null;
@@ -2916,8 +3139,8 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
           }
           if (targetKey === "latest") {
             setGeneratedVideoUrl(nextVideoUrl);
-            if (latestGenerated?.imageId) {
-              const latestHistoryVideoKey = getHistoryVideoTargetKey(latestGenerated.imageId);
+            if (sourceImageId) {
+              const latestHistoryVideoKey = getHistoryVideoTargetKey(sourceImageId);
               setGeneratedVideoByHistoryId((current) => ({
                 ...current,
                 [latestHistoryVideoKey]: nextVideoUrl,
@@ -2929,16 +3152,48 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
               [targetKey]: nextVideoUrl,
             }));
           }
+
+          const persistedVideoId =
+            typeof statusPayload.videoId === "string" ? statusPayload.videoId : "";
+          const statusWarning =
+            typeof statusPayload.warning === "string" ? statusPayload.warning.trim() : "";
+          if (statusWarning) {
+            setGeneratedVideoHistoryWarning(statusWarning);
+          } else {
+            setGeneratedVideoHistoryWarning("");
+          }
+          setGeneratedVideoHistory((current) => {
+            const nextItem: GeneratedVideoHistoryItem = {
+              id: persistedVideoId || `temp-${Date.now()}`,
+              sourceImageId,
+              videoUrl: nextVideoUrl,
+              createdAt: new Date().toISOString(),
+              model,
+              aspectRatio,
+              durationSeconds,
+              resolution,
+            };
+
+            return [
+              nextItem,
+              ...current.filter(
+                (existing) =>
+                  existing.id !== nextItem.id && existing.videoUrl !== nextItem.videoUrl
+              ),
+            ];
+          });
           return;
         }
       }
 
       throw new Error("A geracao de video excedeu o tempo limite. Tente novamente.");
     } catch (videoError) {
-      const message =
+      const rawMessage =
         videoError instanceof Error
           ? videoError.message
           : "Nao foi possivel gerar video agora.";
+      const message = getVideoFailureMessage(rawMessage);
+      setVideoGenerationErrorMessage(message);
       setError(message);
     } finally {
       setVideoGenerationTarget(null);
@@ -3113,7 +3368,9 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                       }`}
                     >
                       <MdMovie className="h-5 w-5" />
-                      {isGeneratingLatestVideo ? "Gerando video..." : "Gerar video"}
+                      {isGeneratingLatestVideo
+                        ? "Gerando video..."
+                        : `Gerar video com ${LATEST_VEO_VERSION_LABEL}`}
                     </button>
                     {generatedVideoUrl ? (
                       <div className="space-y-2">
@@ -3324,7 +3581,9 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                       }`}
                     >
                       <MdMovie className="h-5 w-5" />
-                      {isGeneratingLatestVideo ? "Gerando video..." : "Gerar video"}
+                      {isGeneratingLatestVideo
+                        ? "Gerando video..."
+                        : `Gerar video com ${LATEST_VEO_VERSION_LABEL}`}
                     </button>
                     {generatedVideoUrl ? (
                       <div className="space-y-2">
@@ -3483,8 +3742,83 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                 Nenhuma imagem gerada ainda.
               </div>
             )}
+            {generatedVideoHistory.length > 0 ? (
+              <div className="mt-5">
+                <p
+                  className={`mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] ${
+                    isLight ? "text-slate-500" : "text-gray-300"
+                  }`}
+                >
+                  Historico de Videos
+                </p>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {generatedVideoHistory.map((videoItem) => {
+                    const videoRefKey = `video-history:${videoItem.id}`;
+                    return (
+                      <article
+                        key={videoItem.id}
+                        className={`rounded-xl border p-2 ${
+                          isLight
+                            ? "border-slate-200 bg-white"
+                            : "border-gray-700/80 bg-gray-900/70"
+                        }`}
+                      >
+                        <video
+                          ref={(element) => {
+                            historyVideoRefs.current[videoRefKey] = element;
+                          }}
+                          src={videoItem.videoUrl}
+                          controls
+                          preload="metadata"
+                          className={`w-full rounded-lg border ${
+                            isLight ? "border-slate-300 bg-slate-100" : "border-gray-700 bg-black/40"
+                          }`}
+                        />
+                        <p className={`mt-1 text-[10px] ${isLight ? "text-slate-600" : "text-gray-300"}`}>
+                          {formatCreatedAt(videoItem.createdAt)}
+                        </p>
+                        <div className="mt-1 grid grid-cols-2 gap-1">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleDownloadVideo(videoItem.videoUrl, `video-historico-${videoItem.id}`)
+                            }
+                            disabled={downloadingVideo}
+                            className={`inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-2 text-[10px] font-semibold transition disabled:cursor-not-allowed ${
+                              isLight
+                                ? "border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                                : "border-gray-600 bg-gray-800 text-gray-100 hover:bg-gray-700 disabled:border-gray-700 disabled:bg-gray-800 disabled:text-gray-500"
+                            }`}
+                          >
+                            <MdDownload className="h-3.5 w-3.5" />
+                            Baixar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleHistoryVideoFullscreen(videoRefKey, videoItem.videoUrl)
+                            }
+                            className={`inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-2 text-[10px] font-semibold transition ${
+                              isLight
+                                ? "border-cyan-300 bg-cyan-500 text-white hover:bg-cyan-600"
+                                : "border-cyan-400/45 bg-cyan-500/15 text-cyan-100 hover:bg-cyan-500/25"
+                            }`}
+                          >
+                            <MdFullscreen className="h-3.5 w-3.5" />
+                            Fullscreen
+                          </button>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
             {generatedHistoryWarning ? (
               <p className={`mt-2 ${mutedTextClass}`}>{generatedHistoryWarning}</p>
+            ) : null}
+            {generatedVideoHistoryWarning ? (
+              <p className={`mt-2 ${mutedTextClass}`}>{generatedVideoHistoryWarning}</p>
             ) : null}
           </article>
 
@@ -3589,7 +3923,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
           {videoGenerationModalSource ? (
             <div
-              className="fixed inset-0 z-[95] flex items-start justify-center overflow-y-auto overscroll-contain bg-black/85 p-3 sm:p-6"
+              className="fixed inset-0 z-95 flex items-start justify-center overflow-y-auto overscroll-contain bg-black/85 p-3 sm:p-6"
               onClick={closeVideoGenerationModal}
             >
               <div
@@ -3624,107 +3958,332 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                     {videoGenerationModalSource.subtitle}
                   </p>
                   <p className={`text-xs ${isLight ? "text-slate-500" : "text-gray-400"}`}>
-                    Qualidade fixa: baixa (720p)
+                    Configure modelo, formato, resolucao e prompt antes de gerar.
                   </p>
                 </div>
 
-                <div className="grid gap-4 lg:grid-cols-[minmax(280px,0.85fr)_minmax(360px,1.15fr)]">
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-[420px_minmax(0,1fr)]">
                   <div
-                    className={`overflow-hidden rounded-xl border ${
-                      isLight ? "border-slate-200 bg-slate-100" : "border-gray-700 bg-black/35"
+                    className={`rounded-xl border p-4 ${
+                      isLight
+                        ? "border-slate-200 bg-slate-100/70"
+                        : "border-gray-700/70 bg-gray-800/55"
                     }`}
                   >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={videoGenerationModalSource.imageUrl}
-                      alt="Imagem do historico para gerar video"
-                      className="max-h-[420px] w-full object-contain"
-                    />
-                  </div>
+                    <p
+                      className={`text-[11px] font-semibold uppercase tracking-[0.12em] ${
+                        isLight ? "text-slate-500" : "text-gray-300"
+                      }`}
+                    >
+                      {videoGenerationModalResultUrl ? "Video gerado" : "Preview da imagem"}
+                    </p>
 
-                  <div className="space-y-3">
-                    <div>
-                      <label
-                        className={`mb-1 block text-[11px] font-semibold uppercase tracking-[0.12em] ${
-                          isLight ? "text-slate-500" : "text-gray-300"
-                        }`}
-                      >
-                        Prompt do video
-                      </label>
-                      <textarea
-                        value={videoGenerationPromptInput}
-                        onChange={(event) => setVideoGenerationPromptInput(event.target.value)}
-                        rows={3}
-                        disabled={isGeneratingAnyVideo}
-                        className={`w-full resize-y rounded-xl border px-3 py-2 text-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${
-                          isLight
-                            ? "border-slate-300 bg-white text-slate-900"
-                            : "border-gray-700 bg-gray-900/85 text-gray-100"
-                        } ${imageFocusClass}`}
-                      />
+                    <div
+                      className={`relative mt-2 flex h-[320px] items-center justify-center overflow-hidden rounded-xl border ${
+                        isLight
+                          ? "border-slate-300 bg-black/90"
+                          : "border-gray-700 bg-black/80"
+                      }`}
+                    >
+                      {isGeneratingVideoGenerationModal ? (
+                        <div
+                          className={`flex flex-col items-center gap-3 px-4 text-center ${
+                            isLight ? "text-slate-100" : "text-gray-200"
+                          }`}
+                        >
+                          <div className="h-10 w-10 animate-spin rounded-full border-4 border-cyan-400 border-t-transparent" />
+                          <p className="text-sm">
+                            Processando no Veo. Isso pode levar alguns minutos.
+                          </p>
+                        </div>
+                      ) : videoGenerationModalResultUrl ? (
+                        <video
+                          controls
+                          src={videoGenerationModalResultUrl}
+                          className="h-full w-full object-contain"
+                        />
+                      ) : (
+                        <>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={videoGenerationModalSource.imageUrl}
+                            alt="Preview para geracao de video"
+                            className="h-full w-full object-contain"
+                          />
+                        </>
+                      )}
                     </div>
 
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      <div>
+                    {videoGenerationModalResultUrl && !isGeneratingVideoGenerationModal ? (
+                      <div className="mt-3 flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void handleDownloadVideo(videoGenerationModalResultUrl, "video-modal")
+                          }
+                          disabled={downloadingVideo}
+                          className={`inline-flex h-10 min-w-[145px] items-center justify-center gap-2 rounded-lg border px-4 text-sm font-semibold transition disabled:cursor-not-allowed ${
+                            isLight
+                              ? "border-cyan-300 bg-cyan-500 text-white hover:bg-cyan-600 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
+                              : "border-cyan-400/45 bg-cyan-500/15 text-cyan-100 hover:bg-cyan-500/25 disabled:border-gray-600 disabled:bg-gray-700 disabled:text-gray-400"
+                          }`}
+                        >
+                          <MdDownload className="h-4 w-4" />
+                          {downloadingVideo ? "Baixando video..." : "Baixar video"}
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <p className={`mt-3 text-xs ${isLight ? "text-slate-500" : "text-gray-400"}`}>
+                          A imagem de referencia aparece aqui e sera substituida pelo video apos a
+                          geracao.
+                        </p>
+                        {videoGenerationErrorMessage ? (
+                          <p
+                            className={`mt-2 rounded-lg border px-3 py-2 text-xs font-medium ${
+                              isLight
+                                ? "border-red-300 bg-red-50 text-red-700"
+                                : "border-red-500/45 bg-red-500/15 text-red-100"
+                            }`}
+                          >
+                            {videoGenerationErrorMessage}
+                          </p>
+                        ) : null}
+                      </>
+                    )}
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+                      <div
+                        className={`space-y-4 rounded-xl border p-4 ${
+                          isLight
+                            ? "border-slate-200 bg-slate-100/70"
+                            : "border-gray-700/70 bg-gray-800/55"
+                        }`}
+                      >
+                        <div>
+                          <label
+                            className={`mb-1 block text-[11px] font-semibold uppercase tracking-[0.12em] ${
+                              isLight ? "text-slate-500" : "text-gray-300"
+                            }`}
+                          >
+                            Modelo Veo
+                          </label>
+                          <select
+                            value={videoGenerationModelInput}
+                            onChange={(event) =>
+                              setVideoGenerationModelInput(event.target.value as VideoModel)
+                            }
+                            disabled={isGeneratingAnyVideo}
+                            className={`h-10 w-full rounded-xl border px-3 text-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                              isLight
+                                ? "border-slate-300 bg-white text-slate-900"
+                                : "border-gray-700 bg-gray-900/85 text-gray-100"
+                            } ${imageFocusClass}`}
+                          >
+                            {VIDEO_MODEL_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label
+                            className={`mb-1 block text-[11px] font-semibold uppercase tracking-[0.12em] ${
+                              isLight ? "text-slate-500" : "text-gray-300"
+                            }`}
+                          >
+                            Resolucao
+                          </label>
+                          <select
+                            value={videoGenerationResolutionInput}
+                            onChange={(event) => {
+                              const value = event.target.value as VideoResolution;
+                              setVideoGenerationResolutionInput(value);
+                              if (value === "1080p" && videoGenerationDurationInput !== 8) {
+                                setVideoGenerationDurationInput(8);
+                              }
+                            }}
+                            disabled={isGeneratingAnyVideo}
+                            className={`h-10 w-full rounded-xl border px-3 text-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                              isLight
+                                ? "border-slate-300 bg-white text-slate-900"
+                                : "border-gray-700 bg-gray-900/85 text-gray-100"
+                            } ${imageFocusClass}`}
+                          >
+                            <option value="720p">720p</option>
+                            <option value="1080p">1080p</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div
+                        className={`rounded-xl border p-4 ${
+                          isLight
+                            ? "border-slate-200 bg-slate-100/70"
+                            : "border-gray-700/70 bg-gray-800/55"
+                        }`}
+                      >
                         <label
                           className={`mb-1 block text-[11px] font-semibold uppercase tracking-[0.12em] ${
                             isLight ? "text-slate-500" : "text-gray-300"
                           }`}
                         >
-                          Formato
+                          Formato para redes
                         </label>
-                        <div className="grid grid-cols-2 gap-2">
-                          {VIDEO_ASPECT_RATIO_OPTIONS.map((option) => (
+                        <div
+                          className={`rounded-xl border px-3 py-2 text-xs ${
+                            isLight
+                              ? "border-cyan-300 bg-cyan-50 text-cyan-700"
+                              : "border-cyan-400/45 bg-cyan-500/10 text-cyan-100"
+                          }`}
+                        >
+                          {SOCIAL_FORMAT_OPTIONS.find(
+                            (option) => option.value === videoGenerationAspectRatioInput
+                          )?.label || "Formato selecionado"}
+                        </div>
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                          {SOCIAL_FORMAT_OPTIONS.map((option) => (
                             <button
                               key={`video-aspect-modal-${option.value}`}
                               type="button"
                               onClick={() => setVideoGenerationAspectRatioInput(option.value)}
                               disabled={isGeneratingAnyVideo}
-                              className={`h-9 rounded-lg border text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                              className={`rounded-xl border px-3 py-2 text-left text-xs transition disabled:cursor-not-allowed disabled:opacity-60 ${
                                 videoGenerationAspectRatioInput === option.value
                                   ? isLight
                                     ? "border-cyan-300 bg-cyan-500 text-white"
-                                    : "border-cyan-400/60 bg-cyan-500/25 text-cyan-100"
+                                    : "border-cyan-400/60 bg-cyan-500/20 text-cyan-100"
                                   : isLight
                                     ? "border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
                                     : "border-gray-700 bg-gray-900/70 text-gray-300 hover:bg-gray-800"
                               }`}
                             >
-                              {option.value}
+                              <p className="font-semibold">{option.label}</p>
+                              <p className="mt-0.5 text-[11px] opacity-80">{option.details}</p>
                             </button>
                           ))}
                         </div>
                       </div>
 
-                      <div>
+                      <div
+                        className={`rounded-xl border p-4 ${
+                          isLight
+                            ? "border-slate-200 bg-slate-100/70"
+                            : "border-gray-700/70 bg-gray-800/55"
+                        }`}
+                      >
                         <label
                           className={`mb-1 block text-[11px] font-semibold uppercase tracking-[0.12em] ${
                             isLight ? "text-slate-500" : "text-gray-300"
                           }`}
                         >
-                          Segundos
+                          Duracao do video
                         </label>
-                        <div className="grid grid-cols-3 gap-2">
-                          {VIDEO_DURATION_OPTIONS.map((seconds) => (
-                            <button
-                              key={`video-duration-modal-${seconds}`}
-                              type="button"
-                              onClick={() => setVideoGenerationDurationInput(seconds)}
-                              disabled={isGeneratingAnyVideo}
-                              className={`h-9 rounded-lg border text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
-                                videoGenerationDurationInput === seconds
-                                  ? isLight
-                                    ? "border-cyan-300 bg-cyan-500 text-white"
-                                    : "border-cyan-400/60 bg-cyan-500/25 text-cyan-100"
-                                  : isLight
-                                    ? "border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
-                                    : "border-gray-700 bg-gray-900/70 text-gray-300 hover:bg-gray-800"
-                              }`}
-                            >
-                              {seconds}s
-                            </button>
-                          ))}
+                        <div
+                          className={`rounded-xl border px-3 py-2 text-xs ${
+                            isLight
+                              ? "border-cyan-300 bg-cyan-50 text-cyan-700"
+                              : "border-cyan-400/45 bg-cyan-500/10 text-cyan-100"
+                          }`}
+                        >
+                          {videoGenerationDurationInput}s selecionados
                         </div>
+                        <div className="mt-2 grid grid-cols-3 gap-2">
+                          {VIDEO_DURATION_OPTIONS.map((seconds) => {
+                            const disabledForResolution =
+                              videoGenerationResolutionInput === "1080p" && seconds !== 8;
+                            return (
+                              <button
+                                key={`video-duration-modal-${seconds}`}
+                                type="button"
+                                onClick={() => {
+                                  if (disabledForResolution) {
+                                    setVideoGenerationResolutionInput("720p");
+                                  }
+                                  setVideoGenerationDurationInput(seconds);
+                                }}
+                                disabled={isGeneratingAnyVideo}
+                                className={`rounded-xl border px-3 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                                  videoGenerationDurationInput === seconds
+                                    ? isLight
+                                      ? "border-cyan-300 bg-cyan-500 text-white"
+                                      : "border-cyan-400/60 bg-cyan-500/20 text-cyan-100"
+                                    : isLight
+                                      ? "border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
+                                      : "border-gray-700 bg-gray-900/70 text-gray-300 hover:bg-gray-800"
+                                }`}
+                              >
+                                {seconds}s
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <p className={`mt-1 text-[11px] ${isLight ? "text-slate-500" : "text-gray-400"}`}>
+                          Para 1080p, a duracao deve ser 8s.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div
+                      className={`rounded-xl border p-4 ${
+                        isLight
+                          ? "border-slate-200 bg-slate-100/70"
+                          : "border-gray-700/70 bg-gray-800/55"
+                      }`}
+                    >
+                      <div className="grid grid-cols-1 gap-4">
+                        <div>
+                          <label
+                            className={`mb-1 block text-[11px] font-semibold uppercase tracking-[0.12em] ${
+                              isLight ? "text-slate-500" : "text-gray-300"
+                            }`}
+                          >
+                            Prompt do video
+                          </label>
+                          <textarea
+                            value={videoGenerationPromptInput}
+                            onChange={(event) => setVideoGenerationPromptInput(event.target.value)}
+                            rows={4}
+                            placeholder="Descreva movimento de camera, acao e clima da cena."
+                            disabled={isGeneratingAnyVideo}
+                            className={`w-full resize-y rounded-xl border px-3 py-2 text-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                              isLight
+                                ? "border-slate-300 bg-white text-slate-900"
+                                : "border-gray-700 bg-gray-900/85 text-gray-100"
+                            } ${imageFocusClass}`}
+                          />
+                        </div>
+                        <div>
+                          <label
+                            className={`mb-1 block text-[11px] font-semibold uppercase tracking-[0.12em] ${
+                              isLight ? "text-slate-500" : "text-gray-300"
+                            }`}
+                          >
+                            Prompt negativo (opcional)
+                          </label>
+                          <input
+                            type="text"
+                            value={videoGenerationNegativePromptInput}
+                            onChange={(event) =>
+                              setVideoGenerationNegativePromptInput(event.target.value)
+                            }
+                            placeholder="Ex: sem distorcoes, sem texto, sem logotipos"
+                            disabled={isGeneratingAnyVideo}
+                            className={`h-10 w-full rounded-xl border px-3 text-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                              isLight
+                                ? "border-slate-300 bg-white text-slate-900"
+                                : "border-gray-700 bg-gray-900/85 text-gray-100"
+                            } ${imageFocusClass}`}
+                          />
+                        </div>
+                        <p className={`text-[11px] leading-relaxed ${isLight ? "text-slate-500" : "text-gray-400"}`}>
+                          O sistema aplica guardrails para preservar produto/embalagem e evitar
+                          alteracoes nao solicitadas.
+                        </p>
                       </div>
                     </div>
 
@@ -3733,9 +4292,13 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                       onClick={() =>
                         void handleGenerateVideo({
                           imageUrl: videoGenerationModalSource.imageUrl,
+                          sourceImageId: videoGenerationModalSource.sourceImageId || null,
                           prompt: videoGenerationPromptInput.trim(),
                           aspectRatio: videoGenerationAspectRatioInput,
                           durationSeconds: videoGenerationDurationInput,
+                          model: videoGenerationModelInput,
+                          resolution: videoGenerationResolutionInput,
+                          negativePrompt: videoGenerationNegativePromptInput,
                           targetKey: videoGenerationModalTargetKey,
                         })
                       }
@@ -3747,41 +4310,15 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                       }`}
                     >
                       <MdMovie className="h-5 w-5" />
-                      {isGeneratingVideoGenerationModal ? "Gerando video..." : "Gerar video"}
+                      {isGeneratingVideoGenerationModal
+                        ? "Gerando video..."
+                        : `Gerar video com ${LATEST_VEO_VERSION_LABEL}`}
                     </button>
 
                     {isGeneratingVideoGenerationModal ? (
                       <p className={`text-xs ${isLight ? "text-slate-500" : "text-gray-400"}`}>
                         Aguarde, estamos processando o video desta imagem...
                       </p>
-                    ) : null}
-
-                    {videoGenerationModalResultUrl ? (
-                      <div className="space-y-2">
-                        <video
-                          src={videoGenerationModalResultUrl}
-                          controls
-                          preload="metadata"
-                          className={`w-full rounded-xl border ${
-                            isLight ? "border-slate-200 bg-white" : "border-gray-700 bg-black/30"
-                          }`}
-                        />
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void handleDownloadVideo(videoGenerationModalResultUrl, "video-modal")
-                          }
-                          disabled={downloadingVideo}
-                          className={`inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border px-3 text-sm font-semibold transition disabled:cursor-not-allowed ${
-                            isLight
-                              ? "border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-                              : "border-gray-600 bg-gray-800 text-gray-100 hover:bg-gray-700 disabled:border-gray-700 disabled:bg-gray-800 disabled:text-gray-500"
-                          }`}
-                        >
-                          <MdDownload className="h-4 w-4" />
-                          {downloadingVideo ? "Baixando video..." : "Baixar video"}
-                        </button>
-                      </div>
                     ) : null}
                   </div>
                 </div>
