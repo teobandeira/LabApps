@@ -309,11 +309,8 @@ function extensionFromVideoContentType(contentType: string): string {
 }
 
 function buildGeneratedVideoBlobPath(extension: string): string {
-  const now = new Date();
-  const datePath = `${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, "0")}/${String(
-    now.getUTCDate()
-  ).padStart(2, "0")}`;
-  return `chatgpt/generated/videos/${datePath}/${crypto.randomUUID()}.${extension}`;
+  const datePath = new Date().toISOString().slice(0, 10);
+  return `chatgpt/generated/${datePath}/${crypto.randomUUID()}.${extension}`;
 }
 
 async function fetchImageBytes(
@@ -488,7 +485,7 @@ async function persistVideoToBlob(params: {
   videoUri: string;
   geminiApiKey: string;
   metadata: VideoStatusMetadata;
-}): Promise<{ id: string; videoUrl: string }> {
+}): Promise<{ id: string; videoUrl: string; warning?: string }> {
   const existing = await prisma.generatedVideo.findUnique({
     where: { operationName: params.operationName },
     select: { id: true },
@@ -501,26 +498,38 @@ async function persistVideoToBlob(params: {
     };
   }
 
-  const blobToken = process.env.BLOB_READ_WRITE_TOKEN?.trim();
-  if (!blobToken) {
-    throw new Error("BLOB_READ_WRITE_TOKEN nao configurado.");
-  }
-
   const fetchedVideo = await fetchGeminiVideo(params.videoUri, params.geminiApiKey);
   const extension = extensionFromVideoContentType(fetchedVideo.mimeType);
-  const blobPath = buildGeneratedVideoBlobPath(extension);
+  let blobPath = buildGeneratedVideoBlobPath(extension);
+  let blobUrl = buildProxyVideoUrl(params.videoUri);
+  let persistenceWarning = "";
 
-  const blobBody = new Blob([Buffer.from(fetchedVideo.bytes)], {
-    type: fetchedVideo.mimeType,
-  });
+  const blobToken = process.env.BLOB_READ_WRITE_TOKEN?.trim();
+  if (blobToken) {
+    const blobBody = new Blob([Buffer.from(fetchedVideo.bytes)], {
+      type: fetchedVideo.mimeType,
+    });
 
-  const blob = await put(blobPath, blobBody, {
-    access: "public",
-    addRandomSuffix: false,
-    cacheControlMaxAge: 31536000,
-    contentType: fetchedVideo.mimeType,
-    token: blobToken,
-  });
+    try {
+      const blob = await put(blobPath, blobBody, {
+        access: "public",
+        addRandomSuffix: false,
+        cacheControlMaxAge: 31536000,
+        contentType: fetchedVideo.mimeType,
+        token: blobToken,
+      });
+
+      blobPath = blob.pathname;
+      blobUrl = blob.url;
+    } catch (error) {
+      persistenceWarning =
+        error instanceof Error
+          ? `Falha ao salvar no Blob, mantendo persistencia por proxy: ${error.message}`
+          : "Falha ao salvar no Blob, mantendo persistencia por proxy.";
+    }
+  } else {
+    persistenceWarning = "BLOB_READ_WRITE_TOKEN nao configurado. Video persistido por proxy.";
+  }
 
   try {
     const record = await prisma.generatedVideo.create({
@@ -531,8 +540,8 @@ async function persistVideoToBlob(params: {
         aspectRatio: params.metadata.aspectRatio,
         durationSeconds: params.metadata.durationSeconds,
         resolution: params.metadata.resolution,
-        blobUrl: blob.url,
-        blobPath: blob.pathname,
+        blobUrl,
+        blobPath,
         mimeType: fetchedVideo.mimeType,
         bytes: fetchedVideo.bytes.byteLength,
       },
@@ -542,6 +551,7 @@ async function persistVideoToBlob(params: {
     return {
       id: record.id,
       videoUrl: `/api/chatgpt/generated-video/${record.id}`,
+      warning: persistenceWarning || undefined,
     };
   } catch {
     const duplicated = await prisma.generatedVideo.findUnique({
@@ -553,6 +563,7 @@ async function persistVideoToBlob(params: {
       return {
         id: duplicated.id,
         videoUrl: `/api/chatgpt/generated-video/${duplicated.id}`,
+        warning: persistenceWarning || undefined,
       };
     }
 
@@ -883,6 +894,7 @@ async function handleVideoStatus(
       videoId: persistedVideo.id,
       videoUrl: persistedVideo.videoUrl,
       persisted: true,
+      warning: persistedVideo.warning,
     };
     return NextResponse.json(response);
   } catch (persistError) {

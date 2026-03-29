@@ -85,14 +85,9 @@ export async function GET(
     }
 
     const blobToken = process.env.BLOB_READ_WRITE_TOKEN;
-    if (!blobToken) {
-      return NextResponse.json(
-        { error: "BLOB_READ_WRITE_TOKEN nao configurado." },
-        { status: 500 }
-      );
-    }
-
-    const blobReadResult = await readFromBlob(videoRecord.blobPath, blobToken);
+    const blobReadResult = blobToken
+      ? await readFromBlob(videoRecord.blobPath, blobToken)
+      : null;
     let contentType = videoRecord.mimeType || "video/mp4";
     let stream: ReadableStream<Uint8Array> | null = null;
 
@@ -100,7 +95,17 @@ export async function GET(
       contentType = blobReadResult.contentType || contentType;
       stream = blobReadResult.stream;
     } else {
-      const upstreamResponse = await fetch(videoRecord.blobUrl, { cache: "no-store" });
+      let fallbackUrl: string;
+      try {
+        fallbackUrl = new URL(videoRecord.blobUrl, request.nextUrl.origin).toString();
+      } catch {
+        return NextResponse.json(
+          { error: "URL de fallback do video e invalida." },
+          { status: 500 }
+        );
+      }
+
+      const upstreamResponse = await fetch(fallbackUrl, { cache: "no-store" });
 
       if (!upstreamResponse.ok) {
         return NextResponse.json(
