@@ -23,8 +23,10 @@ import {
   MdClose,
   MdDone,
   MdDownload,
+  MdFullscreen,
   MdImage,
   MdMenu,
+  MdMovie,
   MdMoreVert,
   MdStop,
 } from "react-icons/md";
@@ -96,6 +98,19 @@ type CodeToken = {
   type: CodeTokenType;
 };
 
+type VideoAspectRatio = "16:9" | "9:16";
+type VideoDurationSeconds = 4 | 6 | 8;
+
+type VideoGenerationModalSource = {
+  targetKey: string;
+  imageUrl: string;
+  prompt: string;
+  aspectRatio: VideoAspectRatio;
+  durationSeconds: VideoDurationSeconds;
+  title: string;
+  subtitle: string;
+};
+
 type ChatStreamChunk =
   | {
       type: "delta";
@@ -122,6 +137,11 @@ const IMAGE_SIZE_OPTIONS: Array<{ label: string; value: ImageSize }> = [
   { label: "Paisagem 1536x1024", value: "1536x1024" },
   { label: "Retrato 1024x1536", value: "1024x1536" },
 ];
+const VIDEO_ASPECT_RATIO_OPTIONS: Array<{ label: string; value: VideoAspectRatio }> = [
+  { label: "Paisagem 16:9", value: "16:9" },
+  { label: "Vertical 9:16", value: "9:16" },
+];
+const VIDEO_DURATION_OPTIONS: VideoDurationSeconds[] = [4, 6, 8];
 const CHAT_TEXT_MODEL_LABEL = "gpt-5.2";
 const IMAGE_MODEL_LABEL = "chatgpt-image-latest";
 const THEME_STORAGE_KEY = "chatgpt-theme-mode";
@@ -381,6 +401,27 @@ function formatCreatedAt(value: string): string {
     dateStyle: "short",
     timeStyle: "short",
   }).format(parsedDate);
+}
+
+function getVideoAspectRatioFromImageSize(sizeValue?: string | null): VideoAspectRatio {
+  const cleanedSize = typeof sizeValue === "string" ? sizeValue.trim().toLowerCase() : "";
+  if (!cleanedSize.includes("x")) {
+    return "16:9";
+  }
+
+  const [widthRaw, heightRaw] = cleanedSize.split("x");
+  const width = Number.parseInt(widthRaw || "", 10);
+  const height = Number.parseInt(heightRaw || "", 10);
+
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return "16:9";
+  }
+
+  return height > width ? "9:16" : "16:9";
+}
+
+function getHistoryVideoTargetKey(historyId: string): string {
+  return `history:${historyId}`;
 }
 
 function truncateText(value: string, maxLength: number): string {
@@ -899,6 +940,13 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const [sourceImage, setSourceImage] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [downloadingImage, setDownloadingImage] = useState(false);
+  const [downloadingVideo, setDownloadingVideo] = useState(false);
+  const [videoGenerationTarget, setVideoGenerationTarget] = useState<string | null>(null);
+  const [generatedVideoUrl, setGeneratedVideoUrl] = useState("");
+  const [generatedVideoByHistoryId, setGeneratedVideoByHistoryId] = useState<
+    Record<string, string>
+  >({});
+  const [latestImagePrompt, setLatestImagePrompt] = useState("");
   const [loadingVerse, setLoadingVerse] = useState<string>(() => getRandomBibleVerse());
   const [isTopMenuOpen, setIsTopMenuOpen] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>("dark");
@@ -908,6 +956,13 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const [generatedHistory, setGeneratedHistory] = useState<GeneratedImageHistoryItem[]>([]);
   const [loadingGeneratedHistory, setLoadingGeneratedHistory] = useState(false);
   const [generatedHistoryWarning, setGeneratedHistoryWarning] = useState("");
+  const [videoGenerationModalSource, setVideoGenerationModalSource] =
+    useState<VideoGenerationModalSource | null>(null);
+  const [videoGenerationPromptInput, setVideoGenerationPromptInput] = useState("");
+  const [videoGenerationAspectRatioInput, setVideoGenerationAspectRatioInput] =
+    useState<VideoAspectRatio>("16:9");
+  const [videoGenerationDurationInput, setVideoGenerationDurationInput] =
+    useState<VideoDurationSeconds>(6);
   const [historyLightboxIndex, setHistoryLightboxIndex] = useState<number | null>(null);
   const [previewLightboxImageUrl, setPreviewLightboxImageUrl] = useState<string | null>(null);
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
@@ -931,6 +986,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const chatStreamAbortRef = useRef<AbortController | null>(null);
   const chatSyncTimeoutRef = useRef<number | null>(null);
   const shouldAutoScrollRef = useRef(true);
+  const historyVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
 
   const canSend =
     (mode === "image"
@@ -1240,6 +1296,11 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
             .slice(-20)
         : [];
     const userMessageParts: string[] = [];
+
+    if (mode === "image") {
+      setLatestImagePrompt(cleanPrompt);
+      setGeneratedVideoUrl("");
+    }
 
     if (cleanPrompt) {
       userMessageParts.push(cleanPrompt);
@@ -1663,6 +1724,8 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       : null;
   const latestGenerated = latestSessionGenerated;
   const isLight = theme === "light";
+  const isGeneratingAnyVideo = videoGenerationTarget !== null;
+  const isGeneratingLatestVideo = videoGenerationTarget === "latest";
   const hasReturnedAssistantMessages = messages.some(
     (message) =>
       message.role === "assistant" &&
@@ -1681,6 +1744,13 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
     return () => window.clearInterval(intervalId);
   }, [mode, loading]);
+
+  useEffect(() => {
+    if (mode !== "image") {
+      return;
+    }
+    setGeneratedVideoUrl("");
+  }, [mode, latestGenerated?.imageId, latestGenerated?.imageUrl]);
 
   useEffect(() => {
     if (historyLightboxIndex === null && !previewLightboxImageUrl) {
@@ -1724,6 +1794,26 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     window.addEventListener("keydown", handleLightboxKeyboard);
     return () => window.removeEventListener("keydown", handleLightboxKeyboard);
   }, [historyLightboxIndex, previewLightboxImageUrl, generatedHistory.length]);
+
+  useEffect(() => {
+    if (!videoGenerationModalSource) {
+      return;
+    }
+
+    const activeTargetKey = videoGenerationModalSource.targetKey;
+
+    function handleVideoModalKeyboard(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") {
+        if (videoGenerationTarget === activeTargetKey) {
+          return;
+        }
+        setVideoGenerationModalSource(null);
+      }
+    }
+
+    window.addEventListener("keydown", handleVideoModalKeyboard);
+    return () => window.removeEventListener("keydown", handleVideoModalKeyboard);
+  }, [videoGenerationModalSource, videoGenerationTarget]);
 
   const mainClass = `font-(family-name:--font-montserrat) min-h-screen [&_button:enabled]:cursor-pointer [&_a]:cursor-pointer ${
     isLight ? "bg-slate-100 text-slate-900" : "bg-gray-900 text-white"
@@ -1785,6 +1875,17 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       : null;
   const historyLightboxCaption =
     historyLightboxItem?.revisedPrompt?.trim() || historyLightboxItem?.prompt?.trim() || "";
+  const videoGenerationModalTargetKey = videoGenerationModalSource
+    ? videoGenerationModalSource.targetKey
+    : "";
+  const videoGenerationModalResultUrl = videoGenerationModalTargetKey
+    ? videoGenerationModalTargetKey === "latest"
+      ? generatedVideoUrl
+      : generatedVideoByHistoryId[videoGenerationModalTargetKey] || ""
+    : "";
+  const isGeneratingVideoGenerationModal =
+    videoGenerationModalTargetKey.length > 0 &&
+    videoGenerationTarget === videoGenerationModalTargetKey;
 
   function openHistoryLightbox(index: number) {
     setPreviewLightboxImageUrl(null);
@@ -1816,6 +1917,52 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
   function closePreviewLightbox() {
     setPreviewLightboxImageUrl(null);
+  }
+
+  function openVideoGenerationModal(source: VideoGenerationModalSource) {
+    setVideoGenerationModalSource(source);
+    setVideoGenerationPromptInput(source.prompt);
+    setVideoGenerationAspectRatioInput(source.aspectRatio);
+    setVideoGenerationDurationInput(source.durationSeconds);
+    setError("");
+  }
+
+  function openHistoryVideoModal(item: GeneratedImageHistoryItem) {
+    openVideoGenerationModal({
+      targetKey: getHistoryVideoTargetKey(item.id),
+      imageUrl: item.imageUrl,
+      prompt: item.revisedPrompt?.trim() || item.prompt.trim() || "",
+      aspectRatio: getVideoAspectRatioFromImageSize(item.size),
+      durationSeconds: 6,
+      title: "Gerar video do historico",
+      subtitle: `Imagem criada em ${formatCreatedAt(item.createdAt)}`,
+    });
+  }
+
+  function openLatestVideoModal() {
+    if (!latestGenerated?.imageUrl) {
+      return;
+    }
+
+    openVideoGenerationModal({
+      targetKey: "latest",
+      imageUrl: latestGenerated.imageUrl,
+      prompt:
+        latestImagePrompt.trim() ||
+        prompt.trim() ||
+        "Transforme esta imagem em um video cinematografico curto com movimento suave.",
+      aspectRatio: getVideoAspectRatioFromImageSize(imageSize),
+      durationSeconds: 6,
+      title: "Gerar video da imagem atual",
+      subtitle: "Configure prompt, formato e duracao antes de gerar.",
+    });
+  }
+
+  function closeVideoGenerationModal() {
+    if (isGeneratingVideoGenerationModal) {
+      return;
+    }
+    setVideoGenerationModalSource(null);
   }
 
   function syncActiveChatSession(nextMessages: ChatMessage[]) {
@@ -2599,6 +2746,205 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     }
   }
 
+  async function handleDownloadVideo(videoUrl: string, filenamePrefix = "video-gerado") {
+    if (!videoUrl || downloadingVideo) {
+      return;
+    }
+
+    try {
+      setDownloadingVideo(true);
+      setError("");
+
+      const response = await fetch(videoUrl, {
+        method: "GET",
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        throw new Error("Falha ao baixar video.");
+      }
+
+      const blob = await response.blob();
+      const mimeType = blob.type.toLowerCase();
+      const extension = mimeType.includes("webm")
+        ? "webm"
+        : mimeType.includes("quicktime")
+          ? "mov"
+          : "mp4";
+
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = `${filenamePrefix}-${Date.now()}.${extension}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(blobUrl);
+    } catch {
+      setError("Nao foi possivel baixar o video agora.");
+    } finally {
+      setDownloadingVideo(false);
+    }
+  }
+
+  async function handleHistoryVideoFullscreen(targetKey: string, videoUrl: string) {
+    const videoElement = historyVideoRefs.current[targetKey];
+
+    if (!videoElement) {
+      window.open(videoUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    try {
+      if (typeof videoElement.requestFullscreen === "function") {
+        await videoElement.requestFullscreen();
+        return;
+      }
+
+      const webkitVideoElement = videoElement as HTMLVideoElement & {
+        webkitRequestFullscreen?: () => Promise<void> | void;
+        webkitEnterFullscreen?: () => void;
+      };
+
+      if (typeof webkitVideoElement.webkitRequestFullscreen === "function") {
+        await Promise.resolve(webkitVideoElement.webkitRequestFullscreen());
+        return;
+      }
+
+      if (typeof webkitVideoElement.webkitEnterFullscreen === "function") {
+        webkitVideoElement.webkitEnterFullscreen();
+        return;
+      }
+
+      window.open(videoUrl, "_blank", "noopener,noreferrer");
+    } catch {
+      setError("Nao foi possivel abrir o video em tela cheia.");
+    }
+  }
+
+  async function handleGenerateVideo(options?: {
+    imageUrl?: string;
+    prompt?: string;
+    aspectRatio?: VideoAspectRatio;
+    durationSeconds?: VideoDurationSeconds;
+    targetKey?: string;
+  }) {
+    const targetKey = options?.targetKey?.trim() || "latest";
+    const imageUrl = options?.imageUrl || latestGenerated?.imageUrl;
+    if (!imageUrl || videoGenerationTarget) {
+      return;
+    }
+
+    try {
+      setVideoGenerationTarget(targetKey);
+      if (targetKey === "latest") {
+        setGeneratedVideoUrl("");
+      } else {
+        setGeneratedVideoByHistoryId((current) => ({
+          ...current,
+          [targetKey]: "",
+        }));
+      }
+      setError("");
+
+      const startResponse = await fetch("/api/chatgpt/generate-video", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageUrl,
+          prompt:
+            options?.prompt?.trim() ||
+            latestImagePrompt.trim() ||
+            prompt.trim() ||
+            "Transforme esta imagem em um video cinematografico curto com movimento suave.",
+          aspectRatio: options?.aspectRatio === "9:16" ? "9:16" : "16:9",
+          durationSeconds: options?.durationSeconds || 6,
+          resolution: "720p",
+          model: "veo-3.1-fast-generate-preview",
+        }),
+      });
+
+      const startPayload = (await startResponse.json()) as {
+        operationName?: string;
+        error?: string;
+      };
+
+      if (!startResponse.ok) {
+        throw new Error(startPayload.error || "Falha ao iniciar geracao de video.");
+      }
+
+      const operationName =
+        typeof startPayload.operationName === "string" ? startPayload.operationName : "";
+      if (!operationName) {
+        throw new Error("Gemini nao retornou a operacao de video.");
+      }
+
+      const startedAt = Date.now();
+      const timeoutMs = 5 * 60 * 1000;
+
+      while (Date.now() - startedAt < timeoutMs) {
+        await new Promise((resolve) => window.setTimeout(resolve, 8000));
+
+        const statusResponse = await fetch(
+          `/api/chatgpt/generate-video?operationName=${encodeURIComponent(operationName)}`,
+          {
+            method: "GET",
+            cache: "no-store",
+          }
+        );
+
+        const statusPayload = (await statusResponse.json().catch(() => null)) as
+          | {
+              done?: boolean;
+              videoUrl?: string;
+              error?: string;
+            }
+          | null;
+
+        if (!statusResponse.ok) {
+          throw new Error(
+            statusPayload?.error ||
+              `Falha ao consultar status do video (HTTP ${statusResponse.status}).`
+          );
+        }
+
+        if (statusPayload?.done) {
+          const nextVideoUrl =
+            typeof statusPayload.videoUrl === "string" ? statusPayload.videoUrl : "";
+          if (!nextVideoUrl) {
+            throw new Error("Gemini concluiu, mas nao retornou video.");
+          }
+          if (targetKey === "latest") {
+            setGeneratedVideoUrl(nextVideoUrl);
+            if (latestGenerated?.imageId) {
+              const latestHistoryVideoKey = getHistoryVideoTargetKey(latestGenerated.imageId);
+              setGeneratedVideoByHistoryId((current) => ({
+                ...current,
+                [latestHistoryVideoKey]: nextVideoUrl,
+              }));
+            }
+          } else {
+            setGeneratedVideoByHistoryId((current) => ({
+              ...current,
+              [targetKey]: nextVideoUrl,
+            }));
+          }
+          return;
+        }
+      }
+
+      throw new Error("A geracao de video excedeu o tempo limite. Tente novamente.");
+    } catch (videoError) {
+      const message =
+        videoError instanceof Error
+          ? videoError.message
+          : "Nao foi possivel gerar video agora.";
+      setError(message);
+    } finally {
+      setVideoGenerationTarget(null);
+    }
+  }
+
   if (mode === "image") {
     return (
       <main className={mainClass}>
@@ -2742,19 +3088,59 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                 )}
 
                 {latestGenerated?.imageUrl ? (
-                  <button
-                    type="button"
-                    onClick={handleDownloadImage}
-                    disabled={downloadingImage}
-                    className={`mt-3 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed ${
-                      isLight
-                        ? "border border-violet-300 bg-violet-500 text-white hover:bg-violet-600 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
-                        : "border border-purple-400/45 bg-purple-500/15 text-purple-100 hover:bg-purple-500/25 disabled:border-gray-600 disabled:bg-gray-700 disabled:text-gray-400"
-                    }`}
-                  >
-                    <MdDownload className="h-5 w-5" />
-                    {downloadingImage ? "Baixando..." : "Download da imagem"}
-                  </button>
+                  <div className="mt-3 space-y-2">
+                    <button
+                      type="button"
+                      onClick={handleDownloadImage}
+                      disabled={downloadingImage}
+                      className={`inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed ${
+                        isLight
+                          ? "border border-violet-300 bg-violet-500 text-white hover:bg-violet-600 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
+                          : "border border-purple-400/45 bg-purple-500/15 text-purple-100 hover:bg-purple-500/25 disabled:border-gray-600 disabled:bg-gray-700 disabled:text-gray-400"
+                      }`}
+                    >
+                      <MdDownload className="h-5 w-5" />
+                      {downloadingImage ? "Baixando..." : "Download da imagem"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={openLatestVideoModal}
+                      disabled={isGeneratingAnyVideo}
+                      className={`inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed ${
+                        isLight
+                          ? "border border-cyan-300 bg-cyan-500 text-white hover:bg-cyan-600 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
+                          : "border border-cyan-400/45 bg-cyan-500/15 text-cyan-100 hover:bg-cyan-500/25 disabled:border-gray-600 disabled:bg-gray-700 disabled:text-gray-400"
+                      }`}
+                    >
+                      <MdMovie className="h-5 w-5" />
+                      {isGeneratingLatestVideo ? "Gerando video..." : "Gerar video"}
+                    </button>
+                    {generatedVideoUrl ? (
+                      <div className="space-y-2">
+                        <video
+                          src={generatedVideoUrl}
+                          controls
+                          preload="metadata"
+                          className={`w-full rounded-2xl border ${
+                            isLight ? "border-slate-200 bg-white" : "border-gray-700 bg-black/30"
+                          }`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void handleDownloadVideo(generatedVideoUrl, "video-imagem")}
+                          disabled={downloadingVideo}
+                          className={`inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border px-3 text-sm font-semibold transition disabled:cursor-not-allowed ${
+                            isLight
+                              ? "border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                              : "border-gray-600 bg-gray-800 text-gray-100 hover:bg-gray-700 disabled:border-gray-700 disabled:bg-gray-800 disabled:text-gray-500"
+                          }`}
+                        >
+                          <MdDownload className="h-4 w-4" />
+                          {downloadingVideo ? "Baixando video..." : "Baixar video"}
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
                 ) : null}
               </article>
 
@@ -2913,19 +3299,59 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                   </div>
                 )}
                 {latestGenerated?.imageUrl ? (
-                  <button
-                    type="button"
-                    onClick={handleDownloadImage}
-                    disabled={downloadingImage}
-                    className={`mt-3 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed ${
-                      isLight
-                        ? "border border-violet-300 bg-violet-500 text-white hover:bg-violet-600 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
-                        : "border border-purple-400/45 bg-purple-500/15 text-purple-100 hover:bg-purple-500/25 disabled:border-gray-600 disabled:bg-gray-700 disabled:text-gray-400"
-                    }`}
-                  >
-                    <MdDownload className="h-5 w-5" />
-                    {downloadingImage ? "Baixando..." : "Download da imagem"}
-                  </button>
+                  <div className="mt-3 space-y-2">
+                    <button
+                      type="button"
+                      onClick={handleDownloadImage}
+                      disabled={downloadingImage}
+                      className={`inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed ${
+                        isLight
+                          ? "border border-violet-300 bg-violet-500 text-white hover:bg-violet-600 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
+                          : "border border-purple-400/45 bg-purple-500/15 text-purple-100 hover:bg-purple-500/25 disabled:border-gray-600 disabled:bg-gray-700 disabled:text-gray-400"
+                      }`}
+                    >
+                      <MdDownload className="h-5 w-5" />
+                      {downloadingImage ? "Baixando..." : "Download da imagem"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={openLatestVideoModal}
+                      disabled={isGeneratingAnyVideo}
+                      className={`inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed ${
+                        isLight
+                          ? "border border-cyan-300 bg-cyan-500 text-white hover:bg-cyan-600 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
+                          : "border border-cyan-400/45 bg-cyan-500/15 text-cyan-100 hover:bg-cyan-500/25 disabled:border-gray-600 disabled:bg-gray-700 disabled:text-gray-400"
+                      }`}
+                    >
+                      <MdMovie className="h-5 w-5" />
+                      {isGeneratingLatestVideo ? "Gerando video..." : "Gerar video"}
+                    </button>
+                    {generatedVideoUrl ? (
+                      <div className="space-y-2">
+                        <video
+                          src={generatedVideoUrl}
+                          controls
+                          preload="metadata"
+                          className={`w-full rounded-2xl border ${
+                            isLight ? "border-slate-200 bg-white" : "border-gray-700 bg-black/30"
+                          }`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void handleDownloadVideo(generatedVideoUrl, "video-imagem")}
+                          disabled={downloadingVideo}
+                          className={`inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border px-3 text-sm font-semibold transition disabled:cursor-not-allowed ${
+                            isLight
+                              ? "border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                              : "border-gray-600 bg-gray-800 text-gray-100 hover:bg-gray-700 disabled:border-gray-700 disabled:bg-gray-800 disabled:text-gray-500"
+                          }`}
+                        >
+                          <MdDownload className="h-4 w-4" />
+                          {downloadingVideo ? "Baixando video..." : "Baixar video"}
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
                 ) : null}
               </article>
 
@@ -2947,34 +3373,103 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
             ) : generatedHistory.length > 0 ? (
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
                 {generatedHistory.map((item, index) => (
-                  <article
-                    key={`thumb-${item.id}-${index}`}
-                    className={`overflow-hidden rounded-xl border ${
-                      isLight ? "border-slate-200 bg-white" : "border-gray-700/80 bg-gray-900/70"
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => openHistoryLightbox(index)}
-                      className="block w-full text-left"
-                      aria-label={`Abrir imagem ${index + 1} no lightbox`}
-                    >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={item.imageUrl}
-                        alt={`Geracao ${index + 1}`}
-                        className="aspect-square h-auto w-full object-cover transition hover:opacity-90"
-                        loading="lazy"
-                      />
-                    </button>
-                    <p
-                      className={`px-2 py-1 text-[10px] ${
-                        isLight ? "text-slate-600" : "text-gray-300"
-                      }`}
-                    >
-                      {formatCreatedAt(item.createdAt)}
-                    </p>
-                  </article>
+                  (() => {
+                    const historyVideoKey = getHistoryVideoTargetKey(item.id);
+                    const historyVideoUrl = generatedVideoByHistoryId[historyVideoKey] || "";
+
+                    return (
+                      <article
+                        key={`thumb-${item.id}-${index}`}
+                        className={`overflow-hidden rounded-xl border ${
+                          isLight
+                            ? "border-slate-200 bg-white"
+                            : "border-gray-700/80 bg-gray-900/70"
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => openHistoryLightbox(index)}
+                          className="block w-full text-left"
+                          aria-label={`Abrir imagem ${index + 1} no lightbox`}
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={item.imageUrl}
+                            alt={`Geracao ${index + 1}`}
+                            className="aspect-square h-auto w-full object-cover transition hover:opacity-90"
+                            loading="lazy"
+                          />
+                        </button>
+                        <div className="space-y-1 px-2 py-1.5">
+                          <p
+                            className={`text-[10px] ${isLight ? "text-slate-600" : "text-gray-300"}`}
+                          >
+                            {formatCreatedAt(item.createdAt)}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => openHistoryVideoModal(item)}
+                            className={`inline-flex h-7 w-full items-center justify-center gap-1 rounded-lg border px-2 text-[10px] font-semibold transition ${
+                              isLight
+                                ? "border-cyan-300 bg-cyan-500 text-white hover:bg-cyan-600"
+                                : "border-cyan-400/45 bg-cyan-500/15 text-cyan-100 hover:bg-cyan-500/25"
+                            }`}
+                          >
+                            <MdMovie className="h-3.5 w-3.5" />
+                            Gerar video
+                          </button>
+                          {historyVideoUrl ? (
+                            <div className="space-y-1">
+                              <video
+                                ref={(element) => {
+                                  historyVideoRefs.current[historyVideoKey] = element;
+                                }}
+                                src={historyVideoUrl}
+                                controls
+                                preload="metadata"
+                                className={`w-full rounded-lg border ${
+                                  isLight
+                                    ? "border-slate-300 bg-slate-100"
+                                    : "border-gray-600 bg-black/40"
+                                }`}
+                              />
+                              <div className="grid grid-cols-2 gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    void handleDownloadVideo(historyVideoUrl, `video-historico-${item.id}`)
+                                  }
+                                  disabled={downloadingVideo}
+                                  className={`inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-2 text-[10px] font-semibold transition disabled:cursor-not-allowed ${
+                                    isLight
+                                      ? "border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                                      : "border-gray-600 bg-gray-800 text-gray-100 hover:bg-gray-700 disabled:border-gray-700 disabled:bg-gray-800 disabled:text-gray-500"
+                                  }`}
+                                >
+                                  <MdDownload className="h-3.5 w-3.5" />
+                                  Baixar
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    void handleHistoryVideoFullscreen(historyVideoKey, historyVideoUrl)
+                                  }
+                                  className={`inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-2 text-[10px] font-semibold transition ${
+                                    isLight
+                                      ? "border-cyan-300 bg-cyan-500 text-white hover:bg-cyan-600"
+                                      : "border-cyan-400/45 bg-cyan-500/15 text-cyan-100 hover:bg-cyan-500/25"
+                                  }`}
+                                >
+                                  <MdFullscreen className="h-3.5 w-3.5" />
+                                  Fullscreen
+                                </button>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      </article>
+                    );
+                  })()
                 ))}
               </div>
             ) : (
@@ -3062,10 +3557,24 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                   <p className={`text-xs ${isLight ? "text-slate-600" : "text-gray-300"}`}>
                     Criada em {formatCreatedAt(historyLightboxItem.createdAt)}
                   </p>
-                  <p className={`text-xs ${isLight ? "text-slate-500" : "text-gray-400"}`}>
-                    {historyLightboxIndex !== null ? historyLightboxIndex + 1 : 1}/
-                    {generatedHistory.length}
-                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openHistoryVideoModal(historyLightboxItem)}
+                      className={`inline-flex h-8 items-center justify-center gap-1 rounded-lg border px-2 text-[11px] font-semibold transition ${
+                        isLight
+                          ? "border-cyan-300 bg-cyan-500 text-white hover:bg-cyan-600"
+                          : "border-cyan-400/45 bg-cyan-500/15 text-cyan-100 hover:bg-cyan-500/25"
+                      }`}
+                    >
+                      <MdMovie className="h-4 w-4" />
+                      Gerar video
+                    </button>
+                    <p className={`text-xs ${isLight ? "text-slate-500" : "text-gray-400"}`}>
+                      {historyLightboxIndex !== null ? historyLightboxIndex + 1 : 1}/
+                      {generatedHistory.length}
+                    </p>
+                  </div>
                 </div>
                 {historyLightboxCaption ? (
                   <p
@@ -3074,6 +3583,208 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                     {historyLightboxCaption}
                   </p>
                 ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          {videoGenerationModalSource ? (
+            <div
+              className="fixed inset-0 z-[95] flex items-start justify-center overflow-y-auto overscroll-contain bg-black/85 p-3 sm:p-6"
+              onClick={closeVideoGenerationModal}
+            >
+              <div
+                className={`relative my-2 max-h-[calc(100dvh-1.5rem)] w-full max-w-5xl overflow-y-auto rounded-2xl border p-4 shadow-2xl sm:my-4 sm:max-h-[calc(100dvh-2rem)] sm:p-5 ${
+                  isLight ? "border-slate-200 bg-white" : "border-gray-700 bg-gray-900"
+                }`}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  onClick={closeVideoGenerationModal}
+                  disabled={isGeneratingVideoGenerationModal}
+                  className={`absolute top-3 right-3 inline-flex h-9 w-9 items-center justify-center rounded-full transition disabled:cursor-not-allowed ${
+                    isLight
+                      ? "bg-slate-200 text-slate-700 hover:bg-slate-300 disabled:bg-slate-200/70 disabled:text-slate-400"
+                      : "bg-gray-800 text-gray-200 hover:bg-gray-700 disabled:bg-gray-800/70 disabled:text-gray-500"
+                  }`}
+                  aria-label="Fechar modal de geracao de video"
+                >
+                  <MdClose className="h-4 w-4" />
+                </button>
+
+                <div className="mb-3 pr-10">
+                  <p
+                    className={`text-xs font-semibold uppercase tracking-[0.12em] ${
+                      isLight ? "text-cyan-600" : "text-cyan-300"
+                    }`}
+                  >
+                    {videoGenerationModalSource.title}
+                  </p>
+                  <p className={`text-xs ${isLight ? "text-slate-500" : "text-gray-400"}`}>
+                    {videoGenerationModalSource.subtitle}
+                  </p>
+                  <p className={`text-xs ${isLight ? "text-slate-500" : "text-gray-400"}`}>
+                    Qualidade fixa: baixa (720p)
+                  </p>
+                </div>
+
+                <div className="grid gap-4 lg:grid-cols-[minmax(280px,0.85fr)_minmax(360px,1.15fr)]">
+                  <div
+                    className={`overflow-hidden rounded-xl border ${
+                      isLight ? "border-slate-200 bg-slate-100" : "border-gray-700 bg-black/35"
+                    }`}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={videoGenerationModalSource.imageUrl}
+                      alt="Imagem do historico para gerar video"
+                      className="max-h-[420px] w-full object-contain"
+                    />
+                  </div>
+
+                  <div className="space-y-3">
+                    <div>
+                      <label
+                        className={`mb-1 block text-[11px] font-semibold uppercase tracking-[0.12em] ${
+                          isLight ? "text-slate-500" : "text-gray-300"
+                        }`}
+                      >
+                        Prompt do video
+                      </label>
+                      <textarea
+                        value={videoGenerationPromptInput}
+                        onChange={(event) => setVideoGenerationPromptInput(event.target.value)}
+                        rows={3}
+                        disabled={isGeneratingAnyVideo}
+                        className={`w-full resize-y rounded-xl border px-3 py-2 text-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                          isLight
+                            ? "border-slate-300 bg-white text-slate-900"
+                            : "border-gray-700 bg-gray-900/85 text-gray-100"
+                        } ${imageFocusClass}`}
+                      />
+                    </div>
+
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <div>
+                        <label
+                          className={`mb-1 block text-[11px] font-semibold uppercase tracking-[0.12em] ${
+                            isLight ? "text-slate-500" : "text-gray-300"
+                          }`}
+                        >
+                          Formato
+                        </label>
+                        <div className="grid grid-cols-2 gap-2">
+                          {VIDEO_ASPECT_RATIO_OPTIONS.map((option) => (
+                            <button
+                              key={`video-aspect-modal-${option.value}`}
+                              type="button"
+                              onClick={() => setVideoGenerationAspectRatioInput(option.value)}
+                              disabled={isGeneratingAnyVideo}
+                              className={`h-9 rounded-lg border text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                                videoGenerationAspectRatioInput === option.value
+                                  ? isLight
+                                    ? "border-cyan-300 bg-cyan-500 text-white"
+                                    : "border-cyan-400/60 bg-cyan-500/25 text-cyan-100"
+                                  : isLight
+                                    ? "border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
+                                    : "border-gray-700 bg-gray-900/70 text-gray-300 hover:bg-gray-800"
+                              }`}
+                            >
+                              {option.value}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label
+                          className={`mb-1 block text-[11px] font-semibold uppercase tracking-[0.12em] ${
+                            isLight ? "text-slate-500" : "text-gray-300"
+                          }`}
+                        >
+                          Segundos
+                        </label>
+                        <div className="grid grid-cols-3 gap-2">
+                          {VIDEO_DURATION_OPTIONS.map((seconds) => (
+                            <button
+                              key={`video-duration-modal-${seconds}`}
+                              type="button"
+                              onClick={() => setVideoGenerationDurationInput(seconds)}
+                              disabled={isGeneratingAnyVideo}
+                              className={`h-9 rounded-lg border text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                                videoGenerationDurationInput === seconds
+                                  ? isLight
+                                    ? "border-cyan-300 bg-cyan-500 text-white"
+                                    : "border-cyan-400/60 bg-cyan-500/25 text-cyan-100"
+                                  : isLight
+                                    ? "border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
+                                    : "border-gray-700 bg-gray-900/70 text-gray-300 hover:bg-gray-800"
+                              }`}
+                            >
+                              {seconds}s
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void handleGenerateVideo({
+                          imageUrl: videoGenerationModalSource.imageUrl,
+                          prompt: videoGenerationPromptInput.trim(),
+                          aspectRatio: videoGenerationAspectRatioInput,
+                          durationSeconds: videoGenerationDurationInput,
+                          targetKey: videoGenerationModalTargetKey,
+                        })
+                      }
+                      disabled={isGeneratingAnyVideo}
+                      className={`inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition disabled:cursor-not-allowed ${
+                        isLight
+                          ? "border-cyan-300 bg-cyan-500 text-white hover:bg-cyan-600 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
+                          : "border-cyan-400/45 bg-cyan-500/15 text-cyan-100 hover:bg-cyan-500/25 disabled:border-gray-600 disabled:bg-gray-700 disabled:text-gray-400"
+                      }`}
+                    >
+                      <MdMovie className="h-5 w-5" />
+                      {isGeneratingVideoGenerationModal ? "Gerando video..." : "Gerar video"}
+                    </button>
+
+                    {isGeneratingVideoGenerationModal ? (
+                      <p className={`text-xs ${isLight ? "text-slate-500" : "text-gray-400"}`}>
+                        Aguarde, estamos processando o video desta imagem...
+                      </p>
+                    ) : null}
+
+                    {videoGenerationModalResultUrl ? (
+                      <div className="space-y-2">
+                        <video
+                          src={videoGenerationModalResultUrl}
+                          controls
+                          preload="metadata"
+                          className={`w-full rounded-xl border ${
+                            isLight ? "border-slate-200 bg-white" : "border-gray-700 bg-black/30"
+                          }`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void handleDownloadVideo(videoGenerationModalResultUrl, "video-modal")
+                          }
+                          disabled={downloadingVideo}
+                          className={`inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border px-3 text-sm font-semibold transition disabled:cursor-not-allowed ${
+                            isLight
+                              ? "border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                              : "border-gray-600 bg-gray-800 text-gray-100 hover:bg-gray-700 disabled:border-gray-700 disabled:bg-gray-800 disabled:text-gray-500"
+                          }`}
+                        >
+                          <MdDownload className="h-4 w-4" />
+                          {downloadingVideo ? "Baixando video..." : "Baixar video"}
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
               </div>
             </div>
           ) : null}
