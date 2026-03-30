@@ -3220,7 +3220,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       }
 
       const startedAt = Date.now();
-      const timeoutMs = isSoraModel ? 12 * 60 * 1000 : 5 * 60 * 1000;
+      const timeoutMs = isSoraModel ? 12 * 60 * 1000 : 12 * 60 * 1000;
 
       while (Date.now() - startedAt < timeoutMs) {
         await new Promise((resolve) => window.setTimeout(resolve, 8000));
@@ -3259,6 +3259,12 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
             statusPayload?.error ||
               `Falha ao consultar status do video (HTTP ${statusResponse.status}).`
           );
+        }
+
+        const pendingWarning =
+          typeof statusPayload?.warning === "string" ? statusPayload.warning.trim() : "";
+        if (!statusPayload?.done && pendingWarning) {
+          setGeneratedVideoHistoryWarning(pendingWarning);
         }
 
         if (statusPayload?.done) {

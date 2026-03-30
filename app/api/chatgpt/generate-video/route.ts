@@ -233,10 +233,7 @@ function extractVideoUri(payload: unknown): string {
     if (!trimmed) {
       return "";
     }
-    if (trimmed.startsWith("https://") || trimmed.startsWith("http://")) {
-      return trimmed;
-    }
-    return "";
+    return trimmed;
   };
 
   const generateVideoResponse = (response as { generateVideoResponse?: unknown }).generateVideoResponse;
@@ -301,7 +298,112 @@ function extractVideoUri(payload: unknown): string {
     }
   }
 
+  // Fallback: alguns payloads do Veo mudam o shape e trazem `fileUri`/`videoUri`
+  // em objetos aninhados. Faz uma busca limitada para evitar falso 502.
+  const visited = new Set<unknown>();
+  const queue: unknown[] = [response];
+  let depth = 0;
+  while (queue.length > 0 && depth < 80) {
+    const current = queue.shift();
+    depth += 1;
+
+    if (!current || typeof current !== "object" || visited.has(current)) {
+      continue;
+    }
+    visited.add(current);
+
+    const candidate = current as {
+      uri?: unknown;
+      fileUri?: unknown;
+      videoUri?: unknown;
+      downloadUri?: unknown;
+      video?: unknown;
+    };
+
+    const uri =
+      normalizeUri(candidate.uri) ||
+      normalizeUri(candidate.fileUri) ||
+      normalizeUri(candidate.videoUri) ||
+      normalizeUri(candidate.downloadUri);
+    if (uri) {
+      return uri;
+    }
+
+    if (candidate.video && typeof candidate.video === "object") {
+      const nestedVideo = candidate.video as {
+        uri?: unknown;
+        fileUri?: unknown;
+        videoUri?: unknown;
+        downloadUri?: unknown;
+      };
+      const nestedUri =
+        normalizeUri(nestedVideo.uri) ||
+        normalizeUri(nestedVideo.fileUri) ||
+        normalizeUri(nestedVideo.videoUri) ||
+        normalizeUri(nestedVideo.downloadUri);
+      if (nestedUri) {
+        return nestedUri;
+      }
+      queue.push(candidate.video);
+    }
+
+    if (Array.isArray(current)) {
+      for (const item of current) {
+        queue.push(item);
+      }
+      continue;
+    }
+
+    for (const value of Object.values(current)) {
+      if (value && typeof value === "object") {
+        queue.push(value);
+      }
+    }
+  }
+
   return "";
+}
+
+function summarizePayloadKeys(payload: unknown, maxKeys = 40): string {
+  if (!payload || typeof payload !== "object") {
+    return "sem payload JSON";
+  }
+
+  const visited = new Set<unknown>();
+  const queue: Array<{ value: unknown; path: string }> = [{ value: payload, path: "$" }];
+  const keys: string[] = [];
+
+  while (queue.length > 0 && keys.length < maxKeys) {
+    const item = queue.shift();
+    if (!item) {
+      continue;
+    }
+
+    const { value, path } = item;
+    if (!value || typeof value !== "object" || visited.has(value)) {
+      continue;
+    }
+
+    visited.add(value);
+    if (Array.isArray(value)) {
+      for (let i = 0; i < value.length && i < 3; i += 1) {
+        queue.push({ value: value[i], path: `${path}[${i}]` });
+      }
+      continue;
+    }
+
+    for (const [key, child] of Object.entries(value)) {
+      keys.push(`${path}.${key}`);
+      if (keys.length >= maxKeys) {
+        break;
+      }
+      if (child && typeof child === "object") {
+        queue.push({ value: child, path: `${path}.${key}` });
+      }
+    }
+  }
+
+  return keys.join(", ");
 }
 
 function uniqueByKey<T>(items: T[], getKey: (item: T) => string): T[] {
@@ -856,7 +958,7 @@ async function startVideoOperationForCandidate(params: {
       message: string;
     }
 > {
-  const imageFieldAttempts: ImageFieldType[] = ["bytesBase64Encoded", "imageBytes"];
+  const imageFieldAttempts: ImageFieldType[] = ["bytesBase64Encoded"];
   const endpointAttempts: StartEndpointVariant[] = ["generateVideos", "predictLongRunning"];
   let fallbackStatus = 502;
   let fallbackMessage = "Falha ao iniciar geracao de video no Gemini.";
@@ -1353,7 +1455,11 @@ async function handleVideoStatus(
   const videoUri = extractVideoUri(operationPayload);
   if (!videoUri) {
     return NextResponse.json(
-      { error: "Gemini concluiu a operacao, mas nao retornou URI do video." },
+      {
+        error: `Gemini concluiu a operacao, mas nao retornou URI do video. Chaves detectadas: ${summarizePayloadKeys(
+          operationPayload
+        )}`,
+      },
       { status: 502 }
     );
   }
