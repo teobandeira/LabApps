@@ -364,6 +364,93 @@ function extractVideoUri(payload: unknown): string {
   return "";
 }
 
+function extractGeminiVideoBytes(payload: unknown): { bytes: Uint8Array; mimeType: string } | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const response = (payload as { response?: unknown }).response;
+  if (!response || typeof response !== "object") {
+    return null;
+  }
+
+  const candidates: unknown[] = [];
+  const generateVideoResponse = (response as { generateVideoResponse?: unknown }).generateVideoResponse;
+  if (generateVideoResponse && typeof generateVideoResponse === "object") {
+    const samples = (generateVideoResponse as { generatedSamples?: unknown }).generatedSamples;
+    if (Array.isArray(samples)) {
+      for (const sample of samples) {
+        if (sample && typeof sample === "object") {
+          candidates.push((sample as { video?: unknown }).video);
+        }
+      }
+    }
+  }
+
+  const generatedVideos = (response as { generatedVideos?: unknown }).generatedVideos;
+  if (Array.isArray(generatedVideos)) {
+    for (const item of generatedVideos) {
+      if (item && typeof item === "object") {
+        candidates.push((item as { video?: unknown }).video);
+      }
+    }
+  }
+
+  const generatedSamples = (response as { generatedSamples?: unknown }).generatedSamples;
+  if (Array.isArray(generatedSamples)) {
+    for (const sample of generatedSamples) {
+      if (sample && typeof sample === "object") {
+        candidates.push((sample as { video?: unknown }).video);
+      }
+    }
+  }
+
+  const videos = (response as { videos?: unknown }).videos;
+  if (Array.isArray(videos)) {
+    for (const item of videos) {
+      candidates.push(item);
+      if (item && typeof item === "object") {
+        candidates.push((item as { video?: unknown }).video);
+      }
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+
+    const videoObj = candidate as { videoBytes?: unknown; bytesBase64Encoded?: unknown; mimeType?: unknown };
+    const rawBase64 =
+      typeof videoObj.videoBytes === "string"
+        ? videoObj.videoBytes
+        : typeof videoObj.bytesBase64Encoded === "string"
+          ? videoObj.bytesBase64Encoded
+          : "";
+    if (!rawBase64.trim()) {
+      continue;
+    }
+
+    try {
+      const bytes = new Uint8Array(Buffer.from(rawBase64.trim(), "base64"));
+      if (bytes.byteLength <= 0) {
+        continue;
+      }
+
+      const mimeType =
+        typeof videoObj.mimeType === "string" && videoObj.mimeType.trim().startsWith("video/")
+          ? videoObj.mimeType.trim()
+          : "video/mp4";
+
+      return { bytes, mimeType };
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
 function summarizePayloadKeys(payload: unknown, maxKeys = 40): string {
   if (!payload || typeof payload !== "object") {
     return "sem payload JSON";
@@ -851,7 +938,7 @@ async function fetchSoraVideoMetadata(params: {
 
 async function persistVideoToBlob(params: {
   operationName: string;
-  fallbackProxyUrl: string;
+  fallbackProxyUrl?: string;
   fetchVideo: () => Promise<{ bytes: Uint8Array; mimeType: string }>;
   metadata: VideoStatusMetadata;
 }): Promise<{ id: string; videoUrl: string; warning?: string }> {
@@ -870,7 +957,7 @@ async function persistVideoToBlob(params: {
   const fetchedVideo = await params.fetchVideo();
   const extension = extensionFromVideoContentType(fetchedVideo.mimeType);
   let blobPath = buildGeneratedVideoBlobPath(extension);
-  let blobUrl = params.fallbackProxyUrl;
+  let blobUrl = params.fallbackProxyUrl || "";
   let persistenceWarning = "";
 
   const blobToken = process.env.BLOB_READ_WRITE_TOKEN?.trim();
@@ -897,6 +984,11 @@ async function persistVideoToBlob(params: {
           : "Falha ao salvar no Blob, mantendo persistencia por proxy.";
     }
   } else {
+    if (!blobUrl) {
+      throw new Error(
+        "BLOB_READ_WRITE_TOKEN nao configurado e o provedor nao retornou URL de download."
+      );
+    }
     persistenceWarning = "BLOB_READ_WRITE_TOKEN nao configurado. Video persistido por proxy.";
   }
 
@@ -1453,10 +1545,11 @@ async function handleVideoStatus(
   }
 
   const videoUri = extractVideoUri(operationPayload);
-  if (!videoUri) {
+  const geminiVideoBytes = extractGeminiVideoBytes(operationPayload);
+  if (!videoUri && !geminiVideoBytes) {
     return NextResponse.json(
       {
-        error: `Gemini concluiu a operacao, mas nao retornou URI do video. Chaves detectadas: ${summarizePayloadKeys(
+        error: `Gemini concluiu a operacao, mas nao retornou URI/videoBytes no payload. Chaves detectadas: ${summarizePayloadKeys(
           operationPayload
         )}`,
       },
@@ -1464,8 +1557,17 @@ async function handleVideoStatus(
     );
   }
 
-  const fallbackProxyUrl = buildGeminiProxyVideoUrl(videoUri);
+  const fallbackProxyUrl = videoUri ? buildGeminiProxyVideoUrl(videoUri) : "";
   if (!canPersistToDatabase) {
+    if (!fallbackProxyUrl) {
+      return NextResponse.json(
+        {
+          error:
+            "Gemini retornou videoBytes sem URI e a persistencia no banco está indisponivel. Nao foi possivel concluir.",
+        },
+        { status: 500 }
+      );
+    }
     const fallback: DoneVideoResponse = {
       done: true,
       operationName,
@@ -1481,8 +1583,11 @@ async function handleVideoStatus(
   try {
     const persistedVideo = await persistVideoToBlob({
       operationName,
-      fallbackProxyUrl,
-      fetchVideo: () => fetchGeminiVideo(videoUri, geminiApiKey),
+      ...(fallbackProxyUrl ? { fallbackProxyUrl } : {}),
+      fetchVideo: () =>
+        geminiVideoBytes
+          ? Promise.resolve(geminiVideoBytes)
+          : fetchGeminiVideo(videoUri, geminiApiKey),
       metadata,
     });
 
