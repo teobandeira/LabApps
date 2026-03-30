@@ -493,6 +493,41 @@ function summarizePayloadKeys(payload: unknown, maxKeys = 40): string {
   return keys.join(", ");
 }
 
+function extractGeminiRaiFilterInfo(payload: unknown): { count: number; reasons: string[] } | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const response = (payload as { response?: unknown }).response;
+  if (!response || typeof response !== "object") {
+    return null;
+  }
+
+  const generateVideoResponse = (response as { generateVideoResponse?: unknown }).generateVideoResponse;
+  if (!generateVideoResponse || typeof generateVideoResponse !== "object") {
+    return null;
+  }
+
+  const rawCount = Number(
+    (generateVideoResponse as { raiMediaFilteredCount?: unknown }).raiMediaFilteredCount
+  );
+  const count = Number.isFinite(rawCount) && rawCount > 0 ? rawCount : 0;
+
+  const rawReasons =
+    (generateVideoResponse as { raiMediaFilteredReasons?: unknown }).raiMediaFilteredReasons;
+  const reasons = Array.isArray(rawReasons)
+    ? rawReasons
+        .map((item) => normalizeString(item))
+        .filter(Boolean)
+    : [];
+
+  if (count <= 0 && reasons.length === 0) {
+    return null;
+  }
+
+  return { count, reasons };
+}
+
 function uniqueByKey<T>(items: T[], getKey: (item: T) => string): T[] {
   const unique: T[] = [];
   const seen = new Set<string>();
@@ -1547,6 +1582,19 @@ async function handleVideoStatus(
   const videoUri = extractVideoUri(operationPayload);
   const geminiVideoBytes = extractGeminiVideoBytes(operationPayload);
   if (!videoUri && !geminiVideoBytes) {
+    const raiFilterInfo = extractGeminiRaiFilterInfo(operationPayload);
+    if (raiFilterInfo) {
+      const reasonText = raiFilterInfo.reasons.length > 0 ? raiFilterInfo.reasons.join(", ") : "nao informado";
+      return NextResponse.json(
+        {
+          error: `Gemini bloqueou a geracao por politica de seguranca (RAI). Itens filtrados: ${
+            raiFilterInfo.count
+          }. Motivos: ${reasonText}.`,
+        },
+        { status: 422 }
+      );
+    }
+
     return NextResponse.json(
       {
         error: `Gemini concluiu a operacao, mas nao retornou URI/videoBytes no payload. Chaves detectadas: ${summarizePayloadKeys(
