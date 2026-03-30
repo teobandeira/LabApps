@@ -2,27 +2,51 @@ import crypto from "node:crypto";
 
 import { put } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
+import sharp from "sharp";
 
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
 
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+const OPENAI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_GEMINI_VIDEO_MODEL = "veo-3.1-fast-generate-preview";
-const ALLOWED_VIDEO_MODELS = new Set([
+const DEFAULT_SORA_VIDEO_MODEL = "sora-2";
+const ALLOWED_GEMINI_VIDEO_MODELS = new Set([
   "veo-3.1-generate-preview",
   "veo-3.1-fast-generate-preview",
+]);
+const ALLOWED_SORA_VIDEO_MODELS = new Set([
+  "sora-2",
+  "sora-2-pro",
+  "sora-2-2025-10-06",
+  "sora-2-pro-2025-10-06",
+  "sora-2-2025-12-08",
 ]);
 const MAX_GEMINI_IMAGE_BYTES = 20 * 1024 * 1024;
 const DEFAULT_VIDEO_PROMPT =
   "Transforme esta imagem em um video curto, cinematografico e realista, com movimento suave de camera.";
 const ALLOWED_ASPECT_RATIOS = new Set(["16:9", "9:16"]);
-const ALLOWED_VIDEO_DURATIONS = new Set([4, 6, 8]);
-const ALLOWED_VIDEO_RESOLUTIONS = new Set(["720p", "1080p"]);
+const ALLOWED_GEMINI_VIDEO_DURATIONS = new Set([4, 6, 8]);
+const ALLOWED_SORA_VIDEO_DURATIONS = new Set([4, 8, 12]);
+const ALLOWED_GEMINI_VIDEO_RESOLUTIONS = new Set(["720p", "1080p"]);
+const ALLOWED_SORA_VIDEO_RESOLUTIONS = new Set(["720p", "1024p"]);
 const DEFAULT_VIDEO_RESOLUTION = "720p";
 const RETRYABLE_START_STATUSES = new Set([429, 500, 502, 503, 504]);
 const START_REQUEST_MAX_ATTEMPTS = 3;
 const START_REQUEST_BASE_RETRY_MS = 1200;
+const SORA_SIZE_BY_RESOLUTION_AND_ASPECT_RATIO: Record<"720p" | "1024p", Record<"16:9" | "9:16", string>> = {
+  "720p": {
+    "16:9": "1280x720",
+    "9:16": "720x1280",
+  },
+  "1024p": {
+    "16:9": "1792x1024",
+    "9:16": "1024x1792",
+  },
+};
+
+type VideoProvider = "gemini" | "sora";
 
 type StartVideoBody = {
   imageUrl?: string;
@@ -36,6 +60,7 @@ type StartVideoBody = {
 };
 
 type VideoStatusMetadata = {
+  provider: VideoProvider;
   sourceImageId: string | null;
   model: string;
   aspectRatio: string;
@@ -83,6 +108,28 @@ function normalizeSourceImageId(value: unknown): string | null {
     return null;
   }
   return normalized.slice(0, 120);
+}
+
+function getVideoProviderFromModel(model: string): VideoProvider | null {
+  if (ALLOWED_GEMINI_VIDEO_MODELS.has(model)) {
+    return "gemini";
+  }
+  if (ALLOWED_SORA_VIDEO_MODELS.has(model)) {
+    return "sora";
+  }
+  return null;
+}
+
+function getDefaultModelForProvider(provider: VideoProvider): string {
+  return provider === "sora" ? DEFAULT_SORA_VIDEO_MODEL : DEFAULT_GEMINI_VIDEO_MODEL;
+}
+
+function getAllowedDurationsForProvider(provider: VideoProvider): Set<number> {
+  return provider === "sora" ? ALLOWED_SORA_VIDEO_DURATIONS : ALLOWED_GEMINI_VIDEO_DURATIONS;
+}
+
+function getAllowedResolutionsForProvider(provider: VideoProvider): Set<string> {
+  return provider === "sora" ? ALLOWED_SORA_VIDEO_RESOLUTIONS : ALLOWED_GEMINI_VIDEO_RESOLUTIONS;
 }
 
 function isAllowedVideoHost(hostname: string): boolean {
@@ -178,15 +225,29 @@ function extractVideoUri(payload: unknown): string {
     return "";
   }
 
+  const normalizeUri = (value: unknown): string => {
+    if (typeof value !== "string") {
+      return "";
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return "";
+    }
+    if (trimmed.startsWith("https://") || trimmed.startsWith("http://")) {
+      return trimmed;
+    }
+    return "";
+  };
+
   const generateVideoResponse = (response as { generateVideoResponse?: unknown }).generateVideoResponse;
   if (generateVideoResponse && typeof generateVideoResponse === "object") {
     const generatedSamples = (generateVideoResponse as { generatedSamples?: unknown }).generatedSamples;
     if (Array.isArray(generatedSamples) && generatedSamples.length > 0) {
       const firstSample = generatedSamples[0] as { video?: unknown };
       if (firstSample.video && typeof firstSample.video === "object") {
-        const uri = (firstSample.video as { uri?: unknown }).uri;
-        if (typeof uri === "string" && uri.trim().length > 0) {
-          return uri.trim();
+        const uri = normalizeUri((firstSample.video as { uri?: unknown }).uri);
+        if (uri) {
+          return uri;
         }
       }
     }
@@ -196,9 +257,46 @@ function extractVideoUri(payload: unknown): string {
   if (Array.isArray(generatedVideos) && generatedVideos.length > 0) {
     const firstVideo = generatedVideos[0] as { video?: unknown };
     if (firstVideo.video && typeof firstVideo.video === "object") {
-      const uri = (firstVideo.video as { uri?: unknown }).uri;
-      if (typeof uri === "string" && uri.trim().length > 0) {
-        return uri.trim();
+      const uri = normalizeUri((firstVideo.video as { uri?: unknown }).uri);
+      if (uri) {
+        return uri;
+      }
+    }
+
+    const directUri = normalizeUri((generatedVideos[0] as { uri?: unknown }).uri);
+    if (directUri) {
+      return directUri;
+    }
+  }
+
+  const generatedSamples = (response as { generatedSamples?: unknown }).generatedSamples;
+  if (Array.isArray(generatedSamples) && generatedSamples.length > 0) {
+    const firstSample = generatedSamples[0] as { video?: unknown; uri?: unknown };
+    if (firstSample.video && typeof firstSample.video === "object") {
+      const uri = normalizeUri((firstSample.video as { uri?: unknown }).uri);
+      if (uri) {
+        return uri;
+      }
+    }
+
+    const sampleUri = normalizeUri(firstSample.uri);
+    if (sampleUri) {
+      return sampleUri;
+    }
+  }
+
+  const videos = (response as { videos?: unknown }).videos;
+  if (Array.isArray(videos) && videos.length > 0) {
+    const firstVideo = videos[0] as { uri?: unknown; video?: unknown };
+    const directUri = normalizeUri(firstVideo.uri);
+    if (directUri) {
+      return directUri;
+    }
+
+    if (firstVideo.video && typeof firstVideo.video === "object") {
+      const nestedUri = normalizeUri((firstVideo.video as { uri?: unknown }).uri);
+      if (nestedUri) {
+        return nestedUri;
       }
     }
   }
@@ -223,7 +321,7 @@ function uniqueByKey<T>(items: T[], getKey: (item: T) => string): T[] {
 }
 
 function buildModelCandidates(model: string): string[] {
-  return uniqueByKey([model, ...Array.from(ALLOWED_VIDEO_MODELS)], (item) => item);
+  return uniqueByKey([model, ...Array.from(ALLOWED_GEMINI_VIDEO_MODELS)], (item) => item);
 }
 
 function buildConfigCandidates(config: VideoGenerationConfig): VideoGenerationConfig[] {
@@ -276,22 +374,36 @@ function buildConfigCandidates(config: VideoGenerationConfig): VideoGenerationCo
 }
 
 function parseStatusMetadata(searchParams: URLSearchParams): VideoStatusMetadata {
-  const model = normalizeString(searchParams.get("model"));
+  const modelInput = normalizeString(searchParams.get("model"));
   const aspectRatio = normalizeString(searchParams.get("aspectRatio"));
+  const provider = getVideoProviderFromModel(modelInput) || "gemini";
+  const model = getVideoProviderFromModel(modelInput)
+    ? modelInput
+    : getDefaultModelForProvider(provider);
   const resolution = normalizeString(searchParams.get("resolution"));
   const parsedDuration = Number(searchParams.get("durationSeconds"));
+  const allowedDurations = getAllowedDurationsForProvider(provider);
+  const allowedResolutions = getAllowedResolutionsForProvider(provider);
 
   return {
+    provider,
     sourceImageId: normalizeSourceImageId(searchParams.get("sourceImageId")),
-    model: ALLOWED_VIDEO_MODELS.has(model) ? model : DEFAULT_GEMINI_VIDEO_MODEL,
+    model,
     aspectRatio: ALLOWED_ASPECT_RATIOS.has(aspectRatio) ? aspectRatio : "16:9",
-    durationSeconds: ALLOWED_VIDEO_DURATIONS.has(parsedDuration) ? parsedDuration : 6,
-    resolution: ALLOWED_VIDEO_RESOLUTIONS.has(resolution) ? resolution : DEFAULT_VIDEO_RESOLUTION,
+    durationSeconds: allowedDurations.has(parsedDuration) ? parsedDuration : provider === "sora" ? 8 : 6,
+    resolution: allowedResolutions.has(resolution) ? resolution : DEFAULT_VIDEO_RESOLUTION,
   };
 }
 
-function buildProxyVideoUrl(videoUri: string): string {
+function buildGeminiProxyVideoUrl(videoUri: string): string {
   return `/api/chatgpt/generate-video?videoUri=${encodeURIComponent(videoUri)}`;
+}
+
+function buildSoraProxyVideoUrl(videoId: string): string {
+  const params = new URLSearchParams();
+  params.set("provider", "sora");
+  params.set("videoId", videoId);
+  return `/api/chatgpt/generate-video?${params.toString()}`;
 }
 
 function extensionFromVideoContentType(contentType: string): string {
@@ -346,12 +458,12 @@ async function fetchImageBytes(
 
   const mimeType = upstream.headers.get("content-type")?.split(";")[0]?.trim() || "image/png";
   if (!mimeType.startsWith("image/")) {
-    throw new Error("O arquivo selecionado nao e uma imagem valida para o Gemini.");
+    throw new Error("O arquivo selecionado nao e uma imagem valida para gerar video.");
   }
 
   const bytes = new Uint8Array(await upstream.arrayBuffer());
   if (bytes.byteLength === 0) {
-    throw new Error("A imagem enviada para o Gemini esta vazia.");
+    throw new Error("A imagem enviada para gerar video esta vazia.");
   }
 
   if (bytes.byteLength > MAX_GEMINI_IMAGE_BYTES) {
@@ -359,6 +471,75 @@ async function fetchImageBytes(
   }
 
   return { bytes, mimeType };
+}
+
+function resolveSoraSize(aspectRatio: string, resolution: string): string | null {
+  const parsedAspectRatio = aspectRatio === "9:16" ? "9:16" : aspectRatio === "16:9" ? "16:9" : null;
+  const parsedResolution =
+    resolution === "720p" ? "720p" : resolution === "1024p" ? "1024p" : null;
+
+  if (!parsedAspectRatio || !parsedResolution) {
+    return null;
+  }
+
+  return SORA_SIZE_BY_RESOLUTION_AND_ASPECT_RATIO[parsedResolution][parsedAspectRatio];
+}
+
+function parseSoraSize(size: string): { width: number; height: number } | null {
+  const normalized = normalizeString(size);
+  const match = normalized.match(/^(\d+)x(\d+)$/);
+  if (!match) {
+    return null;
+  }
+
+  const width = Number.parseInt(match[1] || "", 10);
+  const height = Number.parseInt(match[2] || "", 10);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null;
+  }
+
+  return { width, height };
+}
+
+async function buildSoraInputReferenceDataUrl(params: {
+  imageBytes: Uint8Array;
+  targetSize: string;
+}): Promise<string> {
+  const parsedSize = parseSoraSize(params.targetSize);
+  if (!parsedSize) {
+    throw new Error("Tamanho invalido para referencia do Sora.");
+  }
+
+  const resized = await sharp(Buffer.from(params.imageBytes))
+    .rotate()
+    .resize({
+      width: parsedSize.width,
+      height: parsedSize.height,
+      fit: "contain",
+      position: "centre",
+      background: { r: 0, g: 0, b: 0, alpha: 1 },
+    })
+    .png()
+    .toBuffer();
+
+  if (resized.byteLength <= 0) {
+    throw new Error("Nao foi possivel preparar a imagem de referencia para o Sora.");
+  }
+
+  const base64 = resized.toString("base64");
+  return `data:image/png;base64,${base64}`;
+}
+
+function buildOpenAIAuthHeaders(apiKey: string, openAiOrgId?: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${apiKey}`,
+  };
+
+  if (openAiOrgId) {
+    headers["OpenAI-Organization"] = openAiOrgId;
+  }
+
+  return headers;
 }
 
 async function startGeminiVideoOperation(params: {
@@ -432,6 +613,41 @@ async function startGeminiVideoOperation(params: {
   return { response, payload };
 }
 
+async function startSoraVideoOperation(params: {
+  model: string;
+  openAiApiKey: string;
+  openAiOrgId?: string;
+  prompt: string;
+  durationSeconds: number;
+  size: string;
+  inputReferenceDataUrl?: string;
+}): Promise<{ response: Response; payload: StartOperationPayload | null }> {
+  const body: Record<string, unknown> = {
+    model: params.model,
+    prompt: params.prompt,
+    seconds: String(params.durationSeconds),
+    size: params.size,
+  };
+
+  if (params.inputReferenceDataUrl) {
+    body.input_reference = {
+      image_url: params.inputReferenceDataUrl,
+    };
+  }
+
+  const response = await fetch(`${OPENAI_BASE_URL}/videos`, {
+    method: "POST",
+    headers: {
+      ...buildOpenAIAuthHeaders(params.openAiApiKey, params.openAiOrgId),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  const payload = (await response.json().catch(() => null)) as StartOperationPayload | null;
+  return { response, payload };
+}
+
 async function fetchGeminiVideo(videoUri: string, geminiApiKey: string): Promise<{
   bytes: Uint8Array;
   mimeType: string;
@@ -480,10 +696,61 @@ async function fetchGeminiVideo(videoUri: string, geminiApiKey: string): Promise
   };
 }
 
+async function fetchSoraVideo(videoIdRaw: string, openAiApiKey: string, openAiOrgId?: string): Promise<{
+  bytes: Uint8Array;
+  mimeType: string;
+}> {
+  const videoId = normalizeString(videoIdRaw);
+  if (!videoId) {
+    throw new Error("videoId nao informado para baixar o video do Sora.");
+  }
+
+  const upstream = await fetch(`${OPENAI_BASE_URL}/videos/${encodeURIComponent(videoId)}/content`, {
+    method: "GET",
+    headers: buildOpenAIAuthHeaders(openAiApiKey, openAiOrgId),
+    redirect: "follow",
+    cache: "no-store",
+  });
+
+  if (!upstream.ok) {
+    throw new Error("Nao foi possivel baixar o video gerado no Sora.");
+  }
+
+  const contentType = upstream.headers.get("content-type")?.split(";")[0]?.trim() || "video/mp4";
+  if (!contentType.startsWith("video/")) {
+    throw new Error("Sora retornou um arquivo invalido para video.");
+  }
+
+  const bytes = new Uint8Array(await upstream.arrayBuffer());
+  if (bytes.byteLength === 0) {
+    throw new Error("O video retornado pelo Sora esta vazio.");
+  }
+
+  return {
+    bytes,
+    mimeType: contentType,
+  };
+}
+
+async function fetchSoraVideoMetadata(params: {
+  videoId: string;
+  openAiApiKey: string;
+  openAiOrgId?: string;
+}): Promise<{ response: Response; payload: unknown }> {
+  const response = await fetch(`${OPENAI_BASE_URL}/videos/${encodeURIComponent(params.videoId)}`, {
+    method: "GET",
+    headers: buildOpenAIAuthHeaders(params.openAiApiKey, params.openAiOrgId),
+    cache: "no-store",
+  });
+
+  const payload = await response.json().catch(() => null);
+  return { response, payload };
+}
+
 async function persistVideoToBlob(params: {
   operationName: string;
-  videoUri: string;
-  geminiApiKey: string;
+  fallbackProxyUrl: string;
+  fetchVideo: () => Promise<{ bytes: Uint8Array; mimeType: string }>;
   metadata: VideoStatusMetadata;
 }): Promise<{ id: string; videoUrl: string; warning?: string }> {
   const existing = await prisma.generatedVideo.findUnique({
@@ -498,10 +765,10 @@ async function persistVideoToBlob(params: {
     };
   }
 
-  const fetchedVideo = await fetchGeminiVideo(params.videoUri, params.geminiApiKey);
+  const fetchedVideo = await params.fetchVideo();
   const extension = extensionFromVideoContentType(fetchedVideo.mimeType);
   let blobPath = buildGeneratedVideoBlobPath(extension);
-  let blobUrl = buildProxyVideoUrl(params.videoUri);
+  let blobUrl = params.fallbackProxyUrl;
   let persistenceWarning = "";
 
   const blobToken = process.env.BLOB_READ_WRITE_TOKEN?.trim();
@@ -676,9 +943,40 @@ async function startVideoOperationForCandidate(params: {
   };
 }
 
+function parseSoraVideoId(value: unknown): string {
+  let normalized = normalizeString(value);
+  if (!normalized) {
+    return "";
+  }
+
+  if (normalized.startsWith("http://") || normalized.startsWith("https://")) {
+    try {
+      const pathname = new URL(normalized).pathname.replace(/^\/+/, "");
+      normalized = pathname.split("/").filter(Boolean).at(-1) || "";
+    } catch {
+      return "";
+    }
+  }
+
+  return normalized.replace(/^\/+/, "");
+}
+
+function parseOperationNameByProvider(provider: VideoProvider, value: string): string {
+  if (provider === "sora") {
+    return parseSoraVideoId(value);
+  }
+  return parseOperationName(value);
+}
+
+type VideoRuntimeCredentials = {
+  geminiApiKey?: string;
+  openAiApiKey?: string;
+  openAiOrgId?: string;
+};
+
 async function handleStartVideo(
   request: NextRequest,
-  geminiApiKey: string
+  credentials: VideoRuntimeCredentials
 ): Promise<NextResponse> {
   const body = (await request.json()) as StartVideoBody;
   const imageUrl = normalizeString(body.imageUrl);
@@ -687,10 +985,15 @@ async function handleStartVideo(
   }
 
   const prompt = normalizeString(body.prompt) || DEFAULT_VIDEO_PROMPT;
-  const model = normalizeString(body.model) || DEFAULT_GEMINI_VIDEO_MODEL;
-  if (!ALLOWED_VIDEO_MODELS.has(model)) {
-    return NextResponse.json({ error: "Modelo Veo invalido." }, { status: 400 });
+  const modelInput = normalizeString(body.model);
+  const selectedProvider = getVideoProviderFromModel(modelInput);
+
+  if (modelInput && !selectedProvider) {
+    return NextResponse.json({ error: "Modelo de video invalido." }, { status: 400 });
   }
+
+  const provider: VideoProvider = selectedProvider || "gemini";
+  const model = selectedProvider ? modelInput : getDefaultModelForProvider(provider);
 
   const aspectRatio = normalizeString(body.aspectRatio) || "16:9";
   if (!ALLOWED_ASPECT_RATIOS.has(aspectRatio)) {
@@ -698,31 +1001,117 @@ async function handleStartVideo(
   }
 
   const resolution = normalizeString(body.resolution) || DEFAULT_VIDEO_RESOLUTION;
-  if (!ALLOWED_VIDEO_RESOLUTIONS.has(resolution)) {
+  const allowedResolutions = getAllowedResolutionsForProvider(provider);
+  if (!allowedResolutions.has(resolution)) {
     return NextResponse.json({ error: "Resolucao invalida." }, { status: 400 });
   }
 
   const hasDurationInput =
     body.durationSeconds !== undefined && body.durationSeconds !== null;
   const parsedDuration = Number(body.durationSeconds);
-  if (hasDurationInput && !ALLOWED_VIDEO_DURATIONS.has(parsedDuration)) {
+  const allowedDurations = getAllowedDurationsForProvider(provider);
+  if (hasDurationInput && !allowedDurations.has(parsedDuration)) {
     return NextResponse.json(
-      { error: "Duracao invalida. Use 4s, 6s ou 8s." },
+      {
+        error:
+          provider === "sora"
+            ? "Duracao invalida. Use 4s, 8s ou 12s."
+            : "Duracao invalida. Use 4s, 6s ou 8s.",
+      },
       { status: 400 }
     );
   }
-  const durationSeconds = hasDurationInput ? parsedDuration : 6;
-  if (resolution === "1080p" && durationSeconds !== 8) {
+  const durationSeconds = hasDurationInput ? parsedDuration : provider === "sora" ? 8 : 6;
+  if (provider === "gemini" && resolution === "1080p" && durationSeconds !== 8) {
     return NextResponse.json(
       { error: "Para 1080p, selecione duracao de 8s." },
       { status: 400 }
     );
   }
 
-  const negativePrompt = normalizeString(body.negativePrompt);
+  const negativePrompt = provider === "gemini" ? normalizeString(body.negativePrompt) : "";
   const sourceImageId = normalizeSourceImageId(body.sourceImageId);
 
   const { bytes, mimeType } = await fetchImageBytes(imageUrl, request);
+
+  if (provider === "sora") {
+    const openAiApiKey = credentials.openAiApiKey?.trim();
+    if (!openAiApiKey) {
+      return NextResponse.json(
+        { error: "OPENAI_API_KEY nao configurada no ambiente." },
+        { status: 500 }
+      );
+    }
+
+    const size = resolveSoraSize(aspectRatio, resolution);
+    if (!size) {
+      return NextResponse.json(
+        { error: "Combinacao de formato e resolucao invalida para Sora." },
+        { status: 400 }
+      );
+    }
+
+    const inputReferenceDataUrl = await buildSoraInputReferenceDataUrl({
+      imageBytes: bytes,
+      targetSize: size,
+    });
+
+    const { response, payload } = await startSoraVideoOperation({
+      model,
+      openAiApiKey,
+      openAiOrgId: credentials.openAiOrgId,
+      prompt,
+      durationSeconds,
+      size,
+      inputReferenceDataUrl,
+    });
+
+    if (!response.ok) {
+      const message = extractErrorMessage(payload) || "Falha ao iniciar geracao de video no Sora.";
+      const shouldSoftenStatus = RETRYABLE_START_STATUSES.has(response.status);
+      if (response.status === 404) {
+        return NextResponse.json(
+          {
+            error:
+              "Modelo/endpoint de video nao encontrado para esta chave OpenAI. Verifique acesso ao Sora.",
+          },
+          { status: 400 }
+        );
+      }
+
+      return NextResponse.json(
+        { error: message },
+        { status: shouldSoftenStatus ? 503 : response.status }
+      );
+    }
+
+    const operationName = parseSoraVideoId((payload as { id?: unknown } | null)?.id);
+    if (!operationName) {
+      return NextResponse.json(
+        { error: "Sora nao retornou identificador da geracao de video." },
+        { status: 502 }
+      );
+    }
+
+    return NextResponse.json({
+      done: false,
+      operationName,
+      sourceImageId,
+      model,
+      aspectRatio,
+      durationSeconds,
+      resolution,
+    });
+  }
+
+  const geminiApiKey = credentials.geminiApiKey?.trim();
+  if (!geminiApiKey) {
+    return NextResponse.json(
+      { error: "GEMINI_API_KEY nao configurada no ambiente." },
+      { status: 500 }
+    );
+  }
+
   const imageBase64 = Buffer.from(bytes).toString("base64");
   const modelCandidates = buildModelCandidates(model);
   const configCandidates = buildConfigCandidates({
@@ -782,10 +1171,10 @@ async function handleStartVideo(
 
 async function handleVideoStatus(
   operationNameRaw: string,
-  geminiApiKey: string,
-  metadata: VideoStatusMetadata
+  metadata: VideoStatusMetadata,
+  credentials: VideoRuntimeCredentials
 ): Promise<NextResponse> {
-  const operationName = parseOperationName(operationNameRaw);
+  const operationName = parseOperationNameByProvider(metadata.provider, operationNameRaw);
   if (!operationName) {
     return NextResponse.json({ error: "operationName nao informado." }, { status: 400 });
   }
@@ -816,6 +1205,108 @@ async function handleVideoStatus(
       persisted: true,
     };
     return NextResponse.json(response);
+  }
+
+  if (metadata.provider === "sora") {
+    const openAiApiKey = credentials.openAiApiKey?.trim();
+    if (!openAiApiKey) {
+      return NextResponse.json(
+        { error: "OPENAI_API_KEY nao configurada no ambiente." },
+        { status: 500 }
+      );
+    }
+
+    const { response: statusResponse, payload: statusPayload } = await fetchSoraVideoMetadata({
+      videoId: operationName,
+      openAiApiKey,
+      openAiOrgId: credentials.openAiOrgId,
+    });
+
+    if (!statusResponse.ok) {
+      const message = extractErrorMessage(statusPayload) || "Falha ao consultar status da geracao de video no Sora.";
+
+      if ([429, 500, 502, 503, 504].includes(statusResponse.status)) {
+        const pendingResponse: PendingVideoResponse = {
+          done: false,
+          operationName,
+          warning: message,
+        };
+        return NextResponse.json(pendingResponse);
+      }
+
+      return NextResponse.json({ error: message }, { status: statusResponse.status });
+    }
+
+    const status = normalizeString(
+      (statusPayload as { status?: unknown } | null)?.status
+    ).toLowerCase();
+    const terminalSuccessStatuses = new Set(["completed", "succeeded", "success"]);
+    const terminalFailureStatuses = new Set(["failed", "error", "cancelled", "canceled", "rejected"]);
+
+    if (terminalFailureStatuses.has(status)) {
+      const message = extractErrorMessage(statusPayload) || "Sora retornou falha na geracao do video.";
+      return NextResponse.json({ error: message }, { status: 502 });
+    }
+
+    if (!terminalSuccessStatuses.has(status)) {
+      return NextResponse.json({
+        done: false,
+        operationName,
+      });
+    }
+
+    const fallbackProxyUrl = buildSoraProxyVideoUrl(operationName);
+    if (!canPersistToDatabase) {
+      const fallback: DoneVideoResponse = {
+        done: true,
+        operationName,
+        videoUrl: fallbackProxyUrl,
+        persisted: false,
+        warning:
+          persistenceWarning ||
+          "Persistencia de videos desativada: execute `npx prisma db push` para criar a tabela GeneratedVideo.",
+      };
+      return NextResponse.json(fallback);
+    }
+
+    try {
+      const persistedVideo = await persistVideoToBlob({
+        operationName,
+        fallbackProxyUrl,
+        fetchVideo: () => fetchSoraVideo(operationName, openAiApiKey, credentials.openAiOrgId),
+        metadata,
+      });
+
+      const response: DoneVideoResponse = {
+        done: true,
+        operationName,
+        videoId: persistedVideo.id,
+        videoUrl: persistedVideo.videoUrl,
+        persisted: true,
+        warning: persistedVideo.warning,
+      };
+      return NextResponse.json(response);
+    } catch (persistError) {
+      const fallback: DoneVideoResponse = {
+        done: true,
+        operationName,
+        videoUrl: fallbackProxyUrl,
+        persisted: false,
+        warning:
+          persistError instanceof Error
+            ? persistError.message
+            : "Nao foi possivel persistir o video no Blob.",
+      };
+      return NextResponse.json(fallback);
+    }
+  }
+
+  const geminiApiKey = credentials.geminiApiKey?.trim();
+  if (!geminiApiKey) {
+    return NextResponse.json(
+      { error: "GEMINI_API_KEY nao configurada no ambiente." },
+      { status: 500 }
+    );
   }
 
   const operationResponse = await fetch(`${GEMINI_BASE_URL}/${operationName}`, {
@@ -867,11 +1358,12 @@ async function handleVideoStatus(
     );
   }
 
+  const fallbackProxyUrl = buildGeminiProxyVideoUrl(videoUri);
   if (!canPersistToDatabase) {
     const fallback: DoneVideoResponse = {
       done: true,
       operationName,
-      videoUrl: buildProxyVideoUrl(videoUri),
+      videoUrl: fallbackProxyUrl,
       persisted: false,
       warning:
         persistenceWarning ||
@@ -883,8 +1375,8 @@ async function handleVideoStatus(
   try {
     const persistedVideo = await persistVideoToBlob({
       operationName,
-      videoUri,
-      geminiApiKey,
+      fallbackProxyUrl,
+      fetchVideo: () => fetchGeminiVideo(videoUri, geminiApiKey),
       metadata,
     });
 
@@ -901,7 +1393,7 @@ async function handleVideoStatus(
     const fallback: DoneVideoResponse = {
       done: true,
       operationName,
-      videoUrl: buildProxyVideoUrl(videoUri),
+      videoUrl: fallbackProxyUrl,
       persisted: false,
       warning:
         persistError instanceof Error
@@ -912,7 +1404,7 @@ async function handleVideoStatus(
   }
 }
 
-async function handleVideoProxy(videoUriRaw: string, geminiApiKey: string): Promise<NextResponse> {
+async function handleGeminiVideoProxy(videoUriRaw: string, geminiApiKey: string): Promise<NextResponse> {
   const videoUri = normalizeString(videoUriRaw);
   if (!videoUri) {
     return NextResponse.json({ error: "videoUri nao informada." }, { status: 400 });
@@ -938,17 +1430,43 @@ async function handleVideoProxy(videoUriRaw: string, geminiApiKey: string): Prom
   }
 }
 
+async function handleSoraVideoProxy(
+  videoIdRaw: string,
+  openAiApiKey: string,
+  openAiOrgId?: string
+): Promise<NextResponse> {
+  const videoId = parseSoraVideoId(videoIdRaw);
+  if (!videoId) {
+    return NextResponse.json({ error: "videoId nao informado." }, { status: 400 });
+  }
+
+  try {
+    const fetchedVideo = await fetchSoraVideo(videoId, openAiApiKey, openAiOrgId);
+
+    return new NextResponse(Buffer.from(fetchedVideo.bytes), {
+      status: 200,
+      headers: {
+        "Content-Type": fetchedVideo.mimeType,
+        "Content-Disposition": `inline; filename="video-sora-${Date.now()}.${extensionFromVideoContentType(
+          fetchedVideo.mimeType
+        )}"`,
+        "Cache-Control": "private, no-store, max-age=0",
+      },
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Nao foi possivel baixar o video gerado.";
+    return NextResponse.json({ error: message }, { status: 502 });
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const geminiApiKey = process.env.GEMINI_API_KEY?.trim();
-    if (!geminiApiKey) {
-      return NextResponse.json(
-        { error: "GEMINI_API_KEY nao configurada no ambiente." },
-        { status: 500 }
-      );
-    }
-
-    return await handleStartVideo(request, geminiApiKey);
+    return await handleStartVideo(request, {
+      geminiApiKey: process.env.GEMINI_API_KEY?.trim(),
+      openAiApiKey: process.env.OPENAI_API_KEY?.trim(),
+      openAiOrgId: process.env.OPENAI_ORG_ID?.trim(),
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Erro inesperado ao gerar video.";
     return NextResponse.json({ error: message }, { status: 500 });
@@ -958,21 +1476,39 @@ export async function POST(request: NextRequest) {
 export async function GET(request: NextRequest) {
   try {
     const geminiApiKey = process.env.GEMINI_API_KEY?.trim();
-    if (!geminiApiKey) {
-      return NextResponse.json(
-        { error: "GEMINI_API_KEY nao configurada no ambiente." },
-        { status: 500 }
-      );
-    }
+    const openAiApiKey = process.env.OPENAI_API_KEY?.trim();
+    const openAiOrgId = process.env.OPENAI_ORG_ID?.trim();
 
     const videoUri = normalizeString(request.nextUrl.searchParams.get("videoUri"));
     if (videoUri) {
-      return await handleVideoProxy(videoUri, geminiApiKey);
+      if (!geminiApiKey) {
+        return NextResponse.json(
+          { error: "GEMINI_API_KEY nao configurada no ambiente." },
+          { status: 500 }
+        );
+      }
+      return await handleGeminiVideoProxy(videoUri, geminiApiKey);
+    }
+
+    const proxyProvider = normalizeString(request.nextUrl.searchParams.get("provider"));
+    const videoId = normalizeString(request.nextUrl.searchParams.get("videoId"));
+    if (videoId || proxyProvider === "sora") {
+      if (!openAiApiKey) {
+        return NextResponse.json(
+          { error: "OPENAI_API_KEY nao configurada no ambiente." },
+          { status: 500 }
+        );
+      }
+      return await handleSoraVideoProxy(videoId, openAiApiKey, openAiOrgId);
     }
 
     const operationName = normalizeString(request.nextUrl.searchParams.get("operationName"));
     const metadata = parseStatusMetadata(request.nextUrl.searchParams);
-    return await handleVideoStatus(operationName, geminiApiKey, metadata);
+    return await handleVideoStatus(operationName, metadata, {
+      geminiApiKey,
+      openAiApiKey,
+      openAiOrgId,
+    });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Erro inesperado ao consultar video.";

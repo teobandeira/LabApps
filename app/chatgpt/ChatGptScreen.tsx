@@ -126,9 +126,14 @@ type CodeToken = {
 };
 
 type VideoAspectRatio = "16:9" | "9:16";
-type VideoDurationSeconds = 4 | 6 | 8;
-type VideoResolution = "720p" | "1080p";
-type VideoModel = "veo-3.1-fast-generate-preview" | "veo-3.1-generate-preview";
+type VideoDurationSeconds = 4 | 6 | 8 | 12;
+type VideoResolution = "720p" | "1080p" | "1024p";
+type VideoProvider = "veo" | "sora";
+type VideoModel =
+  | "veo-3.1-fast-generate-preview"
+  | "veo-3.1-generate-preview"
+  | "sora-2"
+  | "sora-2-pro";
 
 type VideoGenerationModalSource = {
   targetKey: string;
@@ -183,17 +188,56 @@ const SOCIAL_FORMAT_OPTIONS: Array<{
     details: "1920x1080 (paisagem)",
   },
 ];
-const VIDEO_MODEL_OPTIONS: Array<{ value: VideoModel; label: string }> = [
+type VideoModelOption = {
+  value: VideoModel;
+  label: string;
+  provider: VideoProvider;
+  allowedDurations: VideoDurationSeconds[];
+  allowedResolutions: VideoResolution[];
+  defaultDuration: VideoDurationSeconds;
+  defaultResolution: VideoResolution;
+};
+
+const VIDEO_MODEL_OPTIONS: VideoModelOption[] = [
   {
     value: "veo-3.1-fast-generate-preview",
     label: "Veo 3.1 Fast",
+    provider: "veo",
+    allowedDurations: [4, 6, 8],
+    allowedResolutions: ["720p", "1080p"],
+    defaultDuration: 6,
+    defaultResolution: "720p",
   },
   {
     value: "veo-3.1-generate-preview",
     label: "Veo 3.1 Standard",
+    provider: "veo",
+    allowedDurations: [4, 6, 8],
+    allowedResolutions: ["720p", "1080p"],
+    defaultDuration: 6,
+    defaultResolution: "720p",
+  },
+  {
+    value: "sora-2",
+    label: "Sora 2",
+    provider: "sora",
+    allowedDurations: [4, 8, 12],
+    allowedResolutions: ["720p", "1024p"],
+    defaultDuration: 8,
+    defaultResolution: "720p",
+  },
+  {
+    value: "sora-2-pro",
+    label: "Sora 2 Pro",
+    provider: "sora",
+    allowedDurations: [4, 8, 12],
+    allowedResolutions: ["720p", "1024p"],
+    defaultDuration: 8,
+    defaultResolution: "720p",
   },
 ];
-const VIDEO_DURATION_OPTIONS: VideoDurationSeconds[] = [4, 6, 8];
+const VIDEO_DURATION_OPTIONS: VideoDurationSeconds[] = [4, 6, 8, 12];
+const VIDEO_RESOLUTION_OPTIONS: VideoResolution[] = ["720p", "1080p", "1024p"];
 const VIDEO_PROMPT_GUARDRAIL =
   "Regras obrigatorias: preserve exatamente a forma, proporcoes, rotulo e identidade visual do produto, sem deformar, sem redesenhar e sem alterar a embalagem. Nao inserir legendas, textos, tipografia, logotipos ou marcas d'agua, a menos que isso seja solicitado explicitamente no prompt.";
 const CHAT_TEXT_MODEL_LABEL = "gpt-5.2";
@@ -474,6 +518,36 @@ function getVideoAspectRatioFromImageSize(sizeValue?: string | null): VideoAspec
   return height > width ? "9:16" : "16:9";
 }
 
+function getVideoModelOption(model: VideoModel): VideoModelOption {
+  return VIDEO_MODEL_OPTIONS.find((option) => option.value === model) || VIDEO_MODEL_OPTIONS[0];
+}
+
+function getVideoProviderLabel(model: VideoModel): string {
+  return getVideoModelOption(model).provider === "sora" ? "Sora" : "Veo";
+}
+
+function normalizeVideoResolutionForModel(
+  model: VideoModel,
+  resolution: VideoResolution
+): VideoResolution {
+  const modelOption = getVideoModelOption(model);
+  if (modelOption.allowedResolutions.includes(resolution)) {
+    return resolution;
+  }
+  return modelOption.defaultResolution;
+}
+
+function normalizeVideoDurationForModel(
+  model: VideoModel,
+  duration: VideoDurationSeconds
+): VideoDurationSeconds {
+  const modelOption = getVideoModelOption(model);
+  if (modelOption.allowedDurations.includes(duration)) {
+    return duration;
+  }
+  return modelOption.defaultDuration;
+}
+
 function promptRequestsOnScreenText(promptValue: string): boolean {
   const normalized = promptValue.toLowerCase();
   return /(legenda|legendas|texto|textos|caption|captions|subtitle|subtitles|title|titulo|tipografia|typography|logo|logotipo|marca d(?:'|\u2019)?agua|watermark)/i.test(
@@ -481,45 +555,29 @@ function promptRequestsOnScreenText(promptValue: string): boolean {
   );
 }
 
-function compareVersionParts(a: string, b: string): number {
-  const aParts = a.split(".").map((part) => Number(part) || 0);
-  const bParts = b.split(".").map((part) => Number(part) || 0);
-  const maxLength = Math.max(aParts.length, bParts.length);
+const DEFAULT_VIDEO_MODEL_LABEL = VIDEO_MODEL_OPTIONS[0]?.label || "Veo 3.1 Fast";
 
-  for (let index = 0; index < maxLength; index += 1) {
-    const aPart = aParts[index] ?? 0;
-    const bPart = bParts[index] ?? 0;
-    if (aPart !== bPart) {
-      return aPart - bPart;
-    }
+function getVideoFailureMessage(rawMessage?: string, model: VideoModel = VIDEO_MODEL_OPTIONS[0].value): string {
+  const providerLabel = getVideoProviderLabel(model);
+  const original = (rawMessage || "").trim();
+  const message = original.toLowerCase();
+
+  if (
+    original &&
+    !message.includes("http ") &&
+    !message.startsWith("falha ao consultar status do video")
+  ) {
+    return original;
   }
 
-  return 0;
-}
-
-const LATEST_VEO_VERSION_LABEL = (() => {
-  const versions = VIDEO_MODEL_OPTIONS.map(
-    (option) => option.value.match(/veo-(\d+(?:\.\d+)?)/i)?.[1] ?? ""
-  ).filter(Boolean);
-
-  if (!versions.length) {
-    return "Veo";
-  }
-
-  const latestVersion = [...versions].sort(compareVersionParts).at(-1);
-  return latestVersion ? `Veo ${latestVersion}` : "Veo";
-})();
-
-function getVideoFailureMessage(rawMessage?: string): string {
-  const message = (rawMessage || "").toLowerCase();
   if (
     message.includes("high demand") ||
     message.includes("try again later") ||
     message.includes("resource_exhausted")
   ) {
-    return "O Veo esta com alta demanda no momento. Tente novamente em instantes.";
+    return `O ${providerLabel} esta com alta demanda no momento. Tente novamente em instantes.`;
   }
-  return "Nao foi possivel gerar o video agora. Tente novamente em instantes.";
+  return `Nao foi possivel gerar o video com ${providerLabel} agora. Tente novamente em instantes.`;
 }
 
 function getHistoryVideoTargetKey(historyId: string): string {
@@ -2036,6 +2094,9 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const isGeneratingVideoGenerationModal =
     videoGenerationModalTargetKey.length > 0 &&
     videoGenerationTarget === videoGenerationModalTargetKey;
+  const selectedVideoModelOption = getVideoModelOption(videoGenerationModelInput);
+  const selectedVideoProviderLabel = getVideoProviderLabel(videoGenerationModelInput);
+  const isSoraSelected = selectedVideoModelOption.provider === "sora";
   const combinedGenerationHistory = useMemo<CombinedGenerationHistoryItem[]>(() => {
     const images: CombinedGenerationHistoryItem[] = generatedHistory.map((image) => ({
       type: "image",
@@ -2087,12 +2148,16 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   }
 
   function openVideoGenerationModal(source: VideoGenerationModalSource) {
+    const defaultVideoModel = VIDEO_MODEL_OPTIONS[0].value;
+    const defaultModelOption = getVideoModelOption(defaultVideoModel);
     setVideoGenerationModalSource(source);
     setVideoGenerationPromptInput(source.prompt);
     setVideoGenerationAspectRatioInput(source.aspectRatio);
-    setVideoGenerationDurationInput(source.durationSeconds);
-    setVideoGenerationModelInput(VIDEO_MODEL_OPTIONS[0].value);
-    setVideoGenerationResolutionInput("720p");
+    setVideoGenerationDurationInput(
+      normalizeVideoDurationForModel(defaultVideoModel, source.durationSeconds)
+    );
+    setVideoGenerationModelInput(defaultVideoModel);
+    setVideoGenerationResolutionInput(defaultModelOption.defaultResolution);
     setVideoGenerationNegativePromptInput("");
     setVideoGenerationErrorMessage("");
     setError("");
@@ -3023,10 +3088,14 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       prompt.trim() ||
       "Transforme esta imagem em um video cinematografico curto com movimento suave.";
     const aspectRatio: VideoAspectRatio = options?.aspectRatio === "9:16" ? "9:16" : "16:9";
-    const durationSeconds: VideoDurationSeconds = options?.durationSeconds || 6;
     const model: VideoModel = options?.model || VIDEO_MODEL_OPTIONS[0].value;
-    const resolution: VideoResolution = options?.resolution || "720p";
+    const selectedModelOption = getVideoModelOption(model);
+    const durationSeconds: VideoDurationSeconds =
+      options?.durationSeconds || selectedModelOption.defaultDuration;
+    const resolution: VideoResolution = options?.resolution || selectedModelOption.defaultResolution;
     const negativePromptValue = (options?.negativePrompt || "").trim();
+    const providerLabel = getVideoProviderLabel(model);
+    const isSoraModel = selectedModelOption.provider === "sora";
 
     if (!imageUrl || videoGenerationTarget) {
       return;
@@ -3039,8 +3108,22 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       return;
     }
 
-    if (resolution === "1080p" && durationSeconds !== 8) {
-      const message = "Para 1080p, selecione duracao de 8s.";
+    if (!selectedModelOption.allowedResolutions.includes(resolution)) {
+      const message = `Resolucao invalida para ${providerLabel}.`;
+      setVideoGenerationErrorMessage(message);
+      setError(message);
+      return;
+    }
+
+    if (!selectedModelOption.allowedDurations.includes(durationSeconds)) {
+      const message = `Duracao invalida para ${providerLabel}.`;
+      setVideoGenerationErrorMessage(message);
+      setError(message);
+      return;
+    }
+
+    if (!isSoraModel && resolution === "1080p" && durationSeconds !== 8) {
+      const message = "Para 1080p no Veo, selecione duracao de 8s.";
       setVideoGenerationErrorMessage(message);
       setError(message);
       return;
@@ -3062,32 +3145,39 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       const baseVideoPrompt = promptValue.trim();
       const allowOnScreenText = promptRequestsOnScreenText(baseVideoPrompt);
       const finalVideoPrompt = `${baseVideoPrompt}\n\n${VIDEO_PROMPT_GUARDRAIL}`;
-      const finalNegativePrompt = [
-        negativePromptValue,
-        !allowOnScreenText
-          ? "sem texto na tela, sem legendas, sem tipografia, sem logotipos, sem marca d'agua"
-          : "",
-      ]
-        .filter(Boolean)
-        .join(", ");
+      const finalNegativePrompt = !isSoraModel
+        ? [
+            negativePromptValue,
+            !allowOnScreenText
+              ? "sem texto na tela, sem legendas, sem tipografia, sem logotipos, sem marca d'agua"
+              : "",
+          ]
+            .filter(Boolean)
+            .join(", ")
+        : "";
 
       let operationName = "";
       let startFailureMessage = "";
 
       for (let startAttempt = 1; startAttempt <= 3; startAttempt += 1) {
+        const requestBody: Record<string, unknown> = {
+          imageUrl,
+          sourceImageId,
+          prompt: finalVideoPrompt,
+          aspectRatio,
+          durationSeconds,
+          resolution,
+          model,
+        };
+
+        if (!isSoraModel) {
+          requestBody.negativePrompt = finalNegativePrompt;
+        }
+
         const startResponse = await fetch("/api/chatgpt/generate-video", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            imageUrl,
-            sourceImageId,
-            prompt: finalVideoPrompt,
-            aspectRatio,
-            durationSeconds,
-            resolution,
-            model,
-            negativePrompt: finalNegativePrompt,
-          }),
+          body: JSON.stringify(requestBody),
         });
 
         const startPayload = (await startResponse.json().catch(() => null)) as
@@ -3104,7 +3194,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
             setGeneratedVideoHistoryWarning("");
             break;
           }
-          startFailureMessage = "Gemini nao retornou a operacao de video.";
+          startFailureMessage = `${providerLabel} nao retornou a operacao de video.`;
         } else {
           startFailureMessage = startPayload?.error || "Falha ao iniciar geracao de video.";
           const shouldRetryStart = [429, 500, 502, 503, 504].includes(startResponse.status);
@@ -3113,7 +3203,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
           }
           if (shouldRetryStart && startAttempt < 3) {
             setGeneratedVideoHistoryWarning(
-              "Alta demanda no Veo. Tentando novamente automaticamente..."
+              `Alta demanda no ${providerLabel}. Tentando novamente automaticamente...`
             );
             await new Promise((resolve) => window.setTimeout(resolve, 1200 * startAttempt));
             continue;
@@ -3126,11 +3216,11 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       }
 
       if (!operationName) {
-        throw new Error(startFailureMessage || "Gemini nao retornou a operacao de video.");
+        throw new Error(startFailureMessage || `${providerLabel} nao retornou a operacao de video.`);
       }
 
       const startedAt = Date.now();
-      const timeoutMs = 5 * 60 * 1000;
+      const timeoutMs = isSoraModel ? 12 * 60 * 1000 : 5 * 60 * 1000;
 
       while (Date.now() - startedAt < timeoutMs) {
         await new Promise((resolve) => window.setTimeout(resolve, 8000));
@@ -3175,7 +3265,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
           const nextVideoUrl =
             typeof statusPayload.videoUrl === "string" ? statusPayload.videoUrl : "";
           if (!nextVideoUrl) {
-            throw new Error("Gemini concluiu, mas nao retornou video.");
+            throw new Error(`${providerLabel} concluiu, mas nao retornou video.`);
           }
           if (targetKey === "latest") {
             setGeneratedVideoUrl(nextVideoUrl);
@@ -3232,7 +3322,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
         videoError instanceof Error
           ? videoError.message
           : "Nao foi possivel gerar video agora.";
-      const message = getVideoFailureMessage(rawMessage);
+      const message = getVideoFailureMessage(rawMessage, model);
       setVideoGenerationErrorMessage(message);
       setError(message);
     } finally {
@@ -3410,7 +3500,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                       <MdMovie className="h-5 w-5" />
                       {isGeneratingLatestVideo
                         ? "Gerando video..."
-                        : `Gerar video com ${LATEST_VEO_VERSION_LABEL}`}
+                        : `Gerar video com ${DEFAULT_VIDEO_MODEL_LABEL}`}
                     </button>
                     {generatedVideoUrl ? (
                       <div className="space-y-2">
@@ -3623,7 +3713,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                       <MdMovie className="h-5 w-5" />
                       {isGeneratingLatestVideo
                         ? "Gerando video..."
-                        : `Gerar video com ${LATEST_VEO_VERSION_LABEL}`}
+                        : `Gerar video com ${DEFAULT_VIDEO_MODEL_LABEL}`}
                     </button>
                     {generatedVideoUrl ? (
                       <div className="space-y-2">
@@ -4015,7 +4105,8 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                         >
                           <div className="h-10 w-10 animate-spin rounded-full border-4 border-cyan-400 border-t-transparent" />
                           <p className="text-sm">
-                            Processando no Veo. Isso pode levar alguns minutos.
+                            Processando no {selectedVideoProviderLabel}. Isso pode levar alguns
+                            minutos.
                           </p>
                         </div>
                       ) : videoGenerationModalResultUrl ? (
@@ -4090,13 +4181,20 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                               isLight ? "text-slate-500" : "text-gray-300"
                             }`}
                           >
-                            Modelo Veo
+                            Modelo de video
                           </label>
                           <select
                             value={videoGenerationModelInput}
-                            onChange={(event) =>
-                              setVideoGenerationModelInput(event.target.value as VideoModel)
-                            }
+                            onChange={(event) => {
+                              const nextModel = event.target.value as VideoModel;
+                              setVideoGenerationModelInput(nextModel);
+                              setVideoGenerationResolutionInput((current) =>
+                                normalizeVideoResolutionForModel(nextModel, current)
+                              );
+                              setVideoGenerationDurationInput((current) =>
+                                normalizeVideoDurationForModel(nextModel, current)
+                              );
+                            }}
                             disabled={isGeneratingAnyVideo}
                             className={`h-10 w-full rounded-xl border px-3 text-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${
                               isLight
@@ -4124,8 +4222,16 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                             value={videoGenerationResolutionInput}
                             onChange={(event) => {
                               const value = event.target.value as VideoResolution;
-                              setVideoGenerationResolutionInput(value);
-                              if (value === "1080p" && videoGenerationDurationInput !== 8) {
+                              const normalizedResolution = normalizeVideoResolutionForModel(
+                                videoGenerationModelInput,
+                                value
+                              );
+                              setVideoGenerationResolutionInput(normalizedResolution);
+                              if (
+                                selectedVideoModelOption.provider === "veo" &&
+                                normalizedResolution === "1080p" &&
+                                videoGenerationDurationInput !== 8
+                              ) {
                                 setVideoGenerationDurationInput(8);
                               }
                             }}
@@ -4136,8 +4242,19 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                                 : "border-gray-700 bg-gray-900/85 text-gray-100"
                             } ${imageFocusClass}`}
                           >
-                            <option value="720p">720p</option>
-                            <option value="1080p">1080p</option>
+                            {VIDEO_RESOLUTION_OPTIONS.map((resolutionOption) => (
+                              <option
+                                key={`video-resolution-modal-${resolutionOption}`}
+                                value={resolutionOption}
+                                disabled={
+                                  !selectedVideoModelOption.allowedResolutions.includes(
+                                    resolutionOption
+                                  )
+                                }
+                              >
+                                {resolutionOption}
+                              </option>
+                            ))}
                           </select>
                         </div>
                       </div>
@@ -4216,19 +4333,26 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                         </div>
                         <div className="mt-2 grid grid-cols-3 gap-2">
                           {VIDEO_DURATION_OPTIONS.map((seconds) => {
+                            const disabledForModel =
+                              !selectedVideoModelOption.allowedDurations.includes(seconds);
                             const disabledForResolution =
-                              videoGenerationResolutionInput === "1080p" && seconds !== 8;
+                              selectedVideoModelOption.provider === "veo" &&
+                              videoGenerationResolutionInput === "1080p" &&
+                              seconds !== 8;
                             return (
                               <button
                                 key={`video-duration-modal-${seconds}`}
                                 type="button"
                                 onClick={() => {
+                                  if (disabledForModel) {
+                                    return;
+                                  }
                                   if (disabledForResolution) {
                                     setVideoGenerationResolutionInput("720p");
                                   }
                                   setVideoGenerationDurationInput(seconds);
                                 }}
-                                disabled={isGeneratingAnyVideo}
+                                disabled={isGeneratingAnyVideo || disabledForModel}
                                 className={`rounded-xl border px-3 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
                                   videoGenerationDurationInput === seconds
                                     ? isLight
@@ -4245,7 +4369,9 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                           })}
                         </div>
                         <p className={`mt-1 text-[11px] ${isLight ? "text-slate-500" : "text-gray-400"}`}>
-                          Para 1080p, a duracao deve ser 8s.
+                          {isSoraSelected
+                            ? "Sora aceita 4s, 8s e 12s."
+                            : "Para 1080p no Veo, a duracao deve ser 8s."}
                         </p>
                       </div>
                     </div>
@@ -4279,29 +4405,35 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                             } ${imageFocusClass}`}
                           />
                         </div>
-                        <div>
-                          <label
-                            className={`mb-1 block text-[11px] font-semibold uppercase tracking-[0.12em] ${
-                              isLight ? "text-slate-500" : "text-gray-300"
-                            }`}
-                          >
-                            Prompt negativo (opcional)
-                          </label>
-                          <input
-                            type="text"
-                            value={videoGenerationNegativePromptInput}
-                            onChange={(event) =>
-                              setVideoGenerationNegativePromptInput(event.target.value)
-                            }
-                            placeholder="Ex: sem distorcoes, sem texto, sem logotipos"
-                            disabled={isGeneratingAnyVideo}
-                            className={`h-10 w-full rounded-xl border px-3 text-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${
-                              isLight
-                                ? "border-slate-300 bg-white text-slate-900"
-                                : "border-gray-700 bg-gray-900/85 text-gray-100"
-                            } ${imageFocusClass}`}
-                          />
-                        </div>
+                        {isSoraSelected ? (
+                          <p className={`text-[11px] ${isLight ? "text-slate-500" : "text-gray-400"}`}>
+                            O Sora usa apenas prompt principal e referencia de imagem.
+                          </p>
+                        ) : (
+                          <div>
+                            <label
+                              className={`mb-1 block text-[11px] font-semibold uppercase tracking-[0.12em] ${
+                                isLight ? "text-slate-500" : "text-gray-300"
+                              }`}
+                            >
+                              Prompt negativo (opcional)
+                            </label>
+                            <input
+                              type="text"
+                              value={videoGenerationNegativePromptInput}
+                              onChange={(event) =>
+                                setVideoGenerationNegativePromptInput(event.target.value)
+                              }
+                              placeholder="Ex: sem distorcoes, sem texto, sem logotipos"
+                              disabled={isGeneratingAnyVideo}
+                              className={`h-10 w-full rounded-xl border px-3 text-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                                isLight
+                                  ? "border-slate-300 bg-white text-slate-900"
+                                  : "border-gray-700 bg-gray-900/85 text-gray-100"
+                              } ${imageFocusClass}`}
+                            />
+                          </div>
+                        )}
                         <p className={`text-[11px] leading-relaxed ${isLight ? "text-slate-500" : "text-gray-400"}`}>
                           O sistema aplica guardrails para preservar produto/embalagem e evitar
                           alteracoes nao solicitadas.
@@ -4334,7 +4466,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                       <MdMovie className="h-5 w-5" />
                       {isGeneratingVideoGenerationModal
                         ? "Gerando video..."
-                        : `Gerar video com ${LATEST_VEO_VERSION_LABEL}`}
+                        : `Gerar video com ${selectedVideoModelOption.label}`}
                     </button>
 
                     {isGeneratingVideoGenerationModal ? (
