@@ -33,6 +33,7 @@ import {
   MdStop,
 } from "react-icons/md";
 import { SiOpenai } from "react-icons/si";
+import Skeleton from "./components/Skeleton";
 
 type GenerationMode = "chat" | "image";
 type ImageSize = "1024x1024" | "1536x1024" | "1024x1536";
@@ -3466,22 +3467,16 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                         : "border border-purple-400/35 bg-purple-500/10 text-purple-100"
                     }`}
                   >
-                    <span
-                      className={`inline-flex h-11 w-11 items-center justify-center rounded-full ${
-                        isLight ? "bg-white/70 text-violet-600" : "bg-black/30 text-purple-200"
-                      }`}
-                    >
-                      <MdAutoFixHigh className="h-6 w-6 animate-pulse" />
-                    </span>
-                    <p className="text-sm font-medium">
-                      {sourceImage ? "Modificando imagem..." : "Criando nova imagem..."}
-                    </p>
+                    <Skeleton rounded="full" className="h-11 w-11" />
+                    <Skeleton className="h-4 w-48" />
+                    <Skeleton className="h-3 w-4/5 max-w-sm" />
+                    <Skeleton className="h-3 w-3/5 max-w-sm" />
                     <p
-                      className={`max-w-sm px-4 text-center text-sm leading-relaxed ${
-                        isLight ? "text-slate-700" : "text-purple-100"
+                      className={`max-w-sm px-4 text-center text-xs leading-relaxed ${
+                        isLight ? "text-slate-600" : "text-purple-200/90"
                       }`}
                     >
-                      {loadingVerse}
+                      {sourceImage ? "Modificando imagem..." : "Criando nova imagem..."} {loadingVerse}
                     </p>
                   </div>
                 ) : latestGenerated?.imageUrl ? (
@@ -3680,22 +3675,16 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                         : "border border-purple-400/35 bg-purple-500/10 text-purple-100"
                     }`}
                   >
-                    <span
-                      className={`inline-flex h-12 w-12 items-center justify-center rounded-full ${
-                        isLight ? "bg-white/70 text-violet-600" : "bg-black/30 text-purple-200"
-                      }`}
-                    >
-                      <MdAutoFixHigh className="h-7 w-7 animate-pulse" />
-                    </span>
-                    <p className="text-sm font-medium">
-                      {sourceImage ? "Modificando imagem..." : "Criando nova imagem..."}
-                    </p>
+                    <Skeleton rounded="full" className="h-12 w-12" />
+                    <Skeleton className="h-4 w-56" />
+                    <Skeleton className="h-3 w-4/5 max-w-md" />
+                    <Skeleton className="h-3 w-3/5 max-w-md" />
                     <p
-                      className={`max-w-md px-4 text-center text-sm leading-relaxed ${
-                        isLight ? "text-slate-700" : "text-purple-100"
+                      className={`max-w-md px-4 text-center text-xs leading-relaxed ${
+                        isLight ? "text-slate-600" : "text-purple-200/90"
                       }`}
                     >
-                      {loadingVerse}
+                      {sourceImage ? "Modificando imagem..." : "Criando nova imagem..."} {loadingVerse}
                     </p>
                   </div>
                 ) : latestGenerated?.imageUrl ? (
@@ -3794,13 +3783,27 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
             <p className={`mb-3 ${sectionTitleClass}`}>Historico de Geracoes</p>
             {loadingGeneratedHistory && combinedGenerationHistory.length === 0 ? (
               <div
-                className={`flex h-24 items-center justify-center rounded-xl border border-dashed text-xs ${
-                  isLight
-                    ? "border-slate-300 bg-slate-100 text-slate-500"
-                    : "border-purple-400/45 bg-purple-500/12 text-purple-100"
+                className={`rounded-xl border px-3 py-3 ${
+                  isLight ? "border-slate-300 bg-slate-100" : "border-purple-400/45 bg-purple-500/12"
                 }`}
               >
-                Carregando historico salvo...
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {Array.from({ length: 6 }).map((_, index) => (
+                    <div
+                      key={`history-skeleton-${index}`}
+                      className={`space-y-2 rounded-lg border p-2 ${
+                        isLight ? "border-slate-200 bg-white" : "border-gray-700/80 bg-gray-900/70"
+                      }`}
+                    >
+                      <Skeleton className="aspect-square w-full" />
+                      <Skeleton className="h-2.5 w-2/5" />
+                      <div className="grid grid-cols-2 gap-1">
+                        <Skeleton className="h-7 w-full" />
+                        <Skeleton className="h-7 w-full" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             ) : combinedGenerationHistory.length > 0 ? (
               <div className="columns-1 gap-x-2 sm:columns-2 lg:columns-3">

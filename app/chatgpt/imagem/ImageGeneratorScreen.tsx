@@ -16,6 +16,7 @@ import {
 import { FiUploadCloud } from "react-icons/fi";
 import { MdArrowBack, MdClose, MdImage, MdMoreVert, MdRocketLaunch } from "react-icons/md";
 import { SiOpenai } from "react-icons/si";
+import Skeleton from "../components/Skeleton";
 
 type AmbientadorItem = {
   file: File | null;
@@ -1256,13 +1257,11 @@ export default function ImageGeneratorScreen() {
                   ) : (
                     <>
                       {loading ? (
-                        <>
-                          <span className="inline-flex h-14 w-14 items-center justify-center rounded-2xl border border-cyan-300/35 bg-cyan-500/15">
-                            <span className="h-8 w-8 animate-spin rounded-full border-4 border-cyan-300 border-t-transparent" />
-                          </span>
-                          <span className="font-medium text-white">Gerando imagem...</span>
-                          <span className="text-xs text-gray-300">Aguarde alguns instantes</span>
-                        </>
+                        <div className="w-full max-w-sm space-y-3 px-6">
+                          <Skeleton rounded="full" className="mx-auto h-14 w-14" />
+                          <Skeleton className="h-4 w-2/3 mx-auto" />
+                          <Skeleton className="h-3 w-1/2 mx-auto" />
+                        </div>
                       ) : (
                         <>
                           <span className="inline-flex h-14 w-14 items-center justify-center rounded-2xl border border-purple-300/35 bg-purple-500/15">
@@ -1438,8 +1437,23 @@ export default function ImageGeneratorScreen() {
               <p>{bibliotecaError}</p>
             </div>
           ) : bibliotecaLoading ? (
-            <div className="rounded-xl border border-gray-700 bg-gray-900/60 px-4 py-6 text-center text-sm text-gray-300">
-              Carregando biblioteca...
+            <div className="rounded-xl border border-gray-700 bg-gray-900/60 px-4 py-4">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {Array.from({ length: 8 }).map((_, index) => (
+                  <article
+                    key={`biblioteca-skeleton-${index}`}
+                    className="space-y-2 rounded-xl border border-gray-700 bg-gray-900/70 p-3"
+                  >
+                    <Skeleton className="aspect-square w-full bg-gray-700/60" />
+                    <Skeleton className="h-3 w-4/5 bg-gray-700/60" />
+                    <Skeleton className="h-3 w-3/5 bg-gray-700/60" />
+                    <div className="grid grid-cols-2 gap-2">
+                      <Skeleton className="h-8 w-full bg-gray-700/60" />
+                      <Skeleton className="h-8 w-full bg-gray-700/60" />
+                    </div>
+                  </article>
+                ))}
+              </div>
             </div>
           ) : bibliotecaFiltro === "image" ? (
             generatedImages.length === 0 ? (

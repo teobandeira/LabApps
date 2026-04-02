@@ -29,7 +29,7 @@ const MODE_CARDS: ModeCard[] = [
     style: "chat",
   },
   {
-    title: "Image Designer PRO",
+    title: "IA Studio PRO",
     subtitle: "Texto para imagem",
     description:
       "Descreva uma cena e gere imagens na hora com diferentes proporcoes e estilo visual.",
