@@ -575,6 +575,50 @@ function normalizeImageSize(value: FormDataEntryValue | null | undefined): strin
   return IMAGE_SIZES.has(normalized) ? normalized : DEFAULT_IMAGE_SIZE;
 }
 
+function parseImageSize(size: string): { width: number; height: number } | null {
+  const match = /^(\d+)x(\d+)$/.exec(size.trim());
+  if (!match) {
+    return null;
+  }
+
+  const width = Number.parseInt(match[1], 10);
+  const height = Number.parseInt(match[2], 10);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null;
+  }
+
+  return { width, height };
+}
+
+async function normalizeSourceImageForEdit(
+  sourceImage: File,
+  imageSize: string
+): Promise<File> {
+  const targetSize = parseImageSize(imageSize);
+  if (!targetSize) {
+    return sourceImage;
+  }
+
+  const inputBuffer = Buffer.from(await sourceImage.arrayBuffer());
+  const outputBuffer = await sharp(inputBuffer, { failOn: "none" })
+    .rotate()
+    .resize(targetSize.width, targetSize.height, {
+      fit: "cover",
+      position: "centre",
+    })
+    .png({ compressionLevel: 9 })
+    .toBuffer();
+
+  if (outputBuffer.byteLength <= 0) {
+    return sourceImage;
+  }
+
+  const originalName = sourceImage.name || "image";
+  const baseName = originalName.replace(/\.[^.]+$/, "");
+  const normalizedName = `${baseName || "image"}.png`;
+  return new File([outputBuffer], normalizedName, { type: "image/png" });
+}
+
 function normalizeImageAction(value: FormDataEntryValue | null | undefined): ImageAction {
   return value === "edit" ? "edit" : "generate";
 }
@@ -1050,11 +1094,28 @@ export async function POST(request: NextRequest) {
             );
           }
 
-          const imageBytes = Buffer.from(await sourceImage.arrayBuffer()).toString("base64");
+          let normalizedSourceImage = sourceImage;
+          try {
+            normalizedSourceImage = await normalizeSourceImageForEdit(sourceImage, imageSize);
+          } catch {
+            return NextResponse.json(
+              { error: "Nao foi possivel preparar a imagem enviada para edicao." },
+              { status: 400 }
+            );
+          }
+
+          if (normalizedSourceImage.size > MAX_SOURCE_IMAGE_SIZE_BYTES) {
+            return NextResponse.json(
+              { error: "A imagem enviada excede o limite de 50MB apos o ajuste." },
+              { status: 400 }
+            );
+          }
+
+          const imageBytes = Buffer.from(await normalizedSourceImage.arrayBuffer()).toString("base64");
           parts.push({
             inlineData: {
               data: imageBytes,
-              mimeType: sourceImage.type || "image/png",
+              mimeType: normalizedSourceImage.type || "image/png",
             },
           });
         }
@@ -1152,11 +1213,32 @@ export async function POST(request: NextRequest) {
             );
           }
 
+          let normalizedSourceImage = sourceImage;
+          try {
+            normalizedSourceImage = await normalizeSourceImageForEdit(sourceImage, imageSize);
+          } catch {
+            return NextResponse.json(
+              { error: "Nao foi possivel preparar a imagem enviada para edicao." },
+              { status: 400 }
+            );
+          }
+
+          if (normalizedSourceImage.size > MAX_SOURCE_IMAGE_SIZE_BYTES) {
+            return NextResponse.json(
+              { error: "A imagem enviada excede o limite de 50MB apos o ajuste." },
+              { status: 400 }
+            );
+          }
+
           const editPayload = new FormData();
           editPayload.append("model", model);
           editPayload.append("prompt", prompt);
           editPayload.append("size", imageSize);
-          editPayload.append("image", sourceImage, sourceImage.name || "image.png");
+          editPayload.append(
+            "image",
+            normalizedSourceImage,
+            normalizedSourceImage.name || "image.png"
+          );
 
           imageResponse = await fetch(OPENAI_IMAGE_EDITS_API_URL, {
             method: "POST",
