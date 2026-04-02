@@ -256,6 +256,10 @@ export default function ImageGeneratorScreen() {
       SOCIAL_FORMAT_OPTIONS[0],
     [videoAspectRatio],
   );
+  const canGenerateVideo = useMemo(
+    () => Boolean(preview || produtoPrincipal.preview),
+    [preview, produtoPrincipal.preview],
+  );
 
   const sectionCardClass =
     "rounded-2xl border border-gray-700/80 bg-linear-to-br from-gray-900/80 via-slate-900/70 to-gray-950/70 p-4 sm:p-5";
@@ -470,7 +474,7 @@ export default function ImageGeneratorScreen() {
   };
 
   const openVideoModal = (sourceUrl?: string, preferredAspectRatio?: "9:16" | "1:1" | null) => {
-    const targetSource = sourceUrl || preview;
+    const targetSource = sourceUrl || preview || produtoPrincipal.preview;
     if (!targetSource || loading) return;
     setVideoSourceUrl(targetSource);
     if (preferredAspectRatio) {
@@ -1126,10 +1130,14 @@ export default function ImageGeneratorScreen() {
                 </button>
                 <button
                   type="button"
-                  onClick={() =>
-                    openVideoModal(preview || undefined, resolveAspectRatioFromImageSize(imageSize))
-                  }
-                  disabled={!preview || loading}
+                  onClick={() => {
+                    const directSource = preview || produtoPrincipal.preview || undefined;
+                    const preferredAspectRatio = preview
+                      ? resolveAspectRatioFromImageSize(imageSize)
+                      : null;
+                    openVideoModal(directSource, preferredAspectRatio);
+                  }}
+                  disabled={!canGenerateVideo || loading}
                   className="inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-cyan-400/45 bg-cyan-500/20 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/30 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <FaVideo />
