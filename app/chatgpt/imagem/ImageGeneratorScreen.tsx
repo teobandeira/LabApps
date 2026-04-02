@@ -233,6 +233,7 @@ export default function ImageGeneratorScreen() {
   const [deleteModalState, setDeleteModalState] = useState<DeleteModalState>(null);
   const [bibliotecaLightboxItem, setBibliotecaLightboxItem] =
     useState<BibliotecaLightboxItem>(null);
+  const [bibliotecaImageLightboxLoading, setBibliotecaImageLightboxLoading] = useState(false);
   const [mergeModalOpen, setMergeModalOpen] = useState(false);
   const [selectedVideoIdsForMerge, setSelectedVideoIdsForMerge] = useState<string[]>([]);
   const [mergePreserveAudio, setMergePreserveAudio] = useState(true);
@@ -260,6 +261,13 @@ export default function ImageGeneratorScreen() {
     () => Boolean(preview || produtoPrincipal.preview),
     [preview, produtoPrincipal.preview],
   );
+  const deleteModalMediaId = useMemo(() => {
+    if (!deleteModalState) return null;
+    return `${deleteModalState.type}:${deleteModalState.item.id}`;
+  }, [deleteModalState]);
+  const isDeletingFromModal = deleteModalMediaId
+    ? deletingMediaIds.includes(deleteModalMediaId)
+    : false;
 
   const sectionCardClass =
     "rounded-2xl border border-gray-700/80 bg-linear-to-br from-gray-900/80 via-slate-900/70 to-gray-950/70 p-4 sm:p-5";
@@ -331,6 +339,20 @@ export default function ImageGeneratorScreen() {
   useEffect(() => {
     void loadBiblioteca();
   }, []);
+
+  useEffect(() => {
+    if (!bibliotecaLightboxItem || bibliotecaLightboxItem.type !== "image") {
+      setBibliotecaImageLightboxLoading(false);
+      return;
+    }
+
+    setBibliotecaImageLightboxLoading(true);
+    const timer = window.setTimeout(() => {
+      setBibliotecaImageLightboxLoading(false);
+    }, 2000);
+
+    return () => window.clearTimeout(timer);
+  }, [bibliotecaLightboxItem]);
 
   useEffect(() => {
     setSelectedVideoIdsForMerge((current) =>
@@ -476,6 +498,10 @@ export default function ImageGeneratorScreen() {
   const openVideoModal = (sourceUrl?: string, preferredAspectRatio?: "9:16" | "1:1" | null) => {
     const targetSource = sourceUrl || preview || produtoPrincipal.preview;
     if (!targetSource || loading) return;
+    setIsTopMenuOpen(false);
+    if (window.matchMedia("(max-width: 640px)").matches) {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
     setVideoSourceUrl(targetSource);
     if (preferredAspectRatio) {
       setVideoAspectRatio(preferredAspectRatio);
@@ -925,7 +951,7 @@ export default function ImageGeneratorScreen() {
   );
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
+    <div className="min-h-screen bg-gray-900 text-white [&_button:enabled]:cursor-pointer [&_a]:cursor-pointer">
       {topActionMenu}
       <main className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
         {toastState ? (
@@ -1609,6 +1635,11 @@ export default function ImageGeneratorScreen() {
                   autoPlay
                   className="mx-auto max-h-[75vh] w-full object-contain"
                 />
+              ) : bibliotecaImageLightboxLoading ? (
+                <div className="flex min-h-[320px] w-full flex-col items-center justify-center gap-3 px-4 py-10 text-center text-gray-200">
+                  <div className="h-10 w-10 animate-spin rounded-full border-4 border-cyan-400 border-t-transparent" />
+                  <p className="text-sm">Carregando imagem...</p>
+                </div>
               ) : (
                 <img
                   src={bibliotecaLightboxItem.url}
@@ -1622,8 +1653,8 @@ export default function ImageGeneratorScreen() {
       )}
 
       {videoModalOpen && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/55 p-3 backdrop-blur-[2px] sm:p-5">
-          <div className="mx-auto my-1 flex w-full max-w-352 flex-col overflow-hidden rounded-2xl border border-gray-600/70 bg-gray-900 shadow-2xl shadow-black/30 sm:my-4">
+        <div className="fixed inset-0 z-[95] overflow-y-auto bg-black/65 p-0 backdrop-blur-[2px] sm:p-5">
+          <div className="mx-0 my-0 flex h-dvh w-full max-w-none flex-col overflow-hidden rounded-none border-0 bg-gray-900 shadow-2xl shadow-black/30 sm:mx-auto sm:my-4 sm:h-auto sm:max-w-352 sm:rounded-2xl sm:border sm:border-gray-600/70">
             <div className="flex items-center justify-between border-b border-gray-700/80 bg-gray-900/95 px-4 py-3 sm:px-5">
               <h3 className="inline-flex items-center gap-2 text-base font-semibold text-white sm:text-lg">
                 <FaPlay className="text-lg text-cyan-300" />
@@ -1639,7 +1670,7 @@ export default function ImageGeneratorScreen() {
               </button>
             </div>
 
-            <div className="max-h-[70vh] overflow-y-auto px-4 py-4 sm:px-5 sm:py-5">
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:max-h-[70vh] sm:px-5 sm:py-5">
               <div className="grid grid-cols-1 gap-4 xl:grid-cols-[420px_minmax(0,1fr)]">
                 <div className="rounded-xl border border-gray-700/70 bg-gray-800/55 p-4">
                   <p className={fieldLabelClass}>{videoResult ? "Vídeo gerado" : "Preview da imagem"}</p>
@@ -1830,16 +1861,18 @@ export default function ImageGeneratorScreen() {
               <button
                 type="button"
                 onClick={closeDeleteModal}
-                className="inline-flex h-10 min-w-30 items-center justify-center rounded-lg border border-gray-600 bg-gray-800 px-4 text-sm font-medium text-gray-200 transition hover:bg-gray-700"
+                disabled={isDeletingFromModal}
+                className="inline-flex h-10 min-w-30 items-center justify-center rounded-lg border border-gray-600 bg-gray-800 px-4 text-sm font-medium text-gray-200 transition hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Cancelar
               </button>
               <button
                 type="button"
                 onClick={() => void confirmDeleteFromModal()}
-                className="inline-flex h-10 min-w-36.25 items-center justify-center rounded-lg border border-red-500/45 bg-red-500/20 px-4 text-sm font-semibold text-red-100 transition hover:bg-red-500/30"
+                disabled={isDeletingFromModal}
+                className="inline-flex h-10 min-w-36.25 items-center justify-center rounded-lg border border-red-500/45 bg-red-500/20 px-4 text-sm font-semibold text-red-100 transition hover:bg-red-500/30 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Excluir
+                {isDeletingFromModal ? "Excluindo..." : "Excluir"}
               </button>
             </div>
           </div>

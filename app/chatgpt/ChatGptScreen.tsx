@@ -4097,7 +4097,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                     </p>
 
                     <div
-                      className={`relative mt-2 flex h-[320px] items-center justify-center overflow-hidden rounded-xl border ${
+                      className={`relative mt-2 flex h-80 items-center justify-center overflow-hidden rounded-xl border ${
                         isLight
                           ? "border-slate-300 bg-black/90"
                           : "border-gray-700 bg-black/80"
@@ -4141,7 +4141,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                             void handleDownloadVideo(videoGenerationModalResultUrl, "video-modal")
                           }
                           disabled={downloadingVideo}
-                          className={`inline-flex h-10 min-w-[145px] items-center justify-center gap-2 rounded-lg border px-4 text-sm font-semibold transition disabled:cursor-not-allowed ${
+                          className={`inline-flex h-10 min-w-36.25 items-center justify-center gap-2 rounded-lg border px-4 text-sm font-semibold transition disabled:cursor-not-allowed ${
                             isLight
                               ? "border-cyan-300 bg-cyan-500 text-white hover:bg-cyan-600 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
                               : "border-cyan-400/45 bg-cyan-500/15 text-cyan-100 hover:bg-cyan-500/25 disabled:border-gray-600 disabled:bg-gray-700 disabled:text-gray-400"
