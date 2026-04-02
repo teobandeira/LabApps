@@ -1,4 +1,4 @@
-import { get } from "@vercel/blob";
+import { del, get } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
@@ -21,6 +21,14 @@ type BlobReadResult = {
   stream: ReadableStream<Uint8Array>;
   contentType: string;
 };
+
+async function deleteFromBlob(pathname: string, token: string): Promise<void> {
+  try {
+    await del(pathname, { token });
+  } catch {
+    // limpeza de blob em melhor esforço
+  }
+}
 
 async function readFromBlob(pathname: string, token: string): Promise<BlobReadResult | null> {
   try {
@@ -147,6 +155,46 @@ export async function GET(
   } catch {
     return NextResponse.json(
       { error: "Erro inesperado ao carregar video." },
+      { status: 500 }
+    );
+  }
+}
+
+export async function DELETE(
+  _request: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await context.params;
+    if (!id) {
+      return NextResponse.json({ error: "Id do video nao informado." }, { status: 400 });
+    }
+
+    const videoRecord = await prisma.generatedVideo.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        blobPath: true,
+      },
+    });
+
+    if (!videoRecord) {
+      return NextResponse.json({ error: "Video nao encontrado." }, { status: 404 });
+    }
+
+    await prisma.generatedVideo.delete({
+      where: { id: videoRecord.id },
+    });
+
+    const blobToken = process.env.BLOB_READ_WRITE_TOKEN;
+    if (blobToken && videoRecord.blobPath) {
+      await deleteFromBlob(videoRecord.blobPath, blobToken);
+    }
+
+    return NextResponse.json({ ok: true, id: videoRecord.id });
+  } catch {
+    return NextResponse.json(
+      { error: "Erro inesperado ao excluir video." },
       { status: 500 }
     );
   }

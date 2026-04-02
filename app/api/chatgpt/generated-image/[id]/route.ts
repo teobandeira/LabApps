@@ -1,4 +1,4 @@
-import { get } from "@vercel/blob";
+import { del, get } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
@@ -24,6 +24,14 @@ type BlobReadResult = {
   stream: ReadableStream<Uint8Array>;
   contentType: string;
 };
+
+async function deleteFromBlob(pathname: string, token: string): Promise<void> {
+  try {
+    await del(pathname, { token });
+  } catch {
+    // limpeza de blob em melhor esforço
+  }
+}
 
 async function readFromBlob(pathname: string, token: string): Promise<BlobReadResult | null> {
   try {
@@ -145,6 +153,46 @@ export async function GET(
   } catch {
     return NextResponse.json(
       { error: "Erro inesperado ao carregar imagem." },
+      { status: 500 }
+    );
+  }
+}
+
+export async function DELETE(
+  _request: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await context.params;
+    if (!id) {
+      return NextResponse.json({ error: "Id da imagem nao informado." }, { status: 400 });
+    }
+
+    const imageRecord = await prisma.generatedImage.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        blobPath: true,
+      },
+    });
+
+    if (!imageRecord) {
+      return NextResponse.json({ error: "Imagem nao encontrada." }, { status: 404 });
+    }
+
+    await prisma.generatedImage.delete({
+      where: { id: imageRecord.id },
+    });
+
+    const blobToken = process.env.BLOB_READ_WRITE_TOKEN;
+    if (blobToken && imageRecord.blobPath) {
+      await deleteFromBlob(imageRecord.blobPath, blobToken);
+    }
+
+    return NextResponse.json({ ok: true, id: imageRecord.id });
+  } catch {
+    return NextResponse.json(
+      { error: "Erro inesperado ao excluir imagem." },
       { status: 500 }
     );
   }
