@@ -1232,14 +1232,32 @@ export default function ImageGeneratorScreen() {
                           loading ? "opacity-55" : "opacity-100"
                         }`}
                       />
+                      {loading ? (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-md bg-black/45 text-gray-100">
+                          <div className="h-9 w-9 animate-spin rounded-full border-4 border-cyan-400 border-t-transparent" />
+                          <span className="text-xs font-medium">Gerando imagem...</span>
+                        </div>
+                      ) : null}
                     </div>
                   ) : (
                     <>
-                      <span className="inline-flex h-14 w-14 items-center justify-center rounded-2xl border border-purple-300/35 bg-purple-500/15">
-                        <FiUploadCloud className="text-3xl text-purple-200" />
-                      </span>
-                      <span className="font-medium text-white">Clique ou arraste a imagem aqui</span>
-                      <span className="text-xs text-gray-300">JPG, PNG, WEBP (opcional)</span>
+                      {loading ? (
+                        <>
+                          <span className="inline-flex h-14 w-14 items-center justify-center rounded-2xl border border-cyan-300/35 bg-cyan-500/15">
+                            <span className="h-8 w-8 animate-spin rounded-full border-4 border-cyan-300 border-t-transparent" />
+                          </span>
+                          <span className="font-medium text-white">Gerando imagem...</span>
+                          <span className="text-xs text-gray-300">Aguarde alguns instantes</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="inline-flex h-14 w-14 items-center justify-center rounded-2xl border border-purple-300/35 bg-purple-500/15">
+                            <FiUploadCloud className="text-3xl text-purple-200" />
+                          </span>
+                          <span className="font-medium text-white">Clique ou arraste a imagem aqui</span>
+                          <span className="text-xs text-gray-300">JPG, PNG, WEBP (opcional)</span>
+                        </>
+                      )}
                     </>
                   )}
                 </label>
