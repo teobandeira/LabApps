@@ -289,7 +289,6 @@ export default function ImageGeneratorScreen() {
   const [videoPrompt, setVideoPrompt] = useState(
     "Transforme esta imagem em um vídeo publicitário com movimento suave de câmera, foco no produto principal, iluminação realista e preservação total da forma original do produto.",
   );
-  const [videoNegativePrompt, setVideoNegativePrompt] = useState("");
   const [videoModel, setVideoModel] = useState<string>(VIDEO_MODEL_OPTIONS[0].value);
   const [videoAspectRatio, setVideoAspectRatio] = useState<string>(
     SOCIAL_FORMAT_OPTIONS[0].value,
@@ -337,10 +336,6 @@ export default function ImageGeneratorScreen() {
       SOCIAL_FORMAT_OPTIONS[0],
     [videoAspectRatio],
   );
-  const canGenerateVideo = useMemo(
-    () => Boolean(preview || produtoPrincipal.preview),
-    [preview, produtoPrincipal.preview],
-  );
   const deleteModalMediaId = useMemo(() => {
     if (!deleteModalState) return null;
     return `${deleteModalState.type}:${deleteModalState.item.id}`;
@@ -355,8 +350,6 @@ export default function ImageGeneratorScreen() {
     "rounded-2xl border border-gray-700/80 bg-linear-to-br from-gray-900/80 via-slate-900/70 to-gray-950/70 p-4 sm:p-5";
   const fieldLabelClass =
     "block pb-2 text-xs font-semibold uppercase tracking-[0.12em] text-gray-300";
-  const inputClass =
-    "w-full rounded-xl border border-gray-700/90 bg-gray-900/85 px-3 py-2.5 text-sm text-gray-100 placeholder-gray-500 transition focus:border-purple-400/60 focus:outline-none focus:ring-4 focus:ring-purple-500/15";
   const textareaClass =
     "w-full rounded-xl border border-gray-700/90 bg-gray-900/85 p-3 text-sm text-gray-100 placeholder-gray-500 transition focus:border-purple-400/60 focus:outline-none focus:ring-4 focus:ring-purple-500/15";
   const selectClass =
@@ -638,12 +631,18 @@ export default function ImageGeneratorScreen() {
 
   const openVideoModal = (sourceUrl?: string, preferredAspectRatio?: "9:16" | "1:1" | null) => {
     const targetSource = sourceUrl || preview || produtoPrincipal.preview;
-    if (!targetSource || loading) return;
+    if (loading) return;
     setIsTopMenuOpen(false);
     if (window.matchMedia("(max-width: 640px)").matches) {
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
-    setVideoSourceUrl(targetSource);
+    setVideoSourceUrl(targetSource || null);
+    if (!targetSource) {
+      const soraOption = VIDEO_MODEL_OPTIONS.find((option) => option.provider === "sora");
+      if (soraOption) {
+        setVideoModel(soraOption.value);
+      }
+    }
     if (preferredAspectRatio) {
       setVideoAspectRatio(preferredAspectRatio);
     }
@@ -668,11 +667,6 @@ export default function ImageGeneratorScreen() {
       notify("error", "Saldo insuficiente. Sao necessarios 2 creditos para gerar video.");
       return;
     }
-    if (!videoSourceUrl) {
-      notify("error", "Gere uma imagem antes de gerar o vídeo.");
-      return;
-    }
-
     if (!videoPrompt.trim()) {
       notify("error", "Informe o prompt do vídeo.");
       return;
@@ -692,7 +686,6 @@ export default function ImageGeneratorScreen() {
     ].filter(Boolean);
     const finalVideoPrompt = promptSegments.join("\n\n");
     const finalNegativePrompt = [
-      videoNegativePrompt.trim(),
       !allowOnScreenText
         ? "sem texto na tela, sem legendas, sem tipografia, sem logotipos, sem marca d'água"
         : "",
@@ -701,12 +694,7 @@ export default function ImageGeneratorScreen() {
       .join(", ");
 
     try {
-      const imageUrlForVideo = videoSourceUrl.startsWith("blob:")
-        ? await blobUrlToDataUrl(videoSourceUrl)
-        : videoSourceUrl;
-
       const body: Record<string, unknown> = {
-        imageUrl: imageUrlForVideo,
         prompt: finalVideoPrompt,
         model: videoModel,
         aspectRatio: videoAspectRatio,
@@ -716,6 +704,12 @@ export default function ImageGeneratorScreen() {
         deviceId: chatDeviceId,
         requestId: createRequestId(),
       };
+
+      if (videoSourceUrl) {
+        body.imageUrl = videoSourceUrl.startsWith("blob:")
+          ? await blobUrlToDataUrl(videoSourceUrl)
+          : videoSourceUrl;
+      }
 
       const res = await fetch("/api/chatgpt/generate-video", {
         method: "POST",
@@ -1368,7 +1362,7 @@ export default function ImageGeneratorScreen() {
                       : null;
                     openVideoModal(directSource, preferredAspectRatio);
                   }}
-                  disabled={!canGenerateVideo || loading || !canGenerateVideoByCredits}
+                  disabled={loading || !canGenerateVideoByCredits}
                   className="inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-cyan-400/45 bg-cyan-500/20 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/30 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <FaVideo />
@@ -2027,18 +2021,6 @@ export default function ImageGeneratorScreen() {
                         />
                       </div>
 
-                      <div>
-                        <label className={fieldLabelClass}>
-                          Prompt negativo <small>(opcional)</small>
-                        </label>
-                        <input
-                          value={videoNegativePrompt}
-                          onChange={(e) => setVideoNegativePrompt(e.target.value)}
-                          className={inputClass}
-                          placeholder="Ex: sem distorções, sem texto, sem logotipos"
-                          disabled={videoLoading}
-                        />
-                      </div>
                     </div>
                   </div>
                 </div>
@@ -2058,7 +2040,7 @@ export default function ImageGeneratorScreen() {
                 <button
                   type="button"
                   onClick={handleGenerateVideo}
-                  disabled={videoLoading || !videoSourceUrl || !canGenerateVideoByCredits}
+                  disabled={videoLoading || !canGenerateVideoByCredits}
                   className="inline-flex h-10 min-w-36.25 cursor-pointer items-center justify-center gap-2 rounded-lg border border-cyan-400/45 bg-cyan-500/25 px-4 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/35 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <FaVideo />

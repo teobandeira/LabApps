@@ -828,8 +828,8 @@ async function startGeminiVideoOperation(params: {
   model: string;
   geminiApiKey: string;
   prompt: string;
-  imageBase64: string;
-  mimeType: string;
+  imageBase64?: string;
+  mimeType?: string;
   aspectRatio: string;
   resolution: string;
   durationSeconds: number;
@@ -837,8 +837,9 @@ async function startGeminiVideoOperation(params: {
   imageFieldType: ImageFieldType;
   endpointVariant: StartEndpointVariant;
 }): Promise<{ response: Response; payload: StartOperationPayload | null }> {
-  const imagePayload =
-    params.imageFieldType === "bytesBase64Encoded"
+  const hasReferenceImage = Boolean(params.imageBase64 && params.mimeType);
+  const imagePayload = hasReferenceImage
+    ? params.imageFieldType === "bytesBase64Encoded"
       ? {
           mimeType: params.mimeType,
           bytesBase64Encoded: params.imageBase64,
@@ -846,13 +847,14 @@ async function startGeminiVideoOperation(params: {
       : {
           mimeType: params.mimeType,
           imageBytes: params.imageBase64,
-        };
+        }
+    : undefined;
 
   const requestBody =
     params.endpointVariant === "generateVideos"
       ? {
           prompt: params.prompt,
-          image: imagePayload,
+          ...(imagePayload ? { image: imagePayload } : {}),
           config: {
             aspectRatio: params.aspectRatio,
             resolution: params.resolution,
@@ -865,7 +867,7 @@ async function startGeminiVideoOperation(params: {
           instances: [
             {
               prompt: params.prompt,
-              image: imagePayload,
+              ...(imagePayload ? { image: imagePayload } : {}),
             },
           ],
           parameters: {
@@ -1130,8 +1132,8 @@ async function startVideoOperationForCandidate(params: {
   model: string;
   geminiApiKey: string;
   prompt: string;
-  imageBase64: string;
-  mimeType: string;
+  imageBase64?: string;
+  mimeType?: string;
   config: VideoGenerationConfig;
 }): Promise<
   | {
@@ -1268,11 +1270,13 @@ async function handleStartVideo(
 ): Promise<NextResponse> {
   const body = (await request.json()) as StartVideoBody;
   const imageUrl = normalizeString(body.imageUrl);
-  if (!imageUrl) {
-    return NextResponse.json({ error: "URL da imagem nao informada." }, { status: 400 });
-  }
+  const hasReferenceImage = Boolean(imageUrl);
 
-  const prompt = normalizeString(body.prompt) || DEFAULT_VIDEO_PROMPT;
+  const prompt =
+    normalizeString(body.prompt) ||
+    (hasReferenceImage
+      ? DEFAULT_VIDEO_PROMPT
+      : "Crie um video curto, cinematografico e realista com movimento suave de camera.");
   const modelInput = normalizeString(body.model);
   const selectedProvider = getVideoProviderFromModel(modelInput);
 
@@ -1318,7 +1322,6 @@ async function handleStartVideo(
   }
 
   const negativePrompt = provider === "gemini" ? normalizeString(body.negativePrompt) : "";
-  const sourceImageId = normalizeSourceImageId(body.sourceImageId);
   const deviceId = normalizeDeviceId(body.deviceId);
 
   if (!deviceId) {
@@ -1336,7 +1339,8 @@ async function handleStartVideo(
     );
   }
 
-  const { bytes, mimeType } = await fetchImageBytes(imageUrl, request);
+  const sourceImageId = hasReferenceImage ? normalizeSourceImageId(body.sourceImageId) : null;
+  const imagePayload = hasReferenceImage ? await fetchImageBytes(imageUrl, request) : null;
 
   if (provider === "sora") {
     const openAiApiKey = credentials.openAiApiKey?.trim();
@@ -1355,10 +1359,12 @@ async function handleStartVideo(
       );
     }
 
-    const inputReferenceDataUrl = await buildSoraInputReferenceDataUrl({
-      imageBytes: bytes,
-      targetSize: size,
-    });
+    const inputReferenceDataUrl = imagePayload
+      ? await buildSoraInputReferenceDataUrl({
+          imageBytes: imagePayload.bytes,
+          targetSize: size,
+        })
+      : undefined;
 
     const { response, payload } = await startSoraVideoOperation({
       model,
@@ -1417,7 +1423,8 @@ async function handleStartVideo(
     );
   }
 
-  const imageBase64 = Buffer.from(bytes).toString("base64");
+  const imageBase64 = imagePayload ? Buffer.from(imagePayload.bytes).toString("base64") : undefined;
+  const mimeType = imagePayload?.mimeType;
   const modelCandidates = buildModelCandidates(model);
   const configCandidates = buildConfigCandidates({
     aspectRatio,

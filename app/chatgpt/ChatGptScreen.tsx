@@ -138,7 +138,7 @@ type VideoModel =
 
 type VideoGenerationModalSource = {
   targetKey: string;
-  imageUrl: string;
+  imageUrl?: string;
   sourceImageId?: string | null;
   prompt: string;
   aspectRatio: VideoAspectRatio;
@@ -1132,8 +1132,6 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const [videoGenerationModalSource, setVideoGenerationModalSource] =
     useState<VideoGenerationModalSource | null>(null);
   const [videoGenerationPromptInput, setVideoGenerationPromptInput] = useState("");
-  const [videoGenerationNegativePromptInput, setVideoGenerationNegativePromptInput] =
-    useState("");
   const [videoGenerationModelInput, setVideoGenerationModelInput] = useState<VideoModel>(
     VIDEO_MODEL_OPTIONS[0].value
   );
@@ -1161,6 +1159,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const sourceImageInputRef = useRef<HTMLInputElement>(null);
   const chatPromptRef = useRef<HTMLTextAreaElement>(null);
   const imagePromptRef = useRef<HTMLTextAreaElement>(null);
+  const videoGenerationPreviewRef = useRef<HTMLDivElement>(null);
   const chatMessagesContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const codeCopyResetTimeoutRef = useRef<number | null>(null);
@@ -2173,7 +2172,10 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   }
 
   function openVideoGenerationModal(source: VideoGenerationModalSource) {
-    const defaultVideoModel = VIDEO_MODEL_OPTIONS[0].value;
+    const defaultVideoModel = source.imageUrl
+      ? VIDEO_MODEL_OPTIONS[0].value
+      : (VIDEO_MODEL_OPTIONS.find((option) => option.provider === "sora")?.value ||
+        VIDEO_MODEL_OPTIONS[0].value);
     const defaultModelOption = getVideoModelOption(defaultVideoModel);
     setVideoGenerationModalSource(source);
     setVideoGenerationPromptInput(source.prompt);
@@ -2183,7 +2185,6 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     );
     setVideoGenerationModelInput(defaultVideoModel);
     setVideoGenerationResolutionInput(defaultModelOption.defaultResolution);
-    setVideoGenerationNegativePromptInput("");
     setVideoGenerationErrorMessage("");
     setError("");
   }
@@ -2218,6 +2219,21 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       durationSeconds: 6,
       title: "Gerar video da imagem atual",
       subtitle: "Configure prompt, modelo, formato, resolucao e duracao.",
+    });
+  }
+
+  function openPromptOnlyVideoModal() {
+    openVideoGenerationModal({
+      targetKey: "latest",
+      imageUrl: "",
+      sourceImageId: null,
+      prompt:
+        prompt.trim() ||
+        "Crie um video cinematografico curto com movimento suave de camera e alta qualidade visual.",
+      aspectRatio: "16:9",
+      durationSeconds: 6,
+      title: "Gerar video sem imagem",
+      subtitle: "Use apenas prompt para gerar o video.",
     });
   }
 
@@ -3104,12 +3120,19 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     durationSeconds?: VideoDurationSeconds;
     model?: VideoModel;
     resolution?: VideoResolution;
-    negativePrompt?: string;
     targetKey?: string;
   }) {
     const targetKey = options?.targetKey?.trim() || "latest";
-    const imageUrl = options?.imageUrl || latestGenerated?.imageUrl;
-    const sourceImageId = options?.sourceImageId || latestGenerated?.imageId || null;
+    const hasExplicitImageUrl =
+      options !== undefined && Object.prototype.hasOwnProperty.call(options, "imageUrl");
+    const hasExplicitSourceImageId =
+      options !== undefined && Object.prototype.hasOwnProperty.call(options, "sourceImageId");
+    const imageUrl = hasExplicitImageUrl
+      ? options?.imageUrl?.trim() || ""
+      : latestGenerated?.imageUrl || "";
+    const sourceImageId = hasExplicitSourceImageId
+      ? options?.sourceImageId || null
+      : latestGenerated?.imageId || null;
     const promptValue =
       options?.prompt?.trim() ||
       latestImagePrompt.trim() ||
@@ -3121,11 +3144,10 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     const durationSeconds: VideoDurationSeconds =
       options?.durationSeconds || selectedModelOption.defaultDuration;
     const resolution: VideoResolution = options?.resolution || selectedModelOption.defaultResolution;
-    const negativePromptValue = (options?.negativePrompt || "").trim();
     const providerLabel = getVideoProviderLabel(model);
     const isSoraModel = selectedModelOption.provider === "sora";
 
-    if (!imageUrl || videoGenerationTarget) {
+    if (videoGenerationTarget) {
       return;
     }
 
@@ -3164,6 +3186,10 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     }
 
     try {
+      if (typeof window !== "undefined" && window.matchMedia("(max-width: 640px)").matches) {
+        videoGenerationPreviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+
       setVideoGenerationTarget(targetKey);
       setVideoGenerationErrorMessage("");
       if (targetKey === "latest") {
@@ -3181,7 +3207,6 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       const finalVideoPrompt = `${baseVideoPrompt}\n\n${VIDEO_PROMPT_GUARDRAIL}`;
       const finalNegativePrompt = !isSoraModel
         ? [
-            negativePromptValue,
             !allowOnScreenText
               ? "sem texto na tela, sem legendas, sem tipografia, sem logotipos, sem marca d'agua"
               : "",
@@ -3196,8 +3221,6 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
       for (let startAttempt = 1; startAttempt <= 3; startAttempt += 1) {
         const requestBody: Record<string, unknown> = {
-          imageUrl,
-          sourceImageId,
           prompt: finalVideoPrompt,
           aspectRatio,
           durationSeconds,
@@ -3209,6 +3232,12 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
         if (!isSoraModel) {
           requestBody.negativePrompt = finalNegativePrompt;
+        }
+        if (imageUrl) {
+          requestBody.imageUrl = imageUrl;
+        }
+        if (sourceImageId) {
+          requestBody.sourceImageId = sourceImageId;
         }
 
         const startResponse = await fetch("/api/chatgpt/generate-video", {
@@ -3540,6 +3569,19 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                         ? "Gerando video..."
                         : `Gerar video com ${DEFAULT_VIDEO_MODEL_LABEL}`}
                     </button>
+                    <button
+                      type="button"
+                      onClick={openPromptOnlyVideoModal}
+                      disabled={isGeneratingAnyVideo}
+                      className={`inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed ${
+                        isLight
+                          ? "border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
+                          : "border border-gray-600 bg-gray-800 text-gray-100 hover:bg-gray-700 disabled:border-gray-700 disabled:bg-gray-800 disabled:text-gray-500"
+                      }`}
+                    >
+                      <MdMovie className="h-5 w-5" />
+                      Gerar video sem imagem
+                    </button>
                     {generatedVideoUrl ? (
                       <div className="space-y-2">
                         <video
@@ -3566,7 +3608,23 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                       </div>
                     ) : null}
                   </div>
-                ) : null}
+                ) : (
+                  <div className="mt-3">
+                    <button
+                      type="button"
+                      onClick={openPromptOnlyVideoModal}
+                      disabled={isGeneratingAnyVideo}
+                      className={`inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed ${
+                        isLight
+                          ? "border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
+                          : "border border-gray-600 bg-gray-800 text-gray-100 hover:bg-gray-700 disabled:border-gray-700 disabled:bg-gray-800 disabled:text-gray-500"
+                      }`}
+                    >
+                      <MdMovie className="h-5 w-5" />
+                      Gerar video sem imagem
+                    </button>
+                  </div>
+                )}
               </article>
 
               <div className="space-y-3">
@@ -3747,6 +3805,19 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                         ? "Gerando video..."
                         : `Gerar video com ${DEFAULT_VIDEO_MODEL_LABEL}`}
                     </button>
+                    <button
+                      type="button"
+                      onClick={openPromptOnlyVideoModal}
+                      disabled={isGeneratingAnyVideo}
+                      className={`inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed ${
+                        isLight
+                          ? "border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
+                          : "border border-gray-600 bg-gray-800 text-gray-100 hover:bg-gray-700 disabled:border-gray-700 disabled:bg-gray-800 disabled:text-gray-500"
+                      }`}
+                    >
+                      <MdMovie className="h-5 w-5" />
+                      Gerar video sem imagem
+                    </button>
                     {generatedVideoUrl ? (
                       <div className="space-y-2">
                         <video
@@ -3773,7 +3844,23 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                       </div>
                     ) : null}
                   </div>
-                ) : null}
+                ) : (
+                  <div className="mt-3">
+                    <button
+                      type="button"
+                      onClick={openPromptOnlyVideoModal}
+                      disabled={isGeneratingAnyVideo}
+                      className={`inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed ${
+                        isLight
+                          ? "border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
+                          : "border border-gray-600 bg-gray-800 text-gray-100 hover:bg-gray-700 disabled:border-gray-700 disabled:bg-gray-800 disabled:text-gray-500"
+                      }`}
+                    >
+                      <MdMovie className="h-5 w-5" />
+                      Gerar video sem imagem
+                    </button>
+                  </div>
+                )}
               </article>
 
             </div>
@@ -4133,11 +4220,16 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                         isLight ? "text-slate-500" : "text-gray-300"
                       }`}
                     >
-                      {videoGenerationModalResultUrl ? "Video gerado" : "Preview da imagem"}
+                      {videoGenerationModalResultUrl
+                        ? "Video gerado"
+                        : videoGenerationModalSource.imageUrl
+                          ? "Preview da imagem"
+                          : "Geracao sem imagem"}
                     </p>
 
                     <div
-                      className={`relative mt-2 flex h-80 items-center justify-center overflow-hidden rounded-xl border ${
+                      ref={videoGenerationPreviewRef}
+                      className={`relative mt-2 flex h-80 lg:h-64 items-center justify-center overflow-hidden rounded-xl border ${
                         isLight
                           ? "border-slate-300 bg-black/90"
                           : "border-gray-700 bg-black/80"
@@ -4149,7 +4241,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                           src={videoGenerationModalResultUrl}
                           className="h-full w-full object-contain"
                         />
-                      ) : (
+                      ) : videoGenerationModalSource.imageUrl ? (
                         <>
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
@@ -4158,6 +4250,10 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                             className="h-full w-full object-contain"
                           />
                         </>
+                      ) : (
+                        <p className={`px-4 text-center text-sm ${isLight ? "text-slate-200" : "text-gray-300"}`}>
+                          Nenhuma imagem de referencia. O video sera gerado apenas pelo prompt.
+                        </p>
                       )}
 
                       {isGeneratingVideoGenerationModal ? (
@@ -4192,8 +4288,9 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                     ) : (
                       <>
                         <p className={`mt-3 text-xs ${isLight ? "text-slate-500" : "text-gray-400"}`}>
-                          A imagem de referencia aparece aqui e sera substituida pelo video apos a
-                          geracao.
+                          {videoGenerationModalSource.imageUrl
+                            ? "A imagem de referencia aparece aqui e sera substituida pelo video apos a geracao."
+                            : "Este modo gera video sem imagem de referencia, usando apenas o prompt informado."}
                         </p>
                         {videoGenerationErrorMessage ? (
                           <p
@@ -4453,31 +4550,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                           <p className={`text-[11px] ${isLight ? "text-slate-500" : "text-gray-400"}`}>
                             O Sora usa apenas prompt principal e referencia de imagem.
                           </p>
-                        ) : (
-                          <div>
-                            <label
-                              className={`mb-1 block text-[11px] font-semibold uppercase tracking-[0.12em] ${
-                                isLight ? "text-slate-500" : "text-gray-300"
-                              }`}
-                            >
-                              Prompt negativo (opcional)
-                            </label>
-                            <input
-                              type="text"
-                              value={videoGenerationNegativePromptInput}
-                              onChange={(event) =>
-                                setVideoGenerationNegativePromptInput(event.target.value)
-                              }
-                              placeholder="Ex: sem distorcoes, sem texto, sem logotipos"
-                              disabled={isGeneratingAnyVideo}
-                              className={`h-10 w-full rounded-xl border px-3 text-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${
-                                isLight
-                                  ? "border-slate-300 bg-white text-slate-900"
-                                  : "border-gray-700 bg-gray-900/85 text-gray-100"
-                              } ${imageFocusClass}`}
-                            />
-                          </div>
-                        )}
+                        ) : null}
                         <p className={`text-[11px] leading-relaxed ${isLight ? "text-slate-500" : "text-gray-400"}`}>
                           O sistema aplica guardrails para preservar produto/embalagem e evitar
                           alteracoes nao solicitadas.
@@ -4509,7 +4582,6 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                             durationSeconds: videoGenerationDurationInput,
                             model: videoGenerationModelInput,
                             resolution: videoGenerationResolutionInput,
-                            negativePrompt: videoGenerationNegativePromptInput,
                             targetKey: videoGenerationModalTargetKey,
                           })
                         }
