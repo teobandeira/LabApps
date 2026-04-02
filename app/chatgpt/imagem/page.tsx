@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
-import ChatGptScreen from "../ChatGptScreen";
+import ImageGeneratorScreen from "./ImageGeneratorScreen";
 
 export const metadata: Metadata = {
-  title: "ChatGPT Imagem",
-  description: "Crie imagens a partir de prompts usando a API da OpenAI.",
+  title: "Ambientador de Produtos",
+  description: "Gere imagens e vídeos de ambientação com Gemini.",
 };
 
 export default function ImageModePage() {
-  return <ChatGptScreen mode="image" />;
+  return <ImageGeneratorScreen />;
 }

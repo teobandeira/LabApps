@@ -9,8 +9,15 @@ import { prisma } from "@/lib/prisma";
 const OPENAI_RESPONSES_API_URL = "https://api.openai.com/v1/responses";
 const OPENAI_IMAGES_API_URL = "https://api.openai.com/v1/images/generations";
 const OPENAI_IMAGE_EDITS_API_URL = "https://api.openai.com/v1/images/edits";
+const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_TEXT_MODEL = "gpt-5.2";
 const DEFAULT_IMAGE_MODEL = "chatgpt-image-latest";
+const ALLOWED_IMAGE_MODELS = new Set([
+  "chatgpt-image-latest",
+  "gpt-image-1",
+  "gpt-image-1-mini",
+  "nano_banana",
+]);
 const DEFAULT_IMAGE_SIZE = "1024x1024";
 const IMAGE_SIZES = new Set(["1024x1024", "1536x1024", "1024x1536"]);
 const SAVED_IMAGE_MAX_DIMENSION = 1280;
@@ -275,6 +282,7 @@ async function persistGeneratedImage(params: {
   prompt: string;
   revisedPrompt: string | null;
   imageSize: string;
+  imageModel: string;
   imageAction: ImageAction;
   sourceImageName: string | null;
 }): Promise<PersistedGeneratedImage> {
@@ -322,7 +330,7 @@ async function persistGeneratedImage(params: {
     data: {
       prompt: params.prompt,
       revisedPrompt: params.revisedPrompt,
-      model: DEFAULT_IMAGE_MODEL,
+      model: params.imageModel,
       size: params.imageSize,
       action: params.imageAction,
       sourceImageName: params.sourceImageName,
@@ -529,8 +537,17 @@ function normalizePrompt(value: FormDataEntryValue | null | undefined): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function normalizeModel(): string {
+function normalizeTextModel(): string {
   return DEFAULT_TEXT_MODEL;
+}
+
+function normalizeImageModel(value: FormDataEntryValue | string | null | undefined): string {
+  if (typeof value !== "string") {
+    return DEFAULT_IMAGE_MODEL;
+  }
+
+  const normalized = value.trim();
+  return ALLOWED_IMAGE_MODELS.has(normalized) ? normalized : DEFAULT_IMAGE_MODEL;
 }
 
 function normalizeMode(value: FormDataEntryValue | null | undefined): GenerationMode {
@@ -627,10 +644,16 @@ async function parseIncomingRequest(request: NextRequest): Promise<ParsedRequest
     const sourceImageEntry = formData.get("sourceImage");
     const sourceImage = sourceImageEntry instanceof File ? sourceImageEntry : null;
 
+    const mode = normalizeMode(formData.get("mode"));
+    const model =
+      mode === "image"
+        ? normalizeImageModel(formData.get("model"))
+        : normalizeTextModel();
+
     return {
       prompt: normalizePrompt(formData.get("prompt")),
-      model: normalizeModel(),
-      mode: normalizeMode(formData.get("mode")),
+      model,
+      mode,
       imageSize: normalizeImageSize(formData.get("imageSize")),
       imageAction: normalizeImageAction(formData.get("imageAction")),
       sourceImage,
@@ -641,8 +664,9 @@ async function parseIncomingRequest(request: NextRequest): Promise<ParsedRequest
 
   const payload = (await request.json()) as ChatRequestBody;
   const prompt = typeof payload.prompt === "string" ? payload.prompt.trim() : "";
-  const model = normalizeModel();
   const mode = payload.mode === "image" ? "image" : "chat";
+  const model =
+    mode === "image" ? normalizeImageModel(payload.model) : normalizeTextModel();
   const imageSize =
     typeof payload.imageSize === "string" && IMAGE_SIZES.has(payload.imageSize.trim())
       ? payload.imageSize.trim()
@@ -917,14 +941,6 @@ function extractStreamErrorFromEvent(eventPayload: unknown): string {
 
 export async function POST(request: NextRequest) {
   try {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json(
-        { error: "OPENAI_API_KEY nao configurada no ambiente." },
-        { status: 500 }
-      );
-    }
-
     let parsedRequest: ParsedRequest;
     try {
       parsedRequest = await parseIncomingRequest(request);
@@ -937,19 +953,6 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-
-    const authHeaders: Record<string, string> = {
-      Authorization: `Bearer ${apiKey}`,
-    };
-
-    if (process.env.OPENAI_ORG_ID) {
-      authHeaders["OpenAI-Organization"] = process.env.OPENAI_ORG_ID;
-    }
-
-    const jsonHeaders: Record<string, string> = {
-      ...authHeaders,
-      "Content-Type": "application/json",
-    };
     const streamRequested = request.nextUrl.searchParams.get("stream") === "1";
 
     const { prompt, model, mode, imageSize, imageAction, sourceImage, files, chatHistory } =
@@ -962,83 +965,198 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
+      let imageUrl = "";
+      let revisedPrompt: string | null = null;
 
-      let imageResponse: Response;
-      if (imageAction === "edit") {
-        if (!sourceImage) {
+      if (model === "nano_banana") {
+        const geminiApiKey = process.env.GEMINI_API_KEY?.trim();
+        if (!geminiApiKey) {
           return NextResponse.json(
-            { error: "Envie uma imagem base para editar." },
-            { status: 400 }
+            { error: "GEMINI_API_KEY nao configurada no ambiente." },
+            { status: 500 }
           );
         }
 
-        if (sourceImage.size <= 0) {
-          return NextResponse.json(
-            { error: "A imagem enviada esta vazia." },
-            { status: 400 }
-          );
+        const parts: Array<{ text: string } | { inlineData: { data: string; mimeType: string } }> = [];
+
+        if (imageAction === "edit") {
+          if (!sourceImage) {
+            return NextResponse.json(
+              { error: "Envie uma imagem base para editar." },
+              { status: 400 }
+            );
+          }
+
+          if (sourceImage.size <= 0) {
+            return NextResponse.json(
+              { error: "A imagem enviada esta vazia." },
+              { status: 400 }
+            );
+          }
+
+          if (sourceImage.size > MAX_SOURCE_IMAGE_SIZE_BYTES) {
+            return NextResponse.json(
+              { error: "A imagem enviada excede o limite de 50MB." },
+              { status: 400 }
+            );
+          }
+
+          if (!isSupportedSourceImage(sourceImage)) {
+            return NextResponse.json(
+              { error: "Formato da imagem nao suportado. Use PNG, JPG/JPEG ou WEBP." },
+              { status: 400 }
+            );
+          }
+
+          const imageBytes = Buffer.from(await sourceImage.arrayBuffer()).toString("base64");
+          parts.push({
+            inlineData: {
+              data: imageBytes,
+              mimeType: sourceImage.type || "image/png",
+            },
+          });
         }
 
-        if (sourceImage.size > MAX_SOURCE_IMAGE_SIZE_BYTES) {
-          return NextResponse.json(
-            { error: "A imagem enviada excede o limite de 50MB." },
-            { status: 400 }
-          );
-        }
+        parts.push({ text: prompt });
 
-        if (!isSupportedSourceImage(sourceImage)) {
-          return NextResponse.json(
-            { error: "Formato da imagem nao suportado. Use PNG, JPG/JPEG ou WEBP." },
-            { status: 400 }
-          );
-        }
-
-        const editPayload = new FormData();
-        editPayload.append("model", DEFAULT_IMAGE_MODEL);
-        editPayload.append("prompt", prompt);
-        editPayload.append("size", imageSize);
-        editPayload.append("image", sourceImage, sourceImage.name || "image.png");
-
-        imageResponse = await fetch(OPENAI_IMAGE_EDITS_API_URL, {
-          method: "POST",
-          headers: authHeaders,
-          body: editPayload,
-        });
-      } else {
-        imageResponse = await fetch(OPENAI_IMAGES_API_URL, {
-          method: "POST",
-          headers: jsonHeaders,
-          body: JSON.stringify({
-            model: DEFAULT_IMAGE_MODEL,
-            prompt,
-            size: imageSize,
-          }),
-        });
-      }
-
-      const imageResult = (await imageResponse.json()) as {
-        error?: { message?: string };
-        data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>;
-      };
-
-      if (!imageResponse.ok) {
-        return NextResponse.json(
+        const geminiResponse = await fetch(
+          `${GEMINI_BASE_URL}/models/nano-banana-pro-preview:generateContent?key=${encodeURIComponent(
+            geminiApiKey
+          )}`,
           {
-            error: imageResult.error?.message ?? "Falha ao gerar imagem na API da OpenAI.",
-          },
-          { status: imageResponse.status }
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ role: "user", parts }],
+              generationConfig: {
+                responseModalities: ["IMAGE"],
+              },
+            }),
+          }
         );
-      }
 
-      const firstImage = imageResult.data?.[0];
-      const imageUrl =
-        typeof firstImage?.url === "string"
-          ? firstImage.url
-          : typeof firstImage?.b64_json === "string"
-            ? `data:image/png;base64,${firstImage.b64_json}`
-            : "";
-      const revisedPrompt =
-        typeof firstImage?.revised_prompt === "string" ? firstImage.revised_prompt : null;
+        const geminiJson = (await geminiResponse.json().catch(() => null)) as
+          | {
+              error?: { message?: string };
+              candidates?: Array<{
+                content?: { parts?: Array<{ inlineData?: { data?: string } }> };
+              }>;
+            }
+          | null;
+
+        if (!geminiResponse.ok) {
+          return NextResponse.json(
+            {
+              error:
+                geminiJson?.error?.message || "Falha ao gerar imagem na API do Gemini.",
+            },
+            { status: geminiResponse.status || 500 }
+          );
+        }
+
+        const base64 =
+          geminiJson?.candidates?.[0]?.content?.parts?.find((part) => !!part.inlineData?.data)
+            ?.inlineData?.data || "";
+        imageUrl = base64 ? `data:image/png;base64,${base64}` : "";
+      } else {
+        const apiKey = process.env.OPENAI_API_KEY?.trim();
+        if (!apiKey) {
+          return NextResponse.json(
+            { error: "OPENAI_API_KEY nao configurada no ambiente." },
+            { status: 500 }
+          );
+        }
+
+        const authHeaders: Record<string, string> = {
+          Authorization: `Bearer ${apiKey}`,
+        };
+
+        if (process.env.OPENAI_ORG_ID) {
+          authHeaders["OpenAI-Organization"] = process.env.OPENAI_ORG_ID;
+        }
+
+        const jsonHeaders: Record<string, string> = {
+          ...authHeaders,
+          "Content-Type": "application/json",
+        };
+
+        let imageResponse: Response;
+        if (imageAction === "edit") {
+          if (!sourceImage) {
+            return NextResponse.json(
+              { error: "Envie uma imagem base para editar." },
+              { status: 400 }
+            );
+          }
+
+          if (sourceImage.size <= 0) {
+            return NextResponse.json(
+              { error: "A imagem enviada esta vazia." },
+              { status: 400 }
+            );
+          }
+
+          if (sourceImage.size > MAX_SOURCE_IMAGE_SIZE_BYTES) {
+            return NextResponse.json(
+              { error: "A imagem enviada excede o limite de 50MB." },
+              { status: 400 }
+            );
+          }
+
+          if (!isSupportedSourceImage(sourceImage)) {
+            return NextResponse.json(
+              { error: "Formato da imagem nao suportado. Use PNG, JPG/JPEG ou WEBP." },
+              { status: 400 }
+            );
+          }
+
+          const editPayload = new FormData();
+          editPayload.append("model", model);
+          editPayload.append("prompt", prompt);
+          editPayload.append("size", imageSize);
+          editPayload.append("image", sourceImage, sourceImage.name || "image.png");
+
+          imageResponse = await fetch(OPENAI_IMAGE_EDITS_API_URL, {
+            method: "POST",
+            headers: authHeaders,
+            body: editPayload,
+          });
+        } else {
+          imageResponse = await fetch(OPENAI_IMAGES_API_URL, {
+            method: "POST",
+            headers: jsonHeaders,
+            body: JSON.stringify({
+              model,
+              prompt,
+              size: imageSize,
+            }),
+          });
+        }
+
+        const imageResult = (await imageResponse.json()) as {
+          error?: { message?: string };
+          data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>;
+        };
+
+        if (!imageResponse.ok) {
+          return NextResponse.json(
+            {
+              error: imageResult.error?.message ?? "Falha ao gerar imagem na API da OpenAI.",
+            },
+            { status: imageResponse.status }
+          );
+        }
+
+        const firstImage = imageResult.data?.[0];
+        imageUrl =
+          typeof firstImage?.url === "string"
+            ? firstImage.url
+            : typeof firstImage?.b64_json === "string"
+              ? `data:image/png;base64,${firstImage.b64_json}`
+              : "";
+        revisedPrompt =
+          typeof firstImage?.revised_prompt === "string" ? firstImage.revised_prompt : null;
+      }
 
       if (!imageUrl) {
         return NextResponse.json(
@@ -1061,6 +1179,7 @@ export async function POST(request: NextRequest) {
           prompt,
           revisedPrompt,
           imageSize,
+          imageModel: model,
           imageAction,
           sourceImageName: sourceImage?.name ?? null,
         });
@@ -1085,6 +1204,27 @@ export async function POST(request: NextRequest) {
         warnings,
       });
     }
+
+    const apiKey = process.env.OPENAI_API_KEY?.trim();
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: "OPENAI_API_KEY nao configurada no ambiente." },
+        { status: 500 }
+      );
+    }
+
+    const authHeaders: Record<string, string> = {
+      Authorization: `Bearer ${apiKey}`,
+    };
+
+    if (process.env.OPENAI_ORG_ID) {
+      authHeaders["OpenAI-Organization"] = process.env.OPENAI_ORG_ID;
+    }
+
+    const jsonHeaders: Record<string, string> = {
+      ...authHeaders,
+      "Content-Type": "application/json",
+    };
 
     let preparedFiles: PreparedFiles;
     try {
