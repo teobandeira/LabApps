@@ -4140,19 +4140,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                           : "border-gray-700 bg-black/80"
                       }`}
                     >
-                      {isGeneratingVideoGenerationModal ? (
-                        <div
-                          className={`flex flex-col items-center gap-3 px-4 text-center ${
-                            isLight ? "text-slate-100" : "text-gray-200"
-                          }`}
-                        >
-                          <div className="h-10 w-10 animate-spin rounded-full border-4 border-cyan-400 border-t-transparent" />
-                          <p className="text-sm">
-                            Processando no {selectedVideoProviderLabel}. Isso pode levar alguns
-                            minutos.
-                          </p>
-                        </div>
-                      ) : videoGenerationModalResultUrl ? (
+                      {videoGenerationModalResultUrl ? (
                         <video
                           controls
                           src={videoGenerationModalResultUrl}
@@ -4168,6 +4156,16 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                           />
                         </>
                       )}
+
+                      {isGeneratingVideoGenerationModal ? (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70 px-4 text-center text-slate-100">
+                          <div className="h-10 w-10 animate-spin rounded-full border-4 border-cyan-400 border-t-transparent" />
+                          <p className="text-sm">
+                            Processando no {selectedVideoProviderLabel}. Isso pode levar alguns
+                            minutos.
+                          </p>
+                        </div>
+                      ) : null}
                     </div>
 
                     {videoGenerationModalResultUrl && !isGeneratingVideoGenerationModal ? (
@@ -4484,33 +4482,47 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                       </div>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void handleGenerateVideo({
-                          imageUrl: videoGenerationModalSource.imageUrl,
-                          sourceImageId: videoGenerationModalSource.sourceImageId || null,
-                          prompt: videoGenerationPromptInput.trim(),
-                          aspectRatio: videoGenerationAspectRatioInput,
-                          durationSeconds: videoGenerationDurationInput,
-                          model: videoGenerationModelInput,
-                          resolution: videoGenerationResolutionInput,
-                          negativePrompt: videoGenerationNegativePromptInput,
-                          targetKey: videoGenerationModalTargetKey,
-                        })
-                      }
-                      disabled={isGeneratingAnyVideo}
-                      className={`inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition disabled:cursor-not-allowed ${
-                        isLight
-                          ? "border-cyan-300 bg-cyan-500 text-white hover:bg-cyan-600 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
-                          : "border-cyan-400/45 bg-cyan-500/15 text-cyan-100 hover:bg-cyan-500/25 disabled:border-gray-600 disabled:bg-gray-700 disabled:text-gray-400"
-                      }`}
-                    >
-                      <MdMovie className="h-5 w-5" />
-                      {isGeneratingVideoGenerationModal
-                        ? "Gerando video..."
-                        : `Gerar video com ${selectedVideoModelOption.label}`}
-                    </button>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-1 sm:gap-0">
+                      <button
+                        type="button"
+                        onClick={closeVideoGenerationModal}
+                        disabled={isGeneratingVideoGenerationModal}
+                        className={`inline-flex h-10 w-full items-center justify-center rounded-xl border px-4 text-sm font-semibold transition disabled:cursor-not-allowed sm:hidden ${
+                          isLight
+                            ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-100 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                            : "border-gray-600 bg-gray-800 text-gray-200 hover:bg-gray-700 disabled:border-gray-700 disabled:bg-gray-800 disabled:text-gray-500"
+                        }`}
+                      >
+                        Fechar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void handleGenerateVideo({
+                            imageUrl: videoGenerationModalSource.imageUrl,
+                            sourceImageId: videoGenerationModalSource.sourceImageId || null,
+                            prompt: videoGenerationPromptInput.trim(),
+                            aspectRatio: videoGenerationAspectRatioInput,
+                            durationSeconds: videoGenerationDurationInput,
+                            model: videoGenerationModelInput,
+                            resolution: videoGenerationResolutionInput,
+                            negativePrompt: videoGenerationNegativePromptInput,
+                            targetKey: videoGenerationModalTargetKey,
+                          })
+                        }
+                        disabled={isGeneratingAnyVideo}
+                        className={`inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition disabled:cursor-not-allowed ${
+                          isLight
+                            ? "border-cyan-300 bg-cyan-500 text-white hover:bg-cyan-600 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
+                            : "border-cyan-400/45 bg-cyan-500/15 text-cyan-100 hover:bg-cyan-500/25 disabled:border-gray-600 disabled:bg-gray-700 disabled:text-gray-400"
+                        }`}
+                      >
+                        <MdMovie className="h-5 w-5" />
+                        {isGeneratingVideoGenerationModal
+                          ? "Gerando video..."
+                          : `Gerar video com ${selectedVideoModelOption.label}`}
+                      </button>
+                    </div>
 
                     {isGeneratingVideoGenerationModal ? (
                       <p className={`text-xs ${isLight ? "text-slate-500" : "text-gray-400"}`}>
