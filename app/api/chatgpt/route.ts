@@ -4,6 +4,12 @@ import sharp from "sharp";
 import pdfParse from "pdf-parse/lib/pdf-parse.js";
 import { read, utils } from "xlsx";
 
+import {
+  IMAGE_GENERATION_CREDIT_COST,
+  consumeCredits,
+  hasEnoughCredits,
+  normalizeDeviceId,
+} from "@/lib/chatgpt-credits";
 import { prisma } from "@/lib/prisma";
 
 const OPENAI_RESPONSES_API_URL = "https://api.openai.com/v1/responses";
@@ -53,6 +59,8 @@ type ChatRequestBody = {
   imageSize?: string;
   imageAction?: string;
   chatHistory?: unknown;
+  deviceId?: unknown;
+  requestId?: unknown;
 };
 
 type ParsedRequest = {
@@ -64,6 +72,8 @@ type ParsedRequest = {
   sourceImage: File | null;
   files: File[];
   chatHistory: ChatHistoryMessage[];
+  deviceId: string;
+  requestId: string;
 };
 
 type PreparedTable = {
@@ -278,6 +288,7 @@ function isBlobAccessCompatibilityError(error: unknown): boolean {
 }
 
 async function persistGeneratedImage(params: {
+  deviceId: string;
   imageUrl: string;
   prompt: string;
   revisedPrompt: string | null;
@@ -328,6 +339,7 @@ async function persistGeneratedImage(params: {
 
   const savedImage = await prisma.generatedImage.create({
     data: {
+      deviceId: params.deviceId,
       prompt: params.prompt,
       revisedPrompt: params.revisedPrompt,
       model: params.imageModel,
@@ -567,6 +579,19 @@ function normalizeImageAction(value: FormDataEntryValue | null | undefined): Ima
   return value === "edit" ? "edit" : "generate";
 }
 
+function normalizeRequestId(value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const normalized = value.trim();
+  if (!normalized) {
+    return "";
+  }
+
+  return normalized.slice(0, 191);
+}
+
 function normalizeChatHistory(value: unknown): ChatHistoryMessage[] {
   if (!Array.isArray(value)) {
     return [];
@@ -659,6 +684,8 @@ async function parseIncomingRequest(request: NextRequest): Promise<ParsedRequest
       sourceImage,
       files,
       chatHistory: parseChatHistoryFromFormData(formData.get("chatHistory")),
+      deviceId: normalizeDeviceId(formData.get("deviceId")),
+      requestId: normalizeRequestId(formData.get("requestId")),
     };
   }
 
@@ -682,6 +709,8 @@ async function parseIncomingRequest(request: NextRequest): Promise<ParsedRequest
     sourceImage: null,
     files: [],
     chatHistory: normalizeChatHistory(payload.chatHistory),
+    deviceId: normalizeDeviceId(payload.deviceId),
+    requestId: normalizeRequestId(payload.requestId),
   };
 }
 
@@ -955,14 +984,27 @@ export async function POST(request: NextRequest) {
     }
     const streamRequested = request.nextUrl.searchParams.get("stream") === "1";
 
-    const { prompt, model, mode, imageSize, imageAction, sourceImage, files, chatHistory } =
+    const { prompt, model, mode, imageSize, imageAction, sourceImage, files, chatHistory, deviceId, requestId } =
       parsedRequest;
 
     if (mode === "image") {
+      if (!deviceId) {
+        return NextResponse.json(
+          { error: "deviceId obrigatorio para gerar imagem." },
+          { status: 400 }
+        );
+      }
       if (!prompt) {
         return NextResponse.json(
           { error: "Prompt obrigatorio para gerar imagem." },
           { status: 400 }
+        );
+      }
+      const hasCredits = await hasEnoughCredits(deviceId, IMAGE_GENERATION_CREDIT_COST);
+      if (!hasCredits) {
+        return NextResponse.json(
+          { error: "Saldo insuficiente. Sao necessarios 1 credito para gerar imagem." },
+          { status: 402 }
         );
       }
       let imageUrl = "";
@@ -1175,6 +1217,7 @@ export async function POST(request: NextRequest) {
 
       try {
         const persistedImage = await persistGeneratedImage({
+          deviceId,
           imageUrl,
           prompt,
           revisedPrompt,
@@ -1184,7 +1227,9 @@ export async function POST(request: NextRequest) {
           sourceImageName: sourceImage?.name ?? null,
         });
 
-        persistedImageUrl = `/api/chatgpt/generated-image/${persistedImage.recordId}`;
+        persistedImageUrl = `/api/chatgpt/generated-image/${persistedImage.recordId}?deviceId=${encodeURIComponent(
+          deviceId
+        )}`;
         storedImageId = persistedImage.recordId;
       } catch (persistError) {
         const persistErrorMessage =
@@ -1195,6 +1240,21 @@ export async function POST(request: NextRequest) {
         warnings.push(`Imagem gerada, mas nao foi salva no Blob/DB: ${persistErrorMessage}`);
       }
 
+      const consumeResult = await consumeCredits({
+        deviceId,
+        amount: IMAGE_GENERATION_CREDIT_COST,
+        reason: imageAction === "edit" ? "Geracao de imagem (edicao)." : "Geracao de imagem.",
+        referenceType: "image_generation",
+        referenceId: storedImageId ?? undefined,
+        requestId: requestId || undefined,
+      });
+      if (!consumeResult.ok) {
+        return NextResponse.json(
+          { error: "Saldo insuficiente. Sao necessarios 1 credito para gerar imagem." },
+          { status: 402 }
+        );
+      }
+
       return NextResponse.json({
         mode: "image",
         answer: imageAction === "edit" ? "Imagem modificada com sucesso." : "Imagem gerada com sucesso.",
@@ -1202,6 +1262,7 @@ export async function POST(request: NextRequest) {
         revisedPrompt,
         storedImageId,
         warnings,
+        creditsBalance: consumeResult.balance,
       });
     }
 

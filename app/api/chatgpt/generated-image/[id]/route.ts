@@ -1,6 +1,7 @@
 import { del, get } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
 
+import { normalizeDeviceId } from "@/lib/chatgpt-credits";
 import { prisma } from "@/lib/prisma";
 
 function extensionFromContentType(contentType: string): string {
@@ -80,11 +81,16 @@ export async function GET(
     if (!id) {
       return NextResponse.json({ error: "Id da imagem nao informado." }, { status: 400 });
     }
+    const deviceId = normalizeDeviceId(request.nextUrl.searchParams.get("deviceId"));
+    if (!deviceId) {
+      return NextResponse.json({ error: "deviceId obrigatorio." }, { status: 400 });
+    }
 
     const imageRecord = await prisma.generatedImage.findUnique({
       where: { id },
       select: {
         id: true,
+        deviceId: true,
         blobPath: true,
         blobUrl: true,
         mimeType: true,
@@ -92,6 +98,9 @@ export async function GET(
     });
 
     if (!imageRecord) {
+      return NextResponse.json({ error: "Imagem nao encontrada." }, { status: 404 });
+    }
+    if (imageRecord.deviceId && imageRecord.deviceId !== deviceId) {
       return NextResponse.json({ error: "Imagem nao encontrada." }, { status: 404 });
     }
 
@@ -159,7 +168,7 @@ export async function GET(
 }
 
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   try {
@@ -167,16 +176,24 @@ export async function DELETE(
     if (!id) {
       return NextResponse.json({ error: "Id da imagem nao informado." }, { status: 400 });
     }
+    const deviceId = normalizeDeviceId(request.nextUrl.searchParams.get("deviceId"));
+    if (!deviceId) {
+      return NextResponse.json({ error: "deviceId obrigatorio." }, { status: 400 });
+    }
 
     const imageRecord = await prisma.generatedImage.findUnique({
       where: { id },
       select: {
         id: true,
+        deviceId: true,
         blobPath: true,
       },
     });
 
     if (!imageRecord) {
+      return NextResponse.json({ error: "Imagem nao encontrada." }, { status: 404 });
+    }
+    if (imageRecord.deviceId && imageRecord.deviceId !== deviceId) {
       return NextResponse.json({ error: "Imagem nao encontrada." }, { status: 404 });
     }
 

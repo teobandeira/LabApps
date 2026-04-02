@@ -670,6 +670,14 @@ function createMessageId(): string {
   return `message-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
 }
 
+function createRequestId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  return `req-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
 function isNearChatBottom(container: HTMLDivElement): boolean {
   const distanceToBottom =
     container.scrollHeight - container.scrollTop - container.clientHeight;
@@ -1376,7 +1384,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   }, [isMobileChatSidebarOpen, chatIdPendingDelete, isDeletingChat]);
 
   useEffect(() => {
-    if (mode !== "image") {
+    if (mode !== "image" || !chatDeviceId) {
       return;
     }
 
@@ -1387,10 +1395,13 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
     async function loadGeneratedHistory() {
       try {
-        const response = await fetch("/api/chatgpt/generated-images", {
+        const response = await fetch(
+          `/api/chatgpt/generated-images?deviceId=${encodeURIComponent(chatDeviceId)}`,
+          {
           method: "GET",
           cache: "no-store",
-        });
+          }
+        );
 
         const data = (await response.json()) as {
           images?: GeneratedImageHistoryItem[];
@@ -1408,10 +1419,13 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
         setGeneratedHistory(images);
 
-        const videosResponse = await fetch("/api/chatgpt/generated-videos", {
+        const videosResponse = await fetch(
+          `/api/chatgpt/generated-videos?deviceId=${encodeURIComponent(chatDeviceId)}`,
+          {
           method: "GET",
           cache: "no-store",
-        });
+          }
+        );
 
         const videosData = (await videosResponse.json()) as {
           videos?: GeneratedVideoHistoryItem[];
@@ -1464,7 +1478,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     return () => {
       active = false;
     };
-  }, [mode]);
+  }, [mode, chatDeviceId]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1483,6 +1497,10 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     }
 
     if (mode === "chat" && !activeChatId) {
+      return;
+    }
+    if (mode === "image" && !chatDeviceId) {
+      setError("deviceId indisponivel para geracao de imagem.");
       return;
     }
 
@@ -1568,6 +1586,12 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       formData.append("mode", mode);
       formData.append("imageSize", imageSize);
       formData.append("imageAction", imageAction);
+      if (chatDeviceId) {
+        formData.append("deviceId", chatDeviceId);
+      }
+      if (mode === "image") {
+        formData.append("requestId", createRequestId());
+      }
       if (mode === "chat" && chatHistoryToSend.length > 0) {
         formData.append("chatHistory", JSON.stringify(chatHistoryToSend));
       }
@@ -1762,7 +1786,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
           return [
             {
               id: storedImageId,
-              imageUrl: `/api/chatgpt/generated-image/${storedImageId}`,
+              imageUrl: `/api/chatgpt/generated-image/${storedImageId}?deviceId=${encodeURIComponent(chatDeviceId)}`,
               createdAt: new Date().toISOString(),
               prompt: cleanPrompt,
               revisedPrompt: revisedPrompt || null,
@@ -2954,8 +2978,11 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       setError("");
 
       if (imageId) {
+        if (!chatDeviceId) {
+          throw new Error("deviceId indisponivel para baixar imagem.");
+        }
         const link = document.createElement("a");
-        link.href = `/api/chatgpt/generated-image/${imageId}?download=1`;
+        link.href = `/api/chatgpt/generated-image/${imageId}?download=1&deviceId=${encodeURIComponent(chatDeviceId)}`;
         link.download = `imagem-${imageId}.png`;
         document.body.appendChild(link);
         link.click();
@@ -3128,6 +3155,12 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       setError(message);
       return;
     }
+    if (!chatDeviceId) {
+      const message = "deviceId indisponivel para gerar video.";
+      setVideoGenerationErrorMessage(message);
+      setError(message);
+      return;
+    }
 
     try {
       setVideoGenerationTarget(targetKey);
@@ -3158,6 +3191,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
       let operationName = "";
       let startFailureMessage = "";
+      const requestId = createRequestId();
 
       for (let startAttempt = 1; startAttempt <= 3; startAttempt += 1) {
         const requestBody: Record<string, unknown> = {
@@ -3168,6 +3202,8 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
           durationSeconds,
           resolution,
           model,
+          deviceId: chatDeviceId,
+          requestId,
         };
 
         if (!isSoraModel) {
@@ -3234,6 +3270,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
         statusParams.set("durationSeconds", String(durationSeconds));
         statusParams.set("resolution", resolution);
         statusParams.set("model", model);
+        statusParams.set("deviceId", chatDeviceId);
 
         const statusResponse = await fetch(
           `/api/chatgpt/generate-video?${statusParams.toString()}`,

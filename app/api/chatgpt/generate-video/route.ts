@@ -4,6 +4,12 @@ import { put } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
 import sharp from "sharp";
 
+import {
+  VIDEO_GENERATION_CREDIT_COST,
+  consumeCredits,
+  hasEnoughCredits,
+  normalizeDeviceId,
+} from "@/lib/chatgpt-credits";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
@@ -62,15 +68,19 @@ type StartVideoBody = {
   resolution?: string;
   negativePrompt?: string;
   sourceImageId?: string;
+  deviceId?: string;
+  requestId?: string;
 };
 
 type VideoStatusMetadata = {
   provider: VideoProvider;
+  deviceId: string;
   sourceImageId: string | null;
   model: string;
   aspectRatio: string;
   durationSeconds: number;
   resolution: string;
+  requestId: string;
 };
 
 type StartOperationPayload = {
@@ -105,6 +115,17 @@ type PendingVideoResponse = {
 
 function normalizeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeRequestId(value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    return "";
+  }
+  return normalized.slice(0, 191);
 }
 
 function normalizeSourceImageId(value: unknown): string | null {
@@ -151,6 +172,29 @@ function parseInputImageUrl(imageUrl: string, request: NextRequest): URL | null 
 
   try {
     return isRelativePath ? new URL(imageUrl, request.nextUrl.origin) : new URL(imageUrl);
+  } catch {
+    return null;
+  }
+}
+
+function parseImageDataUrl(value: string): { bytes: Uint8Array; mimeType: string } | null {
+  const match = value.match(/^data:([^;,]+);base64,([\s\S]+)$/i);
+  if (!match) {
+    return null;
+  }
+
+  const mimeType = normalizeString(match[1]).toLowerCase() || "image/png";
+  if (!mimeType.startsWith("image/")) {
+    return null;
+  }
+
+  const payload = match[2] || "";
+  try {
+    const bytes = new Uint8Array(Buffer.from(payload, "base64"));
+    if (bytes.byteLength <= 0) {
+      return null;
+    }
+    return { bytes, mimeType };
   } catch {
     return null;
   }
@@ -616,11 +660,13 @@ function parseStatusMetadata(searchParams: URLSearchParams): VideoStatusMetadata
 
   return {
     provider,
+    deviceId: normalizeDeviceId(searchParams.get("deviceId")),
     sourceImageId: normalizeSourceImageId(searchParams.get("sourceImageId")),
     model,
     aspectRatio: ALLOWED_ASPECT_RATIOS.has(aspectRatio) ? aspectRatio : "16:9",
     durationSeconds: allowedDurations.has(parsedDuration) ? parsedDuration : provider === "sora" ? 8 : 6,
     resolution: allowedResolutions.has(resolution) ? resolution : DEFAULT_VIDEO_RESOLUTION,
+    requestId: normalizeRequestId(searchParams.get("requestId")),
   };
 }
 
@@ -633,6 +679,14 @@ function buildSoraProxyVideoUrl(videoId: string): string {
   params.set("provider", "sora");
   params.set("videoId", videoId);
   return `/api/chatgpt/generate-video?${params.toString()}`;
+}
+
+function buildGeneratedVideoUrl(videoId: string, deviceId?: string): string {
+  const normalizedDeviceId = normalizeDeviceId(deviceId);
+  if (!normalizedDeviceId) {
+    return `/api/chatgpt/generated-video/${videoId}`;
+  }
+  return `/api/chatgpt/generated-video/${videoId}?deviceId=${encodeURIComponent(normalizedDeviceId)}`;
 }
 
 function extensionFromVideoContentType(contentType: string): string {
@@ -658,6 +712,17 @@ async function fetchImageBytes(
   imageUrl: string,
   request: NextRequest
 ): Promise<{ bytes: Uint8Array; mimeType: string }> {
+  if (imageUrl.startsWith("data:image/")) {
+    const parsedDataUrl = parseImageDataUrl(imageUrl);
+    if (!parsedDataUrl) {
+      throw new Error("Data URL da imagem invalida para gerar video.");
+    }
+    if (parsedDataUrl.bytes.byteLength > MAX_GEMINI_IMAGE_BYTES) {
+      throw new Error("A imagem excede o limite de 20MB para gerar video.");
+    }
+    return parsedDataUrl;
+  }
+
   const parsedUrl = parseInputImageUrl(imageUrl, request);
   if (!parsedUrl) {
     throw new Error("URL da imagem invalida para gerar video.");
@@ -991,7 +1056,7 @@ async function persistVideoToBlob(params: {
   if (existing) {
     return {
       id: existing.id,
-      videoUrl: `/api/chatgpt/generated-video/${existing.id}`,
+      videoUrl: buildGeneratedVideoUrl(existing.id, params.metadata.deviceId),
     };
   }
 
@@ -1037,6 +1102,7 @@ async function persistVideoToBlob(params: {
     const record = await prisma.generatedVideo.create({
       data: {
         sourceImageId: params.metadata.sourceImageId,
+        deviceId: params.metadata.deviceId || null,
         operationName: params.operationName,
         model: params.metadata.model,
         aspectRatio: params.metadata.aspectRatio,
@@ -1052,7 +1118,7 @@ async function persistVideoToBlob(params: {
 
     return {
       id: record.id,
-      videoUrl: `/api/chatgpt/generated-video/${record.id}`,
+      videoUrl: buildGeneratedVideoUrl(record.id, params.metadata.deviceId),
       warning: persistenceWarning || undefined,
     };
   } catch {
@@ -1064,7 +1130,7 @@ async function persistVideoToBlob(params: {
     if (duplicated) {
       return {
         id: duplicated.id,
-        videoUrl: `/api/chatgpt/generated-video/${duplicated.id}`,
+        videoUrl: buildGeneratedVideoUrl(duplicated.id, params.metadata.deviceId),
         warning: persistenceWarning || undefined,
       };
     }
@@ -1266,6 +1332,23 @@ async function handleStartVideo(
 
   const negativePrompt = provider === "gemini" ? normalizeString(body.negativePrompt) : "";
   const sourceImageId = normalizeSourceImageId(body.sourceImageId);
+  const deviceId = normalizeDeviceId(body.deviceId);
+  const requestId = normalizeRequestId(body.requestId);
+
+  if (!deviceId) {
+    return NextResponse.json(
+      { error: "deviceId obrigatorio para gerar video." },
+      { status: 400 }
+    );
+  }
+
+  const hasCredits = await hasEnoughCredits(deviceId, VIDEO_GENERATION_CREDIT_COST);
+  if (!hasCredits) {
+    return NextResponse.json(
+      { error: "Saldo insuficiente. Sao necessarios 2 creditos para gerar video." },
+      { status: 402 }
+    );
+  }
 
   const { bytes, mimeType } = await fetchImageBytes(imageUrl, request);
 
@@ -1328,14 +1411,31 @@ async function handleStartVideo(
       );
     }
 
+    const consumeResult = await consumeCredits({
+      deviceId,
+      amount: VIDEO_GENERATION_CREDIT_COST,
+      reason: "Geracao de video.",
+      referenceType: "video_generation",
+      referenceId: operationName,
+      requestId: requestId || undefined,
+    });
+    if (!consumeResult.ok) {
+      return NextResponse.json(
+        { error: "Saldo insuficiente. Sao necessarios 2 creditos para gerar video." },
+        { status: 402 }
+      );
+    }
+
     return NextResponse.json({
       done: false,
       operationName,
+      deviceId,
       sourceImageId,
       model,
       aspectRatio,
       durationSeconds,
       resolution,
+      creditsBalance: consumeResult.balance,
     });
   }
 
@@ -1371,14 +1471,31 @@ async function handleStartVideo(
       });
 
       if (startResult.ok) {
+        const consumeResult = await consumeCredits({
+          deviceId,
+          amount: VIDEO_GENERATION_CREDIT_COST,
+          reason: "Geracao de video.",
+          referenceType: "video_generation",
+          referenceId: startResult.operationName,
+          requestId: requestId || undefined,
+        });
+        if (!consumeResult.ok) {
+          return NextResponse.json(
+            { error: "Saldo insuficiente. Sao necessarios 2 creditos para gerar video." },
+            { status: 402 }
+          );
+        }
+
         return NextResponse.json({
           done: false,
           operationName: startResult.operationName,
+          deviceId,
           sourceImageId,
           model: candidateModel,
           aspectRatio: candidateConfig.aspectRatio,
           durationSeconds: candidateConfig.durationSeconds,
           resolution: candidateConfig.resolution,
+          creditsBalance: consumeResult.balance,
         });
       }
 
@@ -1436,7 +1553,7 @@ async function handleVideoStatus(
       done: true,
       operationName,
       videoId: existing.id,
-      videoUrl: `/api/chatgpt/generated-video/${existing.id}`,
+      videoUrl: buildGeneratedVideoUrl(existing.id, metadata.deviceId),
       persisted: true,
     };
     return NextResponse.json(response);

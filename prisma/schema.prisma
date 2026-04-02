@@ -17,8 +17,23 @@ enum ChatMessageRole {
   assistant
 }
 
+enum CreditLedgerKind {
+  grant
+  debit
+  refund
+  adjust
+}
+
+enum CreditReferenceType {
+  image_generation
+  video_generation
+  admin
+  other
+}
+
 model GeneratedImage {
   id              String                @id @default(cuid())
+  deviceId        String?               @db.VarChar(120)
   prompt          String                @db.Text
   revisedPrompt   String?               @db.Text
   model           String                @db.VarChar(80)
@@ -33,11 +48,13 @@ model GeneratedImage {
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
 
+  @@index([deviceId, createdAt])
   @@index([createdAt])
 }
 
 model GeneratedVideo {
   id              String   @id @default(cuid())
+  deviceId        String?  @db.VarChar(120)
   sourceImageId   String?  @db.VarChar(120)
   operationName   String   @unique @db.VarChar(255)
   model           String   @db.VarChar(80)
@@ -51,8 +68,38 @@ model GeneratedVideo {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
+  @@index([deviceId, createdAt])
   @@index([sourceImageId, createdAt])
   @@index([createdAt])
+}
+
+model CreditWallet {
+  id             String         @id @default(cuid())
+  deviceId       String         @unique @db.VarChar(120)
+  initialCredits Int            @default(100)
+  balance        Int            @default(100)
+  totalSpent     Int            @default(0)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  ledgerEntries  CreditLedger[]
+}
+
+model CreditLedger {
+  id            String              @id @default(cuid())
+  walletId      String
+  kind          CreditLedgerKind
+  amount        Int
+  balanceBefore Int
+  balanceAfter  Int
+  reason        String              @db.VarChar(255)
+  referenceType CreditReferenceType @default(other)
+  referenceId   String?             @db.VarChar(191)
+  requestId     String?             @unique @db.VarChar(191)
+  createdAt     DateTime            @default(now())
+  wallet        CreditWallet        @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@index([walletId, createdAt])
+  @@index([referenceType, referenceId])
 }
 
 model ChatSession {

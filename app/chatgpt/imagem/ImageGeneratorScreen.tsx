@@ -120,6 +120,9 @@ const IMAGE_MODEL_OPTIONS: ImageModelOption[] = [
 
 const FIXED_VIDEO_RESOLUTION = "720p";
 const FIXED_VIDEO_DURATION_SECONDS = 8;
+const CHAT_DEVICE_ID_STORAGE_KEY = "chatgpt-device-id-v1";
+const IMAGE_GENERATION_CREDIT_COST = 1;
+const VIDEO_GENERATION_CREDIT_COST = 2;
 const ALLOWED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
 const ALLOWED_IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp"];
 const VIDEO_PROMPT_PTBR_GUARDRAIL =
@@ -133,6 +136,68 @@ const IMAGE_PROMPT_GUARDRAIL =
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function createClientId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  return `device-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function getOrCreateChatDeviceId(): string {
+  if (typeof window === "undefined") {
+    return createClientId();
+  }
+
+  try {
+    const stored = window.localStorage.getItem(CHAT_DEVICE_ID_STORAGE_KEY);
+    if (stored && stored.trim().length > 0) {
+      return stored.trim();
+    }
+  } catch {
+    // ignore storage issues
+  }
+
+  const nextId = createClientId();
+  try {
+    window.localStorage.setItem(CHAT_DEVICE_ID_STORAGE_KEY, nextId);
+  } catch {
+    // ignore storage issues
+  }
+
+  return nextId;
+}
+
+function createRequestId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  return `req-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+async function blobUrlToDataUrl(blobUrl: string): Promise<string> {
+  const response = await fetch(blobUrl);
+  if (!response.ok) {
+    throw new Error("Nao foi possivel ler a imagem local para gerar video.");
+  }
+
+  const blob = await response.blob();
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = reader.result;
+      if (typeof result === "string" && result.startsWith("data:image/")) {
+        resolve(result);
+        return;
+      }
+      reject(new Error("Nao foi possivel converter a imagem local."));
+    };
+    reader.onerror = () => reject(new Error("Falha ao converter imagem local."));
+    reader.readAsDataURL(blob);
+  });
 }
 
 function promptRequestsOnScreenText(prompt: string) {
@@ -241,6 +306,9 @@ export default function ImageGeneratorScreen() {
   const [mergeLoading, setMergeLoading] = useState(false);
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [mergeResultUrl, setMergeResultUrl] = useState<string | null>(null);
+  const [chatDeviceId, setChatDeviceId] = useState<string>("");
+  const [creditsBalance, setCreditsBalance] = useState<number | null>(null);
+  const [creditsLoading, setCreditsLoading] = useState(false);
   const toastTimerRef = useRef<number | null>(null);
 
   const selectedVideoModelOption = useMemo(
@@ -268,6 +336,8 @@ export default function ImageGeneratorScreen() {
   const isDeletingFromModal = deleteModalMediaId
     ? deletingMediaIds.includes(deleteModalMediaId)
     : false;
+  const canGenerateImageByCredits = creditsBalance === null || creditsBalance >= IMAGE_GENERATION_CREDIT_COST;
+  const canGenerateVideoByCredits = creditsBalance === null || creditsBalance >= VIDEO_GENERATION_CREDIT_COST;
 
   const sectionCardClass =
     "rounded-2xl border border-gray-700/80 bg-linear-to-br from-gray-900/80 via-slate-900/70 to-gray-950/70 p-4 sm:p-5";
@@ -305,14 +375,18 @@ export default function ImageGeneratorScreen() {
     }, 3500);
   };
 
-  const loadBiblioteca = async () => {
+  const loadBiblioteca = async (deviceIdParam: string) => {
     setBibliotecaLoading(true);
     setBibliotecaError(null);
 
     try {
       const [imagesRes, videosRes] = await Promise.all([
-        fetch("/api/chatgpt/generated-images", { cache: "no-store" }),
-        fetch("/api/chatgpt/generated-videos", { cache: "no-store" }),
+        fetch(`/api/chatgpt/generated-images?deviceId=${encodeURIComponent(deviceIdParam)}`, {
+          cache: "no-store",
+        }),
+        fetch(`/api/chatgpt/generated-videos?deviceId=${encodeURIComponent(deviceIdParam)}`, {
+          cache: "no-store",
+        }),
       ]);
 
       const imagesData = await imagesRes.json();
@@ -337,8 +411,45 @@ export default function ImageGeneratorScreen() {
   };
 
   useEffect(() => {
-    void loadBiblioteca();
+    const deviceId = getOrCreateChatDeviceId();
+    setChatDeviceId(deviceId);
   }, []);
+
+  const loadCredits = async (deviceIdParam: string) => {
+    setCreditsLoading(true);
+    try {
+      const response = await fetch(
+        `/api/chatgpt/credits?deviceId=${encodeURIComponent(deviceIdParam)}`,
+        {
+          method: "GET",
+          cache: "no-store",
+        },
+      );
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            balance?: unknown;
+            error?: string;
+          }
+        | null;
+
+      if (!response.ok) {
+        throw new Error(payload?.error || "Nao foi possivel carregar creditos.");
+      }
+
+      const balance = Number(payload?.balance);
+      setCreditsBalance(Number.isFinite(balance) ? balance : 0);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Nao foi possivel carregar creditos.";
+      notify("error", message);
+    } finally {
+      setCreditsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!chatDeviceId) return;
+    void Promise.all([loadBiblioteca(chatDeviceId), loadCredits(chatDeviceId)]);
+  }, [chatDeviceId]);
 
   useEffect(() => {
     if (!bibliotecaLightboxItem || bibliotecaLightboxItem.type !== "image") {
@@ -407,6 +518,14 @@ export default function ImageGeneratorScreen() {
   }, [handleProdutoPrincipalFile]);
 
   const handleGenerate = async () => {
+    if (!chatDeviceId) {
+      notify("error", "Identificador do dispositivo indisponivel.");
+      return;
+    }
+    if (!canGenerateImageByCredits) {
+      notify("error", "Saldo insuficiente. Sao necessarios 1 credito para gerar imagem.");
+      return;
+    }
     if (!promptPersonalizado.trim()) {
       notify("error", "Por favor, preencha o prompt.");
       return;
@@ -424,6 +543,8 @@ export default function ImageGeneratorScreen() {
     formData.append("model", model);
     formData.append("imageSize", imageSize);
     formData.append("imageAction", imageAction);
+    formData.append("deviceId", chatDeviceId);
+    formData.append("requestId", createRequestId());
     if (imageAction === "edit" && produtoPrincipal.file) {
       formData.append("sourceImage", produtoPrincipal.file);
     }
@@ -440,6 +561,9 @@ export default function ImageGeneratorScreen() {
 
       if (!res.ok || data.error) {
         notify("error", data.error || "Erro ao gerar a ambientação.");
+        if (res.status === 402) {
+          void loadCredits(chatDeviceId);
+        }
         return;
       }
 
@@ -465,8 +589,13 @@ export default function ImageGeneratorScreen() {
         setVideoAspectRatio(nextAspectRatio);
       }
       setVideoResult(null);
+      if (typeof data?.creditsBalance === "number") {
+        setCreditsBalance(data.creditsBalance);
+      } else {
+        void loadCredits(chatDeviceId);
+      }
       notify("success", "Ambientação gerada com sucesso!");
-      void loadBiblioteca();
+      void loadBiblioteca(chatDeviceId);
     } catch {
       notify("error", "Erro ao gerar a ambientação.");
     } finally {
@@ -517,6 +646,14 @@ export default function ImageGeneratorScreen() {
   };
 
   const handleGenerateVideo = async () => {
+    if (!chatDeviceId) {
+      notify("error", "Identificador do dispositivo indisponivel.");
+      return;
+    }
+    if (!canGenerateVideoByCredits) {
+      notify("error", "Saldo insuficiente. Sao necessarios 2 creditos para gerar video.");
+      return;
+    }
     if (!videoSourceUrl) {
       notify("error", "Gere uma ambientação antes de gerar o vídeo.");
       return;
@@ -550,14 +687,20 @@ export default function ImageGeneratorScreen() {
       .join(", ");
 
     try {
+      const imageUrlForVideo = videoSourceUrl.startsWith("blob:")
+        ? await blobUrlToDataUrl(videoSourceUrl)
+        : videoSourceUrl;
+
       const body: Record<string, unknown> = {
-        imageUrl: videoSourceUrl,
+        imageUrl: imageUrlForVideo,
         prompt: finalVideoPrompt,
         model: videoModel,
         aspectRatio: videoAspectRatio,
         resolution: videoResolution,
         durationSeconds: videoDurationSeconds,
         negativePrompt: finalNegativePrompt,
+        deviceId: chatDeviceId,
+        requestId: createRequestId(),
       };
 
       const res = await fetch("/api/chatgpt/generate-video", {
@@ -568,14 +711,23 @@ export default function ImageGeneratorScreen() {
 
       const startData = await res.json();
       if (!res.ok || startData?.error) {
+        if (res.status === 402) {
+          void loadCredits(chatDeviceId);
+        }
         throw new Error(startData?.error || "Falha ao iniciar geração de vídeo.");
+      }
+
+      if (typeof startData?.creditsBalance === "number") {
+        setCreditsBalance(startData.creditsBalance);
+      } else {
+        void loadCredits(chatDeviceId);
       }
 
       if (startData?.done && startData?.videoUrl) {
         setVideoResult(String(startData.videoUrl));
         setVideoErrorMessage(null);
         notify("success", "Vídeo gerado com sucesso!");
-        void loadBiblioteca();
+        void loadBiblioteca(chatDeviceId);
         return;
       }
 
@@ -593,6 +745,7 @@ export default function ImageGeneratorScreen() {
         params.set("aspectRatio", videoAspectRatio);
         params.set("resolution", videoResolution);
         params.set("durationSeconds", String(videoDurationSeconds));
+        params.set("deviceId", chatDeviceId);
 
         const statusRes = await fetch(`/api/chatgpt/generate-video?${params.toString()}`, {
           method: "GET",
@@ -612,7 +765,7 @@ export default function ImageGeneratorScreen() {
           setVideoResult(String(statusData.videoUrl));
           setVideoErrorMessage(null);
           notify("success", "Vídeo gerado com sucesso!");
-          void loadBiblioteca();
+          void loadBiblioteca(chatDeviceId);
           return;
         }
       }
@@ -651,7 +804,7 @@ export default function ImageGeneratorScreen() {
 
   const downloadBibliotecaImage = (item: GeneratedImageItem) => {
     const link = document.createElement("a");
-    link.href = `/api/chatgpt/generated-image/${item.id}?download=1`;
+    link.href = `/api/chatgpt/generated-image/${item.id}?download=1&deviceId=${encodeURIComponent(chatDeviceId)}`;
     link.download = `imagem-${item.id}.png`;
     document.body.appendChild(link);
     link.click();
@@ -660,7 +813,7 @@ export default function ImageGeneratorScreen() {
 
   const downloadBibliotecaVideo = (item: GeneratedVideoItem) => {
     const link = document.createElement("a");
-    link.href = `/api/chatgpt/generated-video/${item.id}?download=1`;
+    link.href = `/api/chatgpt/generated-video/${item.id}?download=1&deviceId=${encodeURIComponent(chatDeviceId)}`;
     link.download = `video-${item.id}.mp4`;
     document.body.appendChild(link);
     link.click();
@@ -673,9 +826,15 @@ export default function ImageGeneratorScreen() {
 
     setDeletingMediaIds((current) => [...current, mediaId]);
     try {
-      const response = await fetch(`/api/chatgpt/generated-image/${item.id}`, {
-        method: "DELETE",
-      });
+      if (!chatDeviceId) {
+        throw new Error("Identificador do dispositivo indisponivel.");
+      }
+      const response = await fetch(
+        `/api/chatgpt/generated-image/${item.id}?deviceId=${encodeURIComponent(chatDeviceId)}`,
+        {
+          method: "DELETE",
+        },
+      );
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data?.error) {
         throw new Error(data?.error || "Não foi possível excluir a imagem.");
@@ -701,9 +860,15 @@ export default function ImageGeneratorScreen() {
 
     setDeletingMediaIds((current) => [...current, mediaId]);
     try {
-      const response = await fetch(`/api/chatgpt/generated-video/${item.id}`, {
-        method: "DELETE",
-      });
+      if (!chatDeviceId) {
+        throw new Error("Identificador do dispositivo indisponivel.");
+      }
+      const response = await fetch(
+        `/api/chatgpt/generated-video/${item.id}?deviceId=${encodeURIComponent(chatDeviceId)}`,
+        {
+          method: "DELETE",
+        },
+      );
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data?.error) {
         throw new Error(data?.error || "Não foi possível excluir o vídeo.");
@@ -803,7 +968,9 @@ export default function ImageGeneratorScreen() {
       }
       setMergeResultUrl(resultUrl);
       notify("success", "Vídeos unidos com sucesso!");
-      void loadBiblioteca();
+      if (chatDeviceId) {
+        void loadBiblioteca(chatDeviceId);
+      }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Não foi possível juntar os vídeos.";
       setMergeError(message);
@@ -984,10 +1151,15 @@ export default function ImageGeneratorScreen() {
         </header>
 
         <section className={`${sectionCardClass} space-y-5`}>
-          <h4 className="mb-1 flex items-center gap-2 text-md font-semibold">
-            <FaRobot className="text-purple-400" />
-            Geração por IA
-          </h4>
+          <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+            <h4 className="flex items-center gap-2 text-md font-semibold">
+              <FaRobot className="text-purple-400" />
+              Geração por IA
+            </h4>
+            <span className="inline-flex items-center rounded-full border border-cyan-400/35 bg-cyan-500/10 px-3 py-1 text-xs font-semibold text-cyan-100">
+              Créditos: {creditsLoading && creditsBalance === null ? "..." : creditsBalance ?? "--"}
+            </span>
+          </div>
 
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             <div>
@@ -1148,7 +1320,7 @@ export default function ImageGeneratorScreen() {
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <button
                   onClick={handleGenerate}
-                  disabled={loading}
+                  disabled={loading || !canGenerateImageByCredits}
                   className="inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-purple-400/45 bg-purple-500/25 px-4 py-3 text-sm font-semibold text-purple-100 transition hover:bg-purple-500/35 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <FaRobot />
@@ -1163,11 +1335,11 @@ export default function ImageGeneratorScreen() {
                       : null;
                     openVideoModal(directSource, preferredAspectRatio);
                   }}
-                  disabled={!canGenerateVideo || loading}
+                  disabled={!canGenerateVideo || loading || !canGenerateVideoByCredits}
                   className="inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-cyan-400/45 bg-cyan-500/20 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/30 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <FaVideo />
-                  Gerar vídeo
+                  Gerar vídeo (-2)
                 </button>
               </div>
             </div>
@@ -1835,7 +2007,7 @@ export default function ImageGeneratorScreen() {
                 <button
                   type="button"
                   onClick={handleGenerateVideo}
-                  disabled={videoLoading || !videoSourceUrl}
+                  disabled={videoLoading || !videoSourceUrl || !canGenerateVideoByCredits}
                   className="inline-flex h-10 min-w-36.25 cursor-pointer items-center justify-center gap-2 rounded-lg border border-cyan-400/45 bg-cyan-500/25 px-4 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/35 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <FaVideo />

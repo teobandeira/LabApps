@@ -1,10 +1,19 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
+import { normalizeDeviceId } from "@/lib/chatgpt-credits";
 import { prisma } from "@/lib/prisma";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const deviceId = normalizeDeviceId(request.nextUrl.searchParams.get("deviceId"));
+    if (!deviceId) {
+      return NextResponse.json({ error: "deviceId obrigatorio." }, { status: 400 });
+    }
+
     const videos = await prisma.generatedVideo.findMany({
+      where: {
+        OR: [{ deviceId }, { deviceId: null }],
+      },
       orderBy: { createdAt: "desc" },
       select: {
         id: true,
@@ -26,7 +35,7 @@ export async function GET() {
         durationSeconds: video.durationSeconds,
         resolution: video.resolution,
         createdAt: video.createdAt.toISOString(),
-        videoUrl: `/api/chatgpt/generated-video/${video.id}`,
+        videoUrl: `/api/chatgpt/generated-video/${video.id}?deviceId=${encodeURIComponent(deviceId)}`,
       })),
     });
   } catch {
