@@ -69,7 +69,6 @@ type StartVideoBody = {
   negativePrompt?: string;
   sourceImageId?: string;
   deviceId?: string;
-  requestId?: string;
 };
 
 type VideoStatusMetadata = {
@@ -80,7 +79,6 @@ type VideoStatusMetadata = {
   aspectRatio: string;
   durationSeconds: number;
   resolution: string;
-  requestId: string;
 };
 
 type StartOperationPayload = {
@@ -104,6 +102,7 @@ type DoneVideoResponse = {
   videoUrl: string;
   videoId?: string;
   persisted: boolean;
+  creditsBalance?: number;
   warning?: string;
 };
 
@@ -115,17 +114,6 @@ type PendingVideoResponse = {
 
 function normalizeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function normalizeRequestId(value: unknown): string {
-  if (typeof value !== "string") {
-    return "";
-  }
-  const normalized = value.trim();
-  if (!normalized) {
-    return "";
-  }
-  return normalized.slice(0, 191);
 }
 
 function normalizeSourceImageId(value: unknown): string | null {
@@ -666,7 +654,6 @@ function parseStatusMetadata(searchParams: URLSearchParams): VideoStatusMetadata
     aspectRatio: ALLOWED_ASPECT_RATIOS.has(aspectRatio) ? aspectRatio : "16:9",
     durationSeconds: allowedDurations.has(parsedDuration) ? parsedDuration : provider === "sora" ? 8 : 6,
     resolution: allowedResolutions.has(resolution) ? resolution : DEFAULT_VIDEO_RESOLUTION,
-    requestId: normalizeRequestId(searchParams.get("requestId")),
   };
 }
 
@@ -1333,7 +1320,6 @@ async function handleStartVideo(
   const negativePrompt = provider === "gemini" ? normalizeString(body.negativePrompt) : "";
   const sourceImageId = normalizeSourceImageId(body.sourceImageId);
   const deviceId = normalizeDeviceId(body.deviceId);
-  const requestId = normalizeRequestId(body.requestId);
 
   if (!deviceId) {
     return NextResponse.json(
@@ -1411,21 +1397,6 @@ async function handleStartVideo(
       );
     }
 
-    const consumeResult = await consumeCredits({
-      deviceId,
-      amount: VIDEO_GENERATION_CREDIT_COST,
-      reason: "Geracao de video.",
-      referenceType: "video_generation",
-      referenceId: operationName,
-      requestId: requestId || undefined,
-    });
-    if (!consumeResult.ok) {
-      return NextResponse.json(
-        { error: "Saldo insuficiente. Sao necessarios 2 creditos para gerar video." },
-        { status: 402 }
-      );
-    }
-
     return NextResponse.json({
       done: false,
       operationName,
@@ -1435,7 +1406,6 @@ async function handleStartVideo(
       aspectRatio,
       durationSeconds,
       resolution,
-      creditsBalance: consumeResult.balance,
     });
   }
 
@@ -1471,21 +1441,6 @@ async function handleStartVideo(
       });
 
       if (startResult.ok) {
-        const consumeResult = await consumeCredits({
-          deviceId,
-          amount: VIDEO_GENERATION_CREDIT_COST,
-          reason: "Geracao de video.",
-          referenceType: "video_generation",
-          referenceId: startResult.operationName,
-          requestId: requestId || undefined,
-        });
-        if (!consumeResult.ok) {
-          return NextResponse.json(
-            { error: "Saldo insuficiente. Sao necessarios 2 creditos para gerar video." },
-            { status: 402 }
-          );
-        }
-
         return NextResponse.json({
           done: false,
           operationName: startResult.operationName,
@@ -1495,7 +1450,6 @@ async function handleStartVideo(
           aspectRatio: candidateConfig.aspectRatio,
           durationSeconds: candidateConfig.durationSeconds,
           resolution: candidateConfig.resolution,
-          creditsBalance: consumeResult.balance,
         });
       }
 
@@ -1530,6 +1484,30 @@ async function handleVideoStatus(
   if (!operationName) {
     return NextResponse.json({ error: "operationName nao informado." }, { status: 400 });
   }
+  if (!metadata.deviceId) {
+    return NextResponse.json({ error: "deviceId obrigatorio." }, { status: 400 });
+  }
+
+  const chargeRequestId = `video-complete:${operationName}`;
+  const ensureCharge = async () => {
+    const consumeResult = await consumeCredits({
+      deviceId: metadata.deviceId,
+      amount: VIDEO_GENERATION_CREDIT_COST,
+      reason: "Geracao de video concluida.",
+      referenceType: "video_generation",
+      referenceId: operationName,
+      requestId: chargeRequestId,
+    });
+
+    if (!consumeResult.ok) {
+      return NextResponse.json(
+        { error: "Saldo insuficiente. Sao necessarios 2 creditos para concluir o video." },
+        { status: 402 }
+      );
+    }
+
+    return consumeResult.balance;
+  };
 
   let canPersistToDatabase = true;
   let persistenceWarning = "";
@@ -1549,12 +1527,17 @@ async function handleVideoStatus(
   }
 
   if (existing) {
+    const chargeResult = await ensureCharge();
+    if (chargeResult instanceof NextResponse) {
+      return chargeResult;
+    }
     const response: DoneVideoResponse = {
       done: true,
       operationName,
       videoId: existing.id,
       videoUrl: buildGeneratedVideoUrl(existing.id, metadata.deviceId),
       persisted: true,
+      creditsBalance: chargeResult,
     };
     return NextResponse.json(response);
   }
@@ -1609,11 +1592,16 @@ async function handleVideoStatus(
 
     const fallbackProxyUrl = buildSoraProxyVideoUrl(operationName);
     if (!canPersistToDatabase) {
+      const chargeResult = await ensureCharge();
+      if (chargeResult instanceof NextResponse) {
+        return chargeResult;
+      }
       const fallback: DoneVideoResponse = {
         done: true,
         operationName,
         videoUrl: fallbackProxyUrl,
         persisted: false,
+        creditsBalance: chargeResult,
         warning:
           persistenceWarning ||
           "Persistencia de videos desativada: execute `npx prisma db push` para criar a tabela GeneratedVideo.",
@@ -1628,6 +1616,10 @@ async function handleVideoStatus(
         fetchVideo: () => fetchSoraVideo(operationName, openAiApiKey, credentials.openAiOrgId),
         metadata,
       });
+      const chargeResult = await ensureCharge();
+      if (chargeResult instanceof NextResponse) {
+        return chargeResult;
+      }
 
       const response: DoneVideoResponse = {
         done: true,
@@ -1635,15 +1627,21 @@ async function handleVideoStatus(
         videoId: persistedVideo.id,
         videoUrl: persistedVideo.videoUrl,
         persisted: true,
+        creditsBalance: chargeResult,
         warning: persistedVideo.warning,
       };
       return NextResponse.json(response);
     } catch (persistError) {
+      const chargeResult = await ensureCharge();
+      if (chargeResult instanceof NextResponse) {
+        return chargeResult;
+      }
       const fallback: DoneVideoResponse = {
         done: true,
         operationName,
         videoUrl: fallbackProxyUrl,
         persisted: false,
+        creditsBalance: chargeResult,
         warning:
           persistError instanceof Error
             ? persistError.message
@@ -1739,11 +1737,16 @@ async function handleVideoStatus(
         { status: 500 }
       );
     }
+    const chargeResult = await ensureCharge();
+    if (chargeResult instanceof NextResponse) {
+      return chargeResult;
+    }
     const fallback: DoneVideoResponse = {
       done: true,
       operationName,
       videoUrl: fallbackProxyUrl,
       persisted: false,
+      creditsBalance: chargeResult,
       warning:
         persistenceWarning ||
         "Persistencia de videos desativada: execute `npx prisma db push` para criar a tabela GeneratedVideo.",
@@ -1761,6 +1764,10 @@ async function handleVideoStatus(
           : fetchGeminiVideo(videoUri, geminiApiKey),
       metadata,
     });
+    const chargeResult = await ensureCharge();
+    if (chargeResult instanceof NextResponse) {
+      return chargeResult;
+    }
 
     const response: DoneVideoResponse = {
       done: true,
@@ -1768,15 +1775,21 @@ async function handleVideoStatus(
       videoId: persistedVideo.id,
       videoUrl: persistedVideo.videoUrl,
       persisted: true,
+      creditsBalance: chargeResult,
       warning: persistedVideo.warning,
     };
     return NextResponse.json(response);
   } catch (persistError) {
+    const chargeResult = await ensureCharge();
+    if (chargeResult instanceof NextResponse) {
+      return chargeResult;
+    }
     const fallback: DoneVideoResponse = {
       done: true,
       operationName,
       videoUrl: fallbackProxyUrl,
       persisted: false,
+      creditsBalance: chargeResult,
       warning:
         persistError instanceof Error
           ? persistError.message

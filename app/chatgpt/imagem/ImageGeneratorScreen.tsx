@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
+  FaCoins,
   FaChevronDown,
   FaDownload,
   FaExchangeAlt,
@@ -1142,24 +1143,25 @@ export default function ImageGeneratorScreen() {
             OpenAI Family
           </p>
 
-          <div className="mt-5 flex items-center gap-3">
-            <SiOpenai className="h-9 w-9 text-purple-300" />
-            <h1 className="text-2xl font-bold leading-tight sm:text-4xl">
-              Image Designer PRO
-            </h1>
+          <div className="mt-5 flex items-start justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <SiOpenai className="h-9 w-9 text-purple-300" />
+              <h1 className="text-2xl font-bold leading-tight sm:text-4xl">
+                Image Designer PRO
+              </h1>
+            </div>
+            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-amber-300/55 bg-amber-400/20 px-3 py-1 text-xs font-semibold text-amber-100 sm:text-sm">
+              <FaCoins className="text-amber-300" />
+              Créditos: {creditsLoading && creditsBalance === null ? "..." : creditsBalance ?? "--"}
+            </span>
           </div>
         </header>
 
         <section className={`${sectionCardClass} space-y-5`}>
-          <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-            <h4 className="flex items-center gap-2 text-md font-semibold">
-              <FaRobot className="text-purple-400" />
-              Geração por IA
-            </h4>
-            <span className="inline-flex items-center rounded-full border border-cyan-400/35 bg-cyan-500/10 px-3 py-1 text-xs font-semibold text-cyan-100">
-              Créditos: {creditsLoading && creditsBalance === null ? "..." : creditsBalance ?? "--"}
-            </span>
-          </div>
+          <h4 className="mb-1 flex items-center gap-2 text-md font-semibold">
+            <FaRobot className="text-purple-400" />
+            Geração por IA
+          </h4>
 
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             <div>
