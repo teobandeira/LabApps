@@ -22,7 +22,7 @@ type AmbientadorItem = {
   preview: string | null;
 };
 
-type VideoProvider = "veo";
+type VideoProvider = "veo" | "sora";
 type ImageModelOption = {
   value: string;
   label: string;
@@ -107,6 +107,15 @@ const VIDEO_MODEL_OPTIONS: VideoModelOption[] = [
     value: "veo-3.1-generate-preview",
     label: "Veo 3.1 Standard",
     provider: "veo",
+    allowedDurations: [8],
+    allowedResolutions: ["720p"],
+    defaultDuration: 8,
+    defaultResolution: "720p",
+  },
+  {
+    value: "sora-2",
+    label: "Sora 2",
+    provider: "sora",
     allowedDurations: [8],
     allowedResolutions: ["720p"],
     defaultDuration: 8,
@@ -311,6 +320,7 @@ export default function ImageGeneratorScreen() {
   const [creditsBalance, setCreditsBalance] = useState<number | null>(null);
   const [creditsLoading, setCreditsLoading] = useState(false);
   const toastTimerRef = useRef<number | null>(null);
+  const videoPreviewAnchorRef = useRef<HTMLDivElement | null>(null);
 
   const selectedVideoModelOption = useMemo(
     () => VIDEO_MODEL_OPTIONS.find((option) => option.value === videoModel) || VIDEO_MODEL_OPTIONS[0],
@@ -647,6 +657,8 @@ export default function ImageGeneratorScreen() {
   };
 
   const handleGenerateVideo = async () => {
+    videoPreviewAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+
     if (!chatDeviceId) {
       notify("error", "Identificador do dispositivo indisponivel.");
       return;
@@ -1866,19 +1878,14 @@ export default function ImageGeneratorScreen() {
 
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:max-h-[70vh] sm:px-5 sm:py-5">
               <div className="grid grid-cols-1 gap-4 xl:grid-cols-[420px_minmax(0,1fr)]">
-                <div className="rounded-xl border border-gray-700/70 bg-gray-800/55 p-4">
+                <div ref={videoPreviewAnchorRef} className="rounded-xl border border-gray-700/70 bg-gray-800/55 p-4">
                   <p className={fieldLabelClass}>{videoResult ? "Vídeo gerado" : "Preview da imagem"}</p>
 
                   <div
                     className="relative flex w-full items-center justify-center overflow-hidden rounded-xl border border-gray-700 bg-black/80"
                     style={{ aspectRatio: selectedVideoFormat.previewAspectRatio }}
                   >
-                    {videoLoading ? (
-                      <div className="flex flex-col items-center gap-3 px-4 text-center text-gray-200">
-                        <div className="h-10 w-10 animate-spin rounded-full border-4 border-cyan-400 border-t-transparent" />
-                        <p className="text-sm">Processando no Veo. Isso pode levar alguns minutos.</p>
-                      </div>
-                    ) : videoResult ? (
+                    {videoResult ? (
                       <video controls src={videoResult} className="h-full w-full object-cover" />
                     ) : videoSourceUrl ? (
                       <img
@@ -1891,6 +1898,14 @@ export default function ImageGeneratorScreen() {
                         Nenhuma imagem selecionada para gerar o vídeo.
                       </p>
                     )}
+                    {videoLoading ? (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/35 px-4 text-center text-gray-100 backdrop-blur-[1px]">
+                        <div className="h-10 w-10 animate-spin rounded-full border-4 border-cyan-400 border-t-transparent" />
+                        <p className="text-sm">
+                          Processando no {selectedVideoModelOption.provider === "sora" ? "Sora" : "Veo"}. Isso pode levar alguns minutos.
+                        </p>
+                      </div>
+                    ) : null}
                   </div>
 
                   {videoResult && !videoLoading ? (
@@ -2033,7 +2048,7 @@ export default function ImageGeneratorScreen() {
                   className="inline-flex h-10 min-w-36.25 cursor-pointer items-center justify-center gap-2 rounded-lg border border-cyan-400/45 bg-cyan-500/25 px-4 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/35 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <FaVideo />
-                  {videoLoading ? "Gerando vídeo..." : "Gerar vídeo"}
+                  {videoLoading ? "Gerando vídeo..." : `Gerar vídeo (-${VIDEO_GENERATION_CREDIT_COST} créditos)`}
                 </button>
               </div>
             </div>
