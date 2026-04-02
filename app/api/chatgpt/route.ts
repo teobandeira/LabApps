@@ -616,7 +616,7 @@ async function normalizeSourceImageForEdit(
   const originalName = sourceImage.name || "image";
   const baseName = originalName.replace(/\.[^.]+$/, "");
   const normalizedName = `${baseName || "image"}.png`;
-  return new File([outputBuffer], normalizedName, { type: "image/png" });
+  return new File([Uint8Array.from(outputBuffer)], normalizedName, { type: "image/png" });
 }
 
 function normalizeImageAction(value: FormDataEntryValue | null | undefined): ImageAction {
