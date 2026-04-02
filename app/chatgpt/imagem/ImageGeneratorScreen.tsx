@@ -277,7 +277,7 @@ export default function ImageGeneratorScreen() {
   const [videoResult, setVideoResult] = useState<string | null>(null);
   const [videoSourceUrl, setVideoSourceUrl] = useState<string | null>(null);
   const [videoPrompt, setVideoPrompt] = useState(
-    "Transforme esta ambientação em um vídeo publicitário com movimento suave de câmera, foco no produto principal, iluminação realista e preservação total da forma original do produto.",
+    "Transforme esta imagem em um vídeo publicitário com movimento suave de câmera, foco no produto principal, iluminação realista e preservação total da forma original do produto.",
   );
   const [videoNegativePrompt, setVideoNegativePrompt] = useState("");
   const [videoModel, setVideoModel] = useState<string>(VIDEO_MODEL_OPTIONS[0].value);
@@ -561,7 +561,7 @@ export default function ImageGeneratorScreen() {
       const data = await res.json();
 
       if (!res.ok || data.error) {
-        notify("error", data.error || "Erro ao gerar a ambientação.");
+        notify("error", data.error || "Erro ao gerar a imagem.");
         if (res.status === 402) {
           void loadCredits(chatDeviceId);
         }
@@ -595,10 +595,10 @@ export default function ImageGeneratorScreen() {
       } else {
         void loadCredits(chatDeviceId);
       }
-      notify("success", "Ambientação gerada com sucesso!");
+      notify("success", "Imagem gerada com sucesso!");
       void loadBiblioteca(chatDeviceId);
     } catch {
-      notify("error", "Erro ao gerar a ambientação.");
+      notify("error", "Erro ao gerar a imagem.");
     } finally {
       setLoading(false);
     }
@@ -656,7 +656,7 @@ export default function ImageGeneratorScreen() {
       return;
     }
     if (!videoSourceUrl) {
-      notify("error", "Gere uma ambientação antes de gerar o vídeo.");
+      notify("error", "Gere uma imagem antes de gerar o vídeo.");
       return;
     }
 
@@ -1138,22 +1138,24 @@ export default function ImageGeneratorScreen() {
           <div className="absolute -top-16 -right-10 h-44 w-44 rounded-full bg-cyan-500/20 blur-3xl" />
           <div className="absolute -bottom-20 left-1/3 h-56 w-56 rounded-full bg-blue-500/10 blur-3xl" />
 
-          <p className="inline-flex items-center gap-2 rounded-full border border-cyan-400/30 bg-cyan-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-cyan-300">
-            <MdRocketLaunch className="h-4 w-4" />
-            OpenAI Family
-          </p>
-
-          <div className="mt-5 flex items-start justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <SiOpenai className="h-9 w-9 text-purple-300" />
-              <h1 className="text-2xl font-bold leading-tight sm:text-4xl">
-                Image Designer PRO
-              </h1>
-            </div>
+          <div className="flex items-center justify-between gap-3">
+            <p className="inline-flex items-center gap-2 rounded-full border border-cyan-400/30 bg-cyan-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-cyan-300">
+              <MdRocketLaunch className="h-4 w-4" />
+              Image Creator
+            </p>
             <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-amber-300/55 bg-amber-400/20 px-3 py-1 text-xs font-semibold text-amber-100 sm:text-sm">
               <FaCoins className="text-amber-300" />
               Créditos: {creditsLoading && creditsBalance === null ? "..." : creditsBalance ?? "--"}
             </span>
+          </div>
+
+          <div className="mt-5 flex items-start gap-3">
+            <div className="flex items-center gap-3">
+              <SiOpenai className="h-9 w-9 text-purple-300" />
+              <h1 className="text-2xl font-bold leading-tight sm:text-4xl">
+                IA Studio PRO
+              </h1>
+            </div>
           </div>
         </header>
 
@@ -1334,7 +1336,7 @@ export default function ImageGeneratorScreen() {
                   value={promptPersonalizado}
                   onChange={(e) => setPromptPersonalizado(e.target.value)}
                   className={`${textareaClass} h-28 min-h-24 max-h-45 resize-y`}
-                  placeholder="Descreva a ambientação desejada."
+                  placeholder="Descreva a imagem desejada."
                 />
               </div>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -1753,13 +1755,13 @@ export default function ImageGeneratorScreen() {
             <div className="mb-4 flex items-center justify-between">
               <h3 className="inline-flex items-center gap-2 text-lg font-semibold text-white">
                 <FaImage className="text-purple-300" />
-                Visualizar ambientação
+                Visualizar imagem
               </h3>
               <button
                 type="button"
                 onClick={() => setAmbientacaoLightboxOpen(false)}
                 className="cursor-pointer rounded-lg border border-gray-600 bg-gray-800 p-2 text-gray-300 transition hover:text-white"
-                aria-label="Fechar visualização da ambientação"
+                aria-label="Fechar visualização"
               >
                 <FaTimes />
               </button>
@@ -1776,7 +1778,7 @@ export default function ImageGeneratorScreen() {
                 className="inline-flex h-10 min-w-47.5 cursor-pointer items-center justify-center gap-2 rounded-lg bg-purple-700 px-4 text-sm font-semibold text-white transition hover:bg-purple-600"
               >
                 <FaDownload />
-                Baixar Ambientação
+                Baixar imagem
               </button>
               <button
                 type="button"
@@ -1881,7 +1883,7 @@ export default function ImageGeneratorScreen() {
                     ) : videoSourceUrl ? (
                       <img
                         src={videoSourceUrl}
-                        alt="Preview da ambientação para geração de vídeo"
+                        alt="Preview da imagem para geração de vídeo"
                         className="h-full w-full object-cover"
                       />
                     ) : (
