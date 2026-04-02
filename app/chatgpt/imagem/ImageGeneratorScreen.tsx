@@ -1636,7 +1636,7 @@ export default function ImageGeneratorScreen() {
                   className="mx-auto max-h-[75vh] w-full object-contain"
                 />
               ) : bibliotecaImageLightboxLoading ? (
-                <div className="flex min-h-[320px] w-full flex-col items-center justify-center gap-3 px-4 py-10 text-center text-gray-200">
+                <div className="flex min-h-80 w-full flex-col items-center justify-center gap-3 px-4 py-10 text-center text-gray-200">
                   <div className="h-10 w-10 animate-spin rounded-full border-4 border-cyan-400 border-t-transparent" />
                   <p className="text-sm">Carregando imagem...</p>
                 </div>
@@ -1653,7 +1653,7 @@ export default function ImageGeneratorScreen() {
       )}
 
       {videoModalOpen && (
-        <div className="fixed inset-0 z-[95] overflow-y-auto bg-black/65 p-0 backdrop-blur-[2px] sm:p-5">
+        <div className="fixed inset-0 z-95 overflow-y-auto bg-black/65 p-0 backdrop-blur-[2px] sm:p-5">
           <div className="mx-0 my-0 flex h-dvh w-full max-w-none flex-col overflow-hidden rounded-none border-0 bg-gray-900 shadow-2xl shadow-black/30 sm:mx-auto sm:my-4 sm:h-auto sm:max-w-352 sm:rounded-2xl sm:border sm:border-gray-600/70">
             <div className="flex items-center justify-between border-b border-gray-700/80 bg-gray-900/95 px-4 py-3 sm:px-5">
               <h3 className="inline-flex items-center gap-2 text-base font-semibold text-white sm:text-lg">
