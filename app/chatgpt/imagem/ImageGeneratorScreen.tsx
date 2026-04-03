@@ -43,8 +43,6 @@ type ToastState = {
   message: string;
 } | null;
 
-type BibliotecaFiltro = "image" | "video";
-
 type GeneratedImageItem = {
   id: string;
   prompt: string;
@@ -321,7 +319,6 @@ export default function ImageGeneratorScreen() {
   const [toastState, setToastState] = useState<ToastState>(null);
   const [isTopMenuOpen, setIsTopMenuOpen] = useState(false);
   const [isMainDropzoneActive, setIsMainDropzoneActive] = useState(false);
-  const [bibliotecaFiltro, setBibliotecaFiltro] = useState<BibliotecaFiltro>("image");
   const [generatedImages, setGeneratedImages] = useState<GeneratedImageItem[]>([]);
   const [generatedVideos, setGeneratedVideos] = useState<GeneratedVideoItem[]>([]);
   const [bibliotecaLoading, setBibliotecaLoading] = useState(false);
@@ -338,6 +335,7 @@ export default function ImageGeneratorScreen() {
   const [mergeLoading, setMergeLoading] = useState(false);
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [mergeResultUrl, setMergeResultUrl] = useState<string | null>(null);
+  const [feedActionMenuId, setFeedActionMenuId] = useState<string | null>(null);
   const [chatDeviceId, setChatDeviceId] = useState<string>("");
   const [creditsBalance, setCreditsBalance] = useState<number | null>(null);
   const [creditsLoading, setCreditsLoading] = useState(false);
@@ -394,6 +392,32 @@ export default function ImageGeneratorScreen() {
 
   const bibliotecaImageCount = generatedImages.length;
   const bibliotecaVideoCount = generatedVideos.length;
+  const bibliotecaFeedItems = useMemo(() => {
+    const imagePromptById = new Map<string, string>();
+    for (const image of generatedImages) {
+      imagePromptById.set(image.id, image.revisedPrompt || image.prompt || "");
+    }
+
+    const imageItems = generatedImages.map((item) => ({
+      type: "image" as const,
+      id: item.id,
+      createdAtTs: new Date(item.createdAt).getTime() || 0,
+      caption: item.revisedPrompt || item.prompt || "",
+      item,
+    }));
+
+    const videoItems = generatedVideos.map((item) => ({
+      type: "video" as const,
+      id: item.id,
+      createdAtTs: new Date(item.createdAt).getTime() || 0,
+      caption:
+        (item.sourceImageId ? imagePromptById.get(item.sourceImageId) : "") ||
+        "Prompt não disponível para este vídeo.",
+      item,
+    }));
+
+    return [...imageItems, ...videoItems].sort((a, b) => b.createdAtTs - a.createdAtTs);
+  }, [generatedImages, generatedVideos]);
   const selectedVideosForMerge = useMemo(() => {
     const map = new Map(generatedVideos.map((video) => [video.id, video]));
     return selectedVideoIdsForMerge
@@ -493,6 +517,10 @@ export default function ImageGeneratorScreen() {
       current.filter((id) => generatedVideos.some((video) => video.id === id)),
     );
   }, [generatedVideos]);
+
+  useEffect(() => {
+    setFeedActionMenuId(null);
+  }, [generatedImages, generatedVideos]);
 
   useEffect(() => {
     if (bibliotecaLightboxItem?.type !== "image") {
@@ -1447,38 +1475,16 @@ export default function ImageGeneratorScreen() {
               </p>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
-              <div className="grid w-full grid-cols-2 gap-2 sm:w-80">
-                <button
-                  type="button"
-                  onClick={() => setBibliotecaFiltro("image")}
-                  className={`inline-flex h-8 w-full cursor-pointer items-center justify-center gap-1.5 rounded-full border px-3 text-xs font-medium transition ${
-                    bibliotecaFiltro === "image"
-                      ? "border-cyan-400/60 bg-cyan-500/20 text-cyan-100"
-                      : "border-gray-600 bg-gray-900/50 text-gray-300 hover:border-gray-500"
-                  }`}
-                >
-                  <FaImage className="text-[11px]" />
-                  Imagens ({bibliotecaImageCount})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setBibliotecaFiltro("video")}
-                  className={`inline-flex h-8 w-full cursor-pointer items-center justify-center gap-1.5 rounded-full border px-3 text-xs font-medium transition ${
-                    bibliotecaFiltro === "video"
-                      ? "border-cyan-400/60 bg-cyan-500/20 text-cyan-100"
-                      : "border-gray-600 bg-gray-900/50 text-gray-300 hover:border-gray-500"
-                  }`}
-                >
-                  <FaVideo className="text-[11px]" />
-                  Vídeos ({bibliotecaVideoCount})
-                </button>
-              </div>
-              {bibliotecaFiltro === "video" && selectedVideoIdsForMerge.length > 0 ? (
+              <span className="inline-flex h-8 items-center rounded-full border border-gray-600 bg-gray-900/60 px-3 text-xs font-medium text-gray-300">
+                Itens: {bibliotecaImageCount + bibliotecaVideoCount} ({bibliotecaImageCount} imagens •{" "}
+                {bibliotecaVideoCount} vídeos)
+              </span>
+              {selectedVideoIdsForMerge.length > 0 ? (
                 <span className="inline-flex h-8 items-center rounded-full border border-gray-600 bg-gray-900/60 px-3 text-xs font-medium text-gray-300">
                   Selecionados: {selectedVideoIdsForMerge.length}
                 </span>
               ) : null}
-              {bibliotecaFiltro === "video" && selectedVideoIdsForMerge.length >= 2 ? (
+              {selectedVideoIdsForMerge.length >= 2 ? (
                 <button
                   type="button"
                   onClick={openMergeModal}
@@ -1514,169 +1520,206 @@ export default function ImageGeneratorScreen() {
                 ))}
               </div>
             </div>
-          ) : bibliotecaFiltro === "image" ? (
-            generatedImages.length === 0 ? (
+          ) : (
+            bibliotecaFeedItems.length === 0 ? (
               <div className="rounded-xl border border-gray-700 bg-gray-900/60 px-4 py-6 text-center text-sm text-gray-300">
-                Nenhuma imagem encontrada.
+                Nenhum item encontrado.
               </div>
             ) : (
               <div className="columns-1 gap-4 sm:columns-2 lg:columns-3 xl:columns-4">
-                {generatedImages.map((item) => {
-                  const deleting = deletingMediaIds.includes(`image:${item.id}`);
-                  return (
+                {bibliotecaFeedItems.map((feedItem) =>
+                  feedItem.type === "image" ? (
                     <article
-                      key={item.id}
+                      key={`image-${feedItem.item.id}`}
                       className="mb-4 break-inside-avoid rounded-xl border border-gray-700 bg-gray-900/70 p-3"
                     >
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setBibliotecaLightboxItem({
-                          type: "image",
-                          url: item.imageUrl,
-                          title: item.prompt || "Imagem gerada",
-                          previewUrl: item.thumbnailUrl || item.imageUrl,
-                        })
-                      }
-                      className="relative w-full cursor-pointer overflow-hidden rounded-md bg-black"
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setBibliotecaLightboxItem({
+                            type: "image",
+                            url: feedItem.item.imageUrl,
+                            title: feedItem.item.prompt || "Imagem gerada",
+                            previewUrl: feedItem.item.thumbnailUrl || feedItem.item.imageUrl,
+                          })
+                        }
+                        className="relative w-full cursor-pointer overflow-hidden rounded-md bg-black"
+                      >
+                        <img
+                          src={feedItem.item.thumbnailUrl || feedItem.item.imageUrl}
+                          alt={feedItem.item.prompt || "Imagem gerada"}
+                          className="h-auto w-full object-cover"
+                          loading="lazy"
+                          decoding="async"
+                        />
+                      </button>
+
+                      <p className="mt-2 line-clamp-2 text-[11px] text-gray-300">{feedItem.caption}</p>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
+                        <span className="inline-flex items-center rounded-full border border-cyan-400/35 bg-cyan-500/10 px-2 py-0.5 font-medium text-cyan-200">
+                          {feedItem.item.model}
+                        </span>
+                        <span className="inline-flex items-center rounded-full border border-gray-600 bg-gray-800/70 px-2 py-0.5 font-medium text-gray-300">
+                          {formatDatePtBr(feedItem.item.createdAt)}
+                        </span>
+                      </div>
+
+                      <div className="relative mt-2 flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setFeedActionMenuId((current) =>
+                              current === `image:${feedItem.item.id}` ? null : `image:${feedItem.item.id}`,
+                            )
+                          }
+                          className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-gray-600 bg-gray-800 text-gray-200 transition hover:bg-gray-700"
+                          aria-label="Abrir ações da imagem"
+                        >
+                          <MdMoreVert />
+                        </button>
+                        {feedActionMenuId === `image:${feedItem.item.id}` ? (
+                          <div className="absolute top-9 right-0 z-20 w-44 rounded-md border border-gray-600 bg-gray-900/98 p-1.5 shadow-xl">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setFeedActionMenuId(null);
+                                downloadBibliotecaImage(feedItem.item);
+                              }}
+                              disabled={deletingMediaIds.includes(`image:${feedItem.item.id}`)}
+                              className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-xs text-gray-200 transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              <FaDownload className="text-[11px]" />
+                              Baixar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setFeedActionMenuId(null);
+                                openVideoModal(
+                                  feedItem.item.imageUrl,
+                                  resolveAspectRatioFromImageSize(feedItem.item.size),
+                                );
+                              }}
+                              disabled={deletingMediaIds.includes(`image:${feedItem.item.id}`)}
+                              className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-xs text-cyan-100 transition hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              <FaVideo className="text-[11px]" />
+                              Gerar vídeo
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setFeedActionMenuId(null);
+                                openDeleteModalForImage(feedItem.item);
+                              }}
+                              disabled={deletingMediaIds.includes(`image:${feedItem.item.id}`)}
+                              className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-xs text-red-100 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              <FaTimes className="text-[11px]" />
+                              {deletingMediaIds.includes(`image:${feedItem.item.id}`) ? "Excluindo..." : "Excluir"}
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    </article>
+                  ) : (
+                    <article
+                      key={`video-${feedItem.item.id}`}
+                      className="mb-4 break-inside-avoid rounded-xl border border-gray-700 bg-gray-900/70 p-3"
                     >
-                      <img
-                        src={item.thumbnailUrl || item.imageUrl}
-                        alt={item.prompt || "Imagem gerada"}
-                        className="h-auto w-full object-cover"
-                        loading="lazy"
-                        decoding="async"
-                      />
-                    </button>
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <label className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-black/35 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-100">
+                          <input
+                            type="checkbox"
+                            checked={selectedVideoIdsForMerge.includes(feedItem.item.id)}
+                            onChange={() => toggleVideoSelectionForMerge(feedItem.item.id)}
+                            disabled={deletingMediaIds.includes(`video:${feedItem.item.id}`)}
+                            className="h-3.5 w-3.5 cursor-pointer accent-cyan-500"
+                          />
+                          Selecionar
+                        </label>
+                        <div className="relative">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setFeedActionMenuId((current) =>
+                                current === `video:${feedItem.item.id}` ? null : `video:${feedItem.item.id}`,
+                              )
+                            }
+                            className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-gray-600 bg-gray-800 text-gray-200 transition hover:bg-gray-700"
+                            aria-label="Abrir ações do vídeo"
+                          >
+                            <MdMoreVert />
+                          </button>
+                          {feedActionMenuId === `video:${feedItem.item.id}` ? (
+                            <div className="absolute top-9 right-0 z-20 w-40 rounded-md border border-gray-600 bg-gray-900/98 p-1.5 shadow-xl">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setFeedActionMenuId(null);
+                                  downloadBibliotecaVideo(feedItem.item);
+                                }}
+                                disabled={deletingMediaIds.includes(`video:${feedItem.item.id}`)}
+                                className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-xs text-gray-200 transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                <FaDownload className="text-[11px]" />
+                                Baixar vídeo
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setFeedActionMenuId(null);
+                                  openDeleteModalForVideo(feedItem.item);
+                                }}
+                                disabled={deletingMediaIds.includes(`video:${feedItem.item.id}`)}
+                                className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-xs text-red-100 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                <FaTimes className="text-[11px]" />
+                                {deletingMediaIds.includes(`video:${feedItem.item.id}`) ? "Excluindo..." : "Excluir"}
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setBibliotecaLightboxItem({
+                            type: "video",
+                            url: feedItem.item.videoUrl,
+                            title: `Vídeo ${feedItem.item.id}`,
+                          })
+                        }
+                        className="relative w-full cursor-pointer overflow-hidden rounded-md bg-black"
+                      >
+                        <video
+                          src={feedItem.item.videoUrl}
+                          preload="metadata"
+                          poster={feedItem.item.sourceImageThumbnailUrl || undefined}
+                          muted
+                          className="h-auto w-full object-cover"
+                        />
+                      </button>
 
-                    <p className="mt-2 line-clamp-2 text-[11px] text-gray-300">
-                      {item.revisedPrompt || item.prompt}
-                    </p>
-                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
-                      <span className="inline-flex items-center rounded-full border border-cyan-400/35 bg-cyan-500/10 px-2 py-0.5 font-medium text-cyan-200">
-                        {item.model}
-                      </span>
-                      <span className="inline-flex items-center rounded-full border border-gray-600 bg-gray-800/70 px-2 py-0.5 font-medium text-gray-300">
-                        {item.size}
-                      </span>
-                      <span className="inline-flex items-center rounded-full border border-gray-600 bg-gray-800/70 px-2 py-0.5 font-medium text-gray-300">
-                        {formatDatePtBr(item.createdAt)}
-                      </span>
-                    </div>
+                      <p className="mt-2 line-clamp-2 text-[11px] text-gray-300">{feedItem.caption}</p>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
+                        <span className="inline-flex items-center rounded-full border border-cyan-400/35 bg-cyan-500/10 px-2 py-0.5 font-medium text-cyan-200">
+                          {feedItem.item.model}
+                        </span>
+                        <span className="inline-flex items-center rounded-full border border-gray-600 bg-gray-800/70 px-2 py-0.5 font-medium text-gray-300">
+                          {feedItem.item.resolution} • {feedItem.item.aspectRatio} •{" "}
+                          {feedItem.item.durationSeconds}s
+                        </span>
+                        <span className="inline-flex items-center rounded-full border border-gray-600 bg-gray-800/70 px-2 py-0.5 font-medium text-gray-300">
+                          {formatDatePtBr(feedItem.item.createdAt)}
+                        </span>
+                      </div>
 
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => downloadBibliotecaImage(item)}
-                        disabled={deleting}
-                        className="inline-flex h-8 w-[calc(50%-0.25rem)] cursor-pointer items-center justify-center gap-1.5 rounded-md border border-gray-600 bg-gray-800 px-2.5 text-xs font-medium text-gray-200 transition hover:bg-gray-700"
-                      >
-                        <FaDownload className="text-[11px]" />
-                        Baixar
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => openVideoModal(item.imageUrl, resolveAspectRatioFromImageSize(item.size))}
-                        disabled={deleting}
-                        className="inline-flex h-8 w-[calc(50%-0.25rem)] cursor-pointer items-center justify-center gap-1.5 rounded-md border border-cyan-400/40 bg-cyan-500/20 px-2.5 text-xs font-medium text-cyan-100 transition hover:bg-cyan-500/30"
-                      >
-                        <FaVideo className="text-[11px]" />
-                        Gerar vídeo
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => openDeleteModalForImage(item)}
-                        disabled={deleting}
-                        className="inline-flex h-8 w-full cursor-pointer items-center justify-center gap-1.5 rounded-md border border-red-500/35 bg-red-500/15 px-2.5 text-xs font-medium text-red-100 transition hover:bg-red-500/25 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        <FaTimes className="text-[11px]" />
-                        {deleting ? "Excluindo..." : "Excluir"}
-                      </button>
-                    </div>
-                  </article>
-                  );
-                })}
+                    </article>
+                  ),
+                )}
               </div>
             )
-          ) : generatedVideos.length === 0 ? (
-            <div className="rounded-xl border border-gray-700 bg-gray-900/60 px-4 py-6 text-center text-sm text-gray-300">
-              Nenhum vídeo encontrado.
-            </div>
-          ) : (
-            <div className="columns-1 gap-4 sm:columns-2 lg:columns-3 xl:columns-4">
-              {generatedVideos.map((item) => {
-                const deleting = deletingMediaIds.includes(`video:${item.id}`);
-                return (
-                  <article
-                    key={item.id}
-                    className="mb-4 break-inside-avoid rounded-xl border border-gray-700 bg-gray-900/70 p-3"
-                  >
-                  <label className="mb-2 inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-black/35 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-100">
-                    <input
-                      type="checkbox"
-                      checked={selectedVideoIdsForMerge.includes(item.id)}
-                      onChange={() => toggleVideoSelectionForMerge(item.id)}
-                      disabled={deleting}
-                      className="h-3.5 w-3.5 cursor-pointer accent-cyan-500"
-                    />
-                    Selecionar
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setBibliotecaLightboxItem({
-                        type: "video",
-                        url: item.videoUrl,
-                        title: `Vídeo ${item.id}`,
-                      })
-                    }
-                    className="relative w-full cursor-pointer overflow-hidden rounded-md bg-black"
-                  >
-                    <video
-                      src={item.videoUrl}
-                      preload="metadata"
-                      poster={item.sourceImageThumbnailUrl || undefined}
-                      muted
-                      className="h-auto w-full object-cover"
-                    />
-                  </button>
-
-                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
-                    <span className="inline-flex items-center rounded-full border border-cyan-400/35 bg-cyan-500/10 px-2 py-0.5 font-medium text-cyan-200">
-                      {item.model}
-                    </span>
-                    <span className="inline-flex items-center rounded-full border border-gray-600 bg-gray-800/70 px-2 py-0.5 font-medium text-gray-300">
-                      {item.resolution} • {item.aspectRatio} • {item.durationSeconds}s
-                    </span>
-                    <span className="inline-flex items-center rounded-full border border-gray-600 bg-gray-800/70 px-2 py-0.5 font-medium text-gray-300">
-                      {formatDatePtBr(item.createdAt)}
-                    </span>
-                  </div>
-
-                  <div className="mt-2 flex items-center">
-                    <button
-                      type="button"
-                      onClick={() => downloadBibliotecaVideo(item)}
-                      disabled={deleting}
-                      className="inline-flex h-8 w-[calc(50%-0.25rem)] cursor-pointer items-center justify-center gap-1.5 rounded-md border border-gray-600 bg-gray-800 px-2.5 text-xs font-medium text-gray-200 transition hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <FaDownload className="text-[11px]" />
-                      Baixar vídeo
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => openDeleteModalForVideo(item)}
-                      disabled={deleting}
-                      className="ml-2 inline-flex h-8 w-[calc(50%-0.25rem)] cursor-pointer items-center justify-center gap-1.5 rounded-md border border-red-500/35 bg-red-500/15 px-2.5 text-xs font-medium text-red-100 transition hover:bg-red-500/25 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <FaTimes className="text-[11px]" />
-                      {deleting ? "Excluindo..." : "Excluir"}
-                    </button>
-                  </div>
-                </article>
-                );
-              })}
-            </div>
           )}
         </section>
       </main>

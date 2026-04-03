@@ -174,7 +174,7 @@ export async function GET(
           .webp({ quality: thumbQuality })
           .toBuffer();
 
-        return new NextResponse(thumbnailBuffer, {
+        return new NextResponse(Uint8Array.from(thumbnailBuffer), {
           status: 200,
           headers: {
             "Content-Type": "image/webp",
