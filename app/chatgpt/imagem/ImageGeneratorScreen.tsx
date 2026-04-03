@@ -114,10 +114,28 @@ const VIDEO_MODEL_OPTIONS: VideoModelOption[] = [
     defaultResolution: "720p",
   },
   {
+    value: "veo-3.1-fast-generate-preview",
+    label: "Veo 3.1 Fast",
+    provider: "veo",
+    allowedDurations: [8],
+    allowedResolutions: ["720p"],
+    defaultDuration: 8,
+    defaultResolution: "720p",
+  },
+  {
     value: "sora-2",
     label: "Sora 2",
     provider: "sora",
     allowedDurations: [8],
+    allowedResolutions: ["720p"],
+    defaultDuration: 8,
+    defaultResolution: "720p",
+  },
+  {
+    value: "sora-2-pro",
+    label: "Sora 2 Pro",
+    provider: "sora",
+    allowedDurations: [8, 12],
     allowedResolutions: ["720p"],
     defaultDuration: 8,
     defaultResolution: "720p",
@@ -130,7 +148,6 @@ const IMAGE_MODEL_OPTIONS: ImageModelOption[] = [
 ];
 
 const FIXED_VIDEO_RESOLUTION = "720p";
-const FIXED_VIDEO_DURATION_SECONDS = 8;
 const CHAT_DEVICE_ID_STORAGE_KEY = "chatgpt-device-id-v1";
 const IMAGE_GENERATION_CREDIT_COST = 1;
 const VIDEO_GENERATION_CREDIT_COST = 2;
@@ -290,11 +307,13 @@ export default function ImageGeneratorScreen() {
     "Transforme esta imagem em um vídeo publicitário com movimento suave de câmera, foco no produto principal, iluminação realista e preservação total da forma original do produto.",
   );
   const [videoModel, setVideoModel] = useState<string>(VIDEO_MODEL_OPTIONS[0].value);
+  const [videoDurationSeconds, setVideoDurationSeconds] = useState<number>(
+    VIDEO_MODEL_OPTIONS[0].defaultDuration,
+  );
   const [videoAspectRatio, setVideoAspectRatio] = useState<string>(
     SOCIAL_FORMAT_OPTIONS[0].value,
   );
   const videoResolution = FIXED_VIDEO_RESOLUTION;
-  const videoDurationSeconds = FIXED_VIDEO_DURATION_SECONDS;
   const [videoErrorMessage, setVideoErrorMessage] = useState<string | null>(null);
   const [toastState, setToastState] = useState<ToastState>(null);
   const [isTopMenuOpen, setIsTopMenuOpen] = useState(false);
@@ -336,6 +355,9 @@ export default function ImageGeneratorScreen() {
       SOCIAL_FORMAT_OPTIONS[0],
     [videoAspectRatio],
   );
+  const shouldShowVideoPreviewPanel = Boolean(
+    videoSourceUrl || videoResult || videoLoading || videoErrorMessage,
+  );
   const deleteModalMediaId = useMemo(() => {
     if (!deleteModalState) return null;
     return `${deleteModalState.type}:${deleteModalState.item.id}`;
@@ -345,6 +367,13 @@ export default function ImageGeneratorScreen() {
     : false;
   const canGenerateImageByCredits = creditsBalance === null || creditsBalance >= IMAGE_GENERATION_CREDIT_COST;
   const canGenerateVideoByCredits = creditsBalance === null || creditsBalance >= VIDEO_GENERATION_CREDIT_COST;
+
+  useEffect(() => {
+    if (selectedVideoModelOption.allowedDurations.includes(videoDurationSeconds)) {
+      return;
+    }
+    setVideoDurationSeconds(selectedVideoModelOption.defaultDuration);
+  }, [selectedVideoModelOption, videoDurationSeconds]);
 
   const sectionCardClass =
     "rounded-2xl border border-gray-700/80 bg-linear-to-br from-gray-900/80 via-slate-900/70 to-gray-950/70 p-4 sm:p-5";
@@ -1885,61 +1914,67 @@ export default function ImageGeneratorScreen() {
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:max-h-[70vh] sm:px-5 sm:py-5">
-              <div className="grid grid-cols-1 gap-4 xl:grid-cols-[420px_minmax(0,1fr)]">
-                <div ref={videoPreviewAnchorRef} className="rounded-xl border border-gray-700/70 bg-gray-800/55 p-4">
-                  <p className={fieldLabelClass}>{videoResult ? "Vídeo gerado" : "Preview da imagem"}</p>
+              <div
+                className={`grid grid-cols-1 gap-4 ${
+                  shouldShowVideoPreviewPanel ? "xl:grid-cols-[420px_minmax(0,1fr)]" : ""
+                }`}
+              >
+                {shouldShowVideoPreviewPanel ? (
+                  <div ref={videoPreviewAnchorRef} className="rounded-xl border border-gray-700/70 bg-gray-800/55 p-4">
+                    <p className={fieldLabelClass}>{videoResult ? "Vídeo gerado" : "Preview da imagem"}</p>
 
-                  <div
-                    className="relative flex w-full items-center justify-center overflow-hidden rounded-xl border border-gray-700 bg-black/80"
-                    style={{ aspectRatio: selectedVideoFormat.previewAspectRatio }}
-                  >
-                    {videoResult ? (
-                      <video controls src={videoResult} className="h-full w-full object-cover" />
-                    ) : videoSourceUrl ? (
-                      <img
-                        src={videoSourceUrl}
-                        alt="Preview da imagem para geração de vídeo"
-                        className="h-full w-full object-cover"
-                      />
-                    ) : (
-                      <p className="px-4 text-center text-sm text-gray-400">
-                        Nenhuma imagem selecionada para gerar o vídeo.
-                      </p>
-                    )}
-                    {videoLoading ? (
-                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/35 px-4 text-center text-gray-100 backdrop-blur-[1px]">
-                        <div className="h-10 w-10 animate-spin rounded-full border-4 border-cyan-400 border-t-transparent" />
-                        <p className="text-sm">
-                          Processando no {selectedVideoModelOption.provider === "sora" ? "Sora" : "Veo"}. Isso pode levar alguns minutos.
-                        </p>
-                      </div>
-                    ) : null}
-                  </div>
-
-                  {videoResult && !videoLoading ? (
-                    <div className="mt-3 flex justify-end">
-                      <button
-                        type="button"
-                        onClick={downloadVideo}
-                        className="inline-flex h-10 min-w-36.25 cursor-pointer items-center justify-center gap-2 rounded-lg bg-purple-700 px-4 text-sm font-semibold text-white transition hover:bg-purple-600"
-                      >
-                        <FaDownload />
-                        Baixar vídeo
-                      </button>
-                    </div>
-                  ) : (
-                    <>
-                      <p className="mt-3 text-xs text-gray-400">
-                        A imagem de referência aparece aqui e será substituída pelo vídeo após a geração.
-                      </p>
-                      {videoErrorMessage && (
-                        <p className="mt-2 rounded-lg border border-red-500/45 bg-red-500/15 px-3 py-2 text-xs font-medium text-red-100">
-                          {videoErrorMessage}
+                    <div
+                      className="relative flex w-full items-center justify-center overflow-hidden rounded-xl border border-gray-700 bg-black/80"
+                      style={{ aspectRatio: selectedVideoFormat.previewAspectRatio }}
+                    >
+                      {videoResult ? (
+                        <video controls src={videoResult} className="h-full w-full object-cover" />
+                      ) : videoSourceUrl ? (
+                        <img
+                          src={videoSourceUrl}
+                          alt="Preview da imagem para geração de vídeo"
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <p className="px-4 text-center text-sm text-gray-300">
+                          A prévia será exibida quando a geração iniciar.
                         </p>
                       )}
-                    </>
-                  )}
-                </div>
+                      {videoLoading ? (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/35 px-4 text-center text-gray-100 backdrop-blur-[1px]">
+                          <div className="h-10 w-10 animate-spin rounded-full border-4 border-cyan-400 border-t-transparent" />
+                          <p className="text-sm">
+                            Processando no {selectedVideoModelOption.provider === "sora" ? "Sora" : "Veo"}. Isso pode levar alguns minutos.
+                          </p>
+                        </div>
+                      ) : null}
+                    </div>
+
+                    {videoResult && !videoLoading ? (
+                      <div className="mt-3 flex justify-end">
+                        <button
+                          type="button"
+                          onClick={downloadVideo}
+                          className="inline-flex h-10 min-w-36.25 cursor-pointer items-center justify-center gap-2 rounded-lg bg-purple-700 px-4 text-sm font-semibold text-white transition hover:bg-purple-600"
+                        >
+                          <FaDownload />
+                          Baixar vídeo
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <p className="mt-3 text-xs text-gray-400">
+                          A imagem de referência aparece aqui e será substituída pelo vídeo após a geração.
+                        </p>
+                        {videoErrorMessage && (
+                          <p className="mt-2 rounded-lg border border-red-500/45 bg-red-500/15 px-3 py-2 text-xs font-medium text-red-100">
+                            {videoErrorMessage}
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </div>
+                ) : null}
 
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
@@ -1949,7 +1984,14 @@ export default function ImageGeneratorScreen() {
                         <div className={selectWrapperClass}>
                           <select
                             value={videoModel}
-                            onChange={(e) => setVideoModel(e.target.value)}
+                            onChange={(e) => {
+                              const nextModel = e.target.value;
+                              const nextOption =
+                                VIDEO_MODEL_OPTIONS.find((option) => option.value === nextModel) ||
+                                VIDEO_MODEL_OPTIONS[0];
+                              setVideoModel(nextModel);
+                              setVideoDurationSeconds(nextOption.defaultDuration);
+                            }}
                             className={selectClass}
                             disabled={videoLoading}
                           >
@@ -1999,11 +2041,23 @@ export default function ImageGeneratorScreen() {
 
                     <div className="rounded-xl border border-gray-700/70 bg-gray-800/55 p-4">
                       <label className={fieldLabelClass}>Duração do vídeo</label>
-                      <div className="rounded-xl border border-cyan-400/45 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100">
-                        {videoDurationSeconds}s (fixa)
+                      <div className={selectWrapperClass}>
+                        <select
+                          value={String(videoDurationSeconds)}
+                          onChange={(e) => setVideoDurationSeconds(Number(e.target.value))}
+                          className={selectClass}
+                          disabled={videoLoading}
+                        >
+                          {selectedVideoModelOption.allowedDurations.map((seconds) => (
+                            <option key={seconds} value={seconds}>
+                              {seconds}s
+                            </option>
+                          ))}
+                        </select>
+                        <FaChevronDown className={selectIconClass} />
                       </div>
                       <p className="mt-1 text-[11px] text-gray-400">
-                        Configuração fixa para reduzir custo da geração.
+                        Opções compatíveis com o modelo selecionado.
                       </p>
                     </div>
                   </div>
@@ -2028,11 +2082,11 @@ export default function ImageGeneratorScreen() {
             </div>
 
             <div className="border-t border-gray-700/80 bg-gray-900/95 px-4 py-3 sm:px-5">
-              <div className="flex flex-wrap items-center justify-end gap-2">
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={closeVideoModal}
-                  className="inline-flex h-10 min-w-36.25 cursor-pointer items-center justify-center gap-2 rounded-lg border border-gray-600 bg-gray-800 px-4 text-sm font-medium text-gray-200 transition hover:bg-gray-700"
+                  className="inline-flex h-10 min-w-0 flex-1 cursor-pointer items-center justify-center gap-2 rounded-lg border border-gray-600 bg-gray-800 px-3 text-sm font-medium text-gray-200 transition hover:bg-gray-700 sm:min-w-36.25 sm:flex-none sm:px-4"
                 >
                   <FaTimes className="text-xs" />
                   {videoLoading ? "Cancelar" : "Fechar"}
@@ -2041,7 +2095,7 @@ export default function ImageGeneratorScreen() {
                   type="button"
                   onClick={handleGenerateVideo}
                   disabled={videoLoading || !canGenerateVideoByCredits}
-                  className="inline-flex h-10 min-w-36.25 cursor-pointer items-center justify-center gap-2 rounded-lg border border-cyan-400/45 bg-cyan-500/25 px-4 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/35 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex h-10 min-w-0 flex-1 cursor-pointer items-center justify-center gap-2 rounded-lg border border-cyan-400/45 bg-cyan-500/25 px-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/35 disabled:cursor-not-allowed disabled:opacity-60 sm:min-w-36.25 sm:flex-none sm:px-4"
                 >
                   <FaVideo />
                   {videoLoading ? "Gerando vídeo..." : `Gerar vídeo (-${VIDEO_GENERATION_CREDIT_COST} créditos)`}
