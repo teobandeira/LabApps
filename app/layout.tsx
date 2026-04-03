@@ -11,7 +11,7 @@ const montserrat = Montserrat({
 export const metadata: Metadata = {
   title: {
     default: "AppsLab Portfolio",
-    template: "%s | AppsLab",
+    template: "%s | LabApps",
   },
   description:
     "Página principal de apresentação dos apps do projeto, com links para cada aplicação.",

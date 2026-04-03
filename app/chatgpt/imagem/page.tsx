@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import ImageGeneratorScreen from "./ImageGeneratorScreen";
 
 export const metadata: Metadata = {
-  title: "Ambientador de Produtos",
+  title: "IA Studio PRO",
   description: "Gere imagens e vídeos de ambientação com Gemini.",
 };
 

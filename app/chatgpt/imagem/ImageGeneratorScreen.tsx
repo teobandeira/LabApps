@@ -150,6 +150,7 @@ const IMAGE_MODEL_OPTIONS: ImageModelOption[] = [
 
 const FIXED_VIDEO_RESOLUTION = "720p";
 const CHAT_DEVICE_ID_STORAGE_KEY = "chatgpt-device-id-v1";
+const IMAGE_STUDIO_THEME_STORAGE_KEY = "chatgpt-image-studio-theme-v1";
 const IMAGE_GENERATION_CREDIT_COST = 1;
 const VIDEO_GENERATION_CREDIT_COST = 2;
 const ALLOWED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
@@ -336,6 +337,7 @@ export default function ImageGeneratorScreen() {
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [mergeResultUrl, setMergeResultUrl] = useState<string | null>(null);
   const [feedActionMenuId, setFeedActionMenuId] = useState<string | null>(null);
+  const [isLightTheme, setIsLightTheme] = useState(false);
   const [chatDeviceId, setChatDeviceId] = useState<string>("");
   const [creditsBalance, setCreditsBalance] = useState<number | null>(null);
   const [creditsLoading, setCreditsLoading] = useState(false);
@@ -379,19 +381,25 @@ export default function ImageGeneratorScreen() {
     setVideoDurationSeconds(selectedVideoModelOption.defaultDuration);
   }, [selectedVideoModelOption, videoDurationSeconds]);
 
-  const sectionCardClass =
-    "rounded-2xl border border-gray-700/80 bg-linear-to-br from-gray-900/80 via-slate-900/70 to-gray-950/70 p-4 sm:p-5";
-  const fieldLabelClass =
-    "block pb-2 text-xs font-semibold uppercase tracking-[0.12em] text-gray-300";
-  const textareaClass =
-    "w-full rounded-xl border border-gray-700/90 bg-gray-900/85 p-3 text-sm text-gray-100 placeholder-gray-500 transition focus:border-purple-400/60 focus:outline-none focus:ring-4 focus:ring-purple-500/15";
-  const selectClass =
-    "w-full appearance-none rounded-xl border border-gray-600/90 bg-linear-to-b from-gray-800/95 to-gray-900/95 px-3 py-2.5 pr-10 text-sm font-medium text-gray-100 [color-scheme:dark] transition focus:border-cyan-400/60 focus:outline-none focus:ring-4 focus:ring-cyan-500/15 disabled:cursor-not-allowed disabled:opacity-70 [&>option]:bg-gray-900 [&>option]:text-gray-100";
+  const sectionCardClass = isLightTheme
+    ? "rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5"
+    : "rounded-2xl border border-gray-700/80 bg-linear-to-br from-gray-900/80 via-slate-900/70 to-gray-950/70 p-4 sm:p-5";
+  const fieldLabelClass = isLightTheme
+    ? "block pb-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-700"
+    : "block pb-2 text-xs font-semibold uppercase tracking-[0.12em] text-gray-300";
+  const textareaClass = isLightTheme
+    ? "w-full rounded-xl border border-slate-300 bg-white p-3 text-sm text-slate-900 placeholder-slate-500 transition focus:border-sky-500 focus:outline-none focus:ring-4 focus:ring-sky-100"
+    : "w-full rounded-xl border border-gray-700/90 bg-gray-900/85 p-3 text-sm text-gray-100 placeholder-gray-500 transition focus:border-purple-400/60 focus:outline-none focus:ring-4 focus:ring-purple-500/15";
+  const selectClass = isLightTheme
+    ? "w-full appearance-none rounded-xl border border-slate-300 bg-white px-3 py-2.5 pr-10 text-sm font-medium text-slate-900 transition focus:border-sky-500 focus:outline-none focus:ring-4 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-70 [&>option]:bg-white [&>option]:text-slate-900"
+    : "w-full appearance-none rounded-xl border border-gray-600/90 bg-linear-to-b from-gray-800/95 to-gray-900/95 px-3 py-2.5 pr-10 text-sm font-medium text-gray-100 [color-scheme:dark] transition focus:border-cyan-400/60 focus:outline-none focus:ring-4 focus:ring-cyan-500/15 disabled:cursor-not-allowed disabled:opacity-70 [&>option]:bg-gray-900 [&>option]:text-gray-100";
   const selectWrapperClass = "relative";
-  const selectIconClass =
-    "pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400";
-  const mainDropzoneClass =
-    "relative flex w-full min-h-[224px] flex-1 items-center justify-center rounded-2xl border border-dashed border-purple-500/70 bg-linear-to-br from-gray-800/90 via-gray-800/85 to-slate-800/80 p-6 text-center transition hover:border-purple-400 hover:from-gray-700/90 hover:to-slate-700/80";
+  const selectIconClass = `pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs ${
+    isLightTheme ? "text-slate-500" : "text-gray-400"
+  }`;
+  const mainDropzoneClass = isLightTheme
+    ? "relative flex w-full min-h-[224px] flex-1 items-center justify-center rounded-2xl border border-dashed border-sky-300 bg-linear-to-br from-sky-50 via-white to-cyan-50 p-6 text-center transition hover:border-sky-400"
+    : "relative flex w-full min-h-[224px] flex-1 items-center justify-center rounded-2xl border border-dashed border-purple-500/70 bg-linear-to-br from-gray-800/90 via-gray-800/85 to-slate-800/80 p-6 text-center transition hover:border-purple-400 hover:from-gray-700/90 hover:to-slate-700/80";
 
   const bibliotecaImageCount = generatedImages.length;
   const bibliotecaVideoCount = generatedVideos.length;
@@ -477,6 +485,30 @@ export default function ImageGeneratorScreen() {
   useEffect(() => {
     const deviceId = getOrCreateChatDeviceId();
     setChatDeviceId(deviceId);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const savedTheme = window.localStorage.getItem(IMAGE_STUDIO_THEME_STORAGE_KEY);
+      if (savedTheme === "light") {
+        setIsLightTheme(true);
+      }
+    } catch {
+      // ignore storage issues
+    }
+  }, []);
+
+  const toggleTheme = useCallback(() => {
+    setIsLightTheme((current) => {
+      const next = !current;
+      try {
+        window.localStorage.setItem(IMAGE_STUDIO_THEME_STORAGE_KEY, next ? "light" : "dark");
+      } catch {
+        // ignore storage issues
+      }
+      return next;
+    });
   }, []);
 
   const loadCredits = async (deviceIdParam: string) => {
@@ -1204,18 +1236,25 @@ export default function ImageGeneratorScreen() {
       </div>
     );
 
-  const topMenuTriggerClass =
-    "inline-flex h-11 w-11 items-center justify-center rounded-full border border-gray-700/80 bg-gray-900/90 text-gray-100 shadow-lg shadow-black/25 transition hover:border-purple-400/50 hover:bg-gray-800";
+  const topMenuTriggerClass = isLightTheme
+    ? "inline-flex h-11 w-11 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 shadow-sm transition hover:border-sky-400 hover:bg-slate-50"
+    : "inline-flex h-11 w-11 items-center justify-center rounded-full border border-gray-700/80 bg-gray-900/90 text-gray-100 shadow-lg shadow-black/25 transition hover:border-purple-400/50 hover:bg-gray-800";
   const topMenuOverlayClass = "fixed inset-0 z-80 bg-black/45 backdrop-blur-[1px]";
-  const topMenuDrawerClass =
-    "fixed top-0 right-0 z-90 flex h-screen w-[min(92vw,360px)] flex-col border-l border-gray-700 bg-gray-900/98 text-gray-100 shadow-2xl";
-  const topMenuCloseButtonClass =
-    "inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-700 bg-gray-800 text-gray-200 transition hover:bg-gray-700";
-  const topMenuModeButtonClass =
-    "group flex w-full items-center gap-3 rounded-xl border border-gray-700 bg-gray-800/80 px-3 py-3 text-left transition hover:border-purple-400/45 hover:bg-gray-800";
-  const topMenuModeButtonActiveClass = "border-purple-400/60 bg-purple-500/15";
-  const topMenuActionButtonClass =
-    "inline-flex w-full items-center gap-2 rounded-xl border border-gray-700 bg-gray-800/80 px-3 py-2.5 text-sm font-medium text-gray-100 transition hover:border-purple-400/45 hover:bg-gray-800";
+  const topMenuDrawerClass = isLightTheme
+    ? "fixed top-0 right-0 z-90 flex h-screen w-[min(92vw,360px)] flex-col border-l border-slate-200 bg-white text-slate-900 shadow-2xl"
+    : "fixed top-0 right-0 z-90 flex h-screen w-[min(92vw,360px)] flex-col border-l border-gray-700 bg-gray-900/98 text-gray-100 shadow-2xl";
+  const topMenuCloseButtonClass = isLightTheme
+    ? "inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-700 transition hover:bg-slate-100"
+    : "inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-700 bg-gray-800 text-gray-200 transition hover:bg-gray-700";
+  const topMenuModeButtonClass = isLightTheme
+    ? "group flex w-full items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-3 text-left transition hover:border-sky-400 hover:bg-sky-50"
+    : "group flex w-full items-center gap-3 rounded-xl border border-gray-700 bg-gray-800/80 px-3 py-3 text-left transition hover:border-purple-400/45 hover:bg-gray-800";
+  const topMenuModeButtonActiveClass = isLightTheme
+    ? "border-sky-400 bg-sky-50"
+    : "border-purple-400/60 bg-purple-500/15";
+  const topMenuActionButtonClass = isLightTheme
+    ? "inline-flex w-full items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-900 transition hover:border-sky-400 hover:bg-sky-50"
+    : "inline-flex w-full items-center gap-2 rounded-xl border border-gray-700 bg-gray-800/80 px-3 py-2.5 text-sm font-medium text-gray-100 transition hover:border-purple-400/45 hover:bg-gray-800";
 
   const topActionMenu = (
     <>
@@ -1242,8 +1281,8 @@ export default function ImageGeneratorScreen() {
           />
 
           <aside className={topMenuDrawerClass} role="dialog" aria-modal="true" aria-label="Menu GPT">
-            <div className="flex items-center justify-between border-b border-gray-700 px-4 py-4">
-              <p className="text-sm font-semibold text-gray-100">Acesso rapido</p>
+            <div className={`flex items-center justify-between border-b px-4 py-4 ${isLightTheme ? "border-slate-200" : "border-gray-700"}`}>
+              <p className={`text-sm font-semibold ${isLightTheme ? "text-slate-900" : "text-gray-100"}`}>Acesso rapido</p>
               <button
                 type="button"
                 onClick={() => setIsTopMenuOpen(false)}
@@ -1260,12 +1299,18 @@ export default function ImageGeneratorScreen() {
                 onClick={() => setIsTopMenuOpen(false)}
                 className={topMenuModeButtonClass}
               >
-                <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-gray-700 bg-gray-800 text-purple-200">
+                <span
+                  className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
+                    isLightTheme
+                      ? "border border-slate-300 bg-slate-100 text-sky-700"
+                      : "border border-gray-700 bg-gray-800 text-purple-200"
+                  }`}
+                >
                   <SiOpenai className="h-5 w-5" />
                 </span>
                 <span className="min-w-0">
-                  <span className="block text-sm font-semibold text-gray-100">ChatGPT</span>
-                  <span className="block truncate text-[11px] text-gray-400">Modelo: gpt-5.2</span>
+                  <span className={`block text-sm font-semibold ${isLightTheme ? "text-slate-900" : "text-gray-100"}`}>ChatGPT</span>
+                  <span className={`block truncate text-[11px] ${isLightTheme ? "text-slate-500" : "text-gray-400"}`}>Modelo: gpt-5.2</span>
                 </span>
               </Link>
 
@@ -1278,12 +1323,16 @@ export default function ImageGeneratorScreen() {
                   <MdImage className="h-5 w-5" />
                 </span>
                 <span className="min-w-0">
-                  <span className="block text-sm font-semibold text-gray-100">Image Designer Pro</span>
-                  <span className="block truncate text-[11px] text-gray-400">
+                  <span className={`block text-sm font-semibold ${isLightTheme ? "text-slate-900" : "text-gray-100"}`}>Image Designer Pro</span>
+                  <span className={`block truncate text-[11px] ${isLightTheme ? "text-slate-500" : "text-gray-400"}`}>
                     Modelo: {selectedImageModelLabel}
                   </span>
                 </span>
               </Link>
+
+              <button type="button" onClick={toggleTheme} className={topMenuActionButtonClass}>
+                {isLightTheme ? "Tema escuro" : "Tema claro"}
+              </button>
 
               <Link
                 href="/chatgpt"
@@ -1301,40 +1350,62 @@ export default function ImageGeneratorScreen() {
   );
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white [&_button:enabled]:cursor-pointer [&_a]:cursor-pointer">
+    <div
+      className={`min-h-screen [&_button:enabled]:cursor-pointer [&_a]:cursor-pointer ${
+        isLightTheme
+          ? "bg-linear-to-br from-slate-100 via-violet-50 to-fuchsia-50 text-slate-900"
+          : "bg-gray-900 text-white"
+      }`}
+    >
       {topActionMenu}
       <main className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
         {toastState ? (
           <div
             className={`fixed top-4 right-4 z-70 rounded-lg border px-4 py-2 text-sm font-medium shadow-xl ${
               toastState.type === "success"
-                ? "border-emerald-400/50 bg-emerald-900/90 text-emerald-100"
-                : "border-red-400/50 bg-red-900/90 text-red-100"
+                ? isLightTheme
+                  ? "border-emerald-300 bg-emerald-50 text-emerald-900"
+                  : "border-emerald-400/50 bg-emerald-900/90 text-emerald-100"
+                : isLightTheme
+                  ? "border-red-300 bg-red-50 text-red-900"
+                  : "border-red-400/50 bg-red-900/90 text-red-100"
             }`}
           >
             {toastState.message}
           </div>
         ) : null}
 
-        <header className="relative mb-6 overflow-hidden rounded-3xl border border-cyan-500/20 bg-linear-to-br from-gray-900 via-slate-900 to-gray-900 p-6 sm:p-8">
-          <div className="absolute -top-16 -right-10 h-44 w-44 rounded-full bg-cyan-500/20 blur-3xl" />
-          <div className="absolute -bottom-20 left-1/3 h-56 w-56 rounded-full bg-blue-500/10 blur-3xl" />
+        <header className={`relative mb-6 overflow-hidden rounded-3xl p-6 sm:p-8 ${
+          isLightTheme
+            ? "border border-slate-200 bg-linear-to-br from-white via-sky-50 to-cyan-50"
+            : "border border-cyan-500/20 bg-linear-to-br from-gray-900 via-slate-900 to-gray-900"
+        }`}>
+          <div className={`absolute -top-16 -right-10 h-44 w-44 rounded-full blur-3xl ${isLightTheme ? "bg-sky-300/30" : "bg-cyan-500/20"}`} />
+          <div className={`absolute -bottom-20 left-1/3 h-56 w-56 rounded-full blur-3xl ${isLightTheme ? "bg-cyan-200/40" : "bg-blue-500/10"}`} />
 
           <div className="flex items-center justify-between gap-3">
-            <p className="inline-flex items-center gap-2 rounded-full border border-cyan-400/30 bg-cyan-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-cyan-300">
+            <p className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${
+              isLightTheme
+                ? "border border-sky-300 bg-sky-100 text-sky-800"
+                : "border border-cyan-400/30 bg-cyan-500/10 text-cyan-300"
+            }`}>
               <MdRocketLaunch className="h-4 w-4" />
               Image Creator
             </p>
-            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-amber-300/55 bg-amber-400/20 px-3 py-1 text-xs font-semibold text-amber-100 sm:text-sm">
-              <FaCoins className="text-amber-300" />
+            <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold sm:text-sm ${
+              isLightTheme
+                ? "border border-amber-300 bg-amber-100 text-amber-900"
+                : "border border-amber-300/55 bg-amber-400/20 text-amber-100"
+            }`}>
+              <FaCoins className={isLightTheme ? "text-amber-600" : "text-amber-300"} />
               Créditos: {creditsLoading && creditsBalance === null ? "..." : creditsBalance ?? "--"}
             </span>
           </div>
 
           <div className="mt-5 flex items-start gap-3">
             <div className="flex items-center gap-3">
-              <SiOpenai className="h-9 w-9 text-purple-300" />
-              <h1 className="text-2xl font-bold leading-tight sm:text-4xl">
+              <SiOpenai className={`h-9 w-9 ${isLightTheme ? "text-sky-700" : "text-purple-300"}`} />
+              <h1 className={`text-2xl font-bold leading-tight sm:text-4xl ${isLightTheme ? "text-slate-900" : "text-white"}`}>
                 IA Studio PRO
               </h1>
             </div>
@@ -1352,7 +1423,9 @@ export default function ImageGeneratorScreen() {
               <div
                 className={`${mainDropzoneClass} ${
                   isMainDropzoneActive
-                    ? "border-purple-300 bg-linear-to-br from-gray-700/95 via-gray-700/90 to-slate-700/85"
+                    ? isLightTheme
+                      ? "border-sky-400 bg-linear-to-br from-sky-100 via-white to-cyan-100"
+                      : "border-purple-300 bg-linear-to-br from-gray-700/95 via-gray-700/90 to-slate-700/85"
                     : ""
                 }`}
                 onDragEnter={(event) => {
@@ -1433,11 +1506,17 @@ export default function ImageGeneratorScreen() {
                         </div>
                       ) : (
                         <>
-                          <span className="inline-flex h-14 w-14 items-center justify-center rounded-2xl border border-purple-300/35 bg-purple-500/15">
-                            <FiUploadCloud className="text-3xl text-purple-200" />
+                          <span
+                            className={`inline-flex h-14 w-14 items-center justify-center rounded-2xl ${
+                              isLightTheme
+                                ? "border border-slate-400 bg-slate-200"
+                                : "border border-purple-300/35 bg-purple-500/15"
+                            }`}
+                          >
+                            <FiUploadCloud className={`text-3xl ${isLightTheme ? "text-slate-700" : "text-purple-200"}`} />
                           </span>
-                          <span className="font-medium text-white">Clique ou arraste a imagem aqui</span>
-                          <span className="text-xs text-gray-300">JPG, PNG, WEBP (opcional)</span>
+                          <span className={`font-medium ${isLightTheme ? "text-slate-900" : "text-white"}`}>Clique ou arraste a imagem aqui</span>
+                          <span className={`text-xs ${isLightTheme ? "text-slate-600" : "text-gray-300"}`}>JPG, PNG, WEBP (opcional)</span>
                         </>
                       )}
                     </>
@@ -1446,11 +1525,11 @@ export default function ImageGeneratorScreen() {
               </div>
 
               {produtoPrincipal.file ? (
-                <p className="mt-3 text-center text-xs text-gray-400">
+                <p className={`mt-3 text-center text-xs ${isLightTheme ? "text-slate-600" : "text-gray-400"}`}>
                   Imagem selecionada: <strong>{produtoPrincipal.file.name}</strong>
                 </p>
               ) : (
-                <p className="mt-3 text-center text-xs text-gray-400">
+                <p className={`mt-3 text-center text-xs ${isLightTheme ? "text-slate-600" : "text-gray-400"}`}>
                   Nenhuma imagem selecionada (a IA criará do zero).
                 </p>
               )}
@@ -1523,7 +1602,11 @@ export default function ImageGeneratorScreen() {
                 <button
                   onClick={handleGenerate}
                   disabled={loading || !canGenerateImageByCredits}
-                  className="inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-purple-400/45 bg-purple-500/25 px-4 py-3 text-sm font-semibold text-purple-100 transition hover:bg-purple-500/35 disabled:cursor-not-allowed disabled:opacity-50"
+                  className={`inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                    isLightTheme
+                      ? "border border-purple-800 bg-purple-800 text-white hover:bg-purple-700"
+                      : "border border-purple-400/45 bg-purple-500/25 text-purple-100 hover:bg-purple-500/35"
+                  }`}
                 >
                   <FaRobot />
                   {loading ? "Aguarde, criando imagem..." : "Criar imagem com IA"}
@@ -1538,7 +1621,11 @@ export default function ImageGeneratorScreen() {
                     openVideoModal(directSource, preferredAspectRatio);
                   }}
                   disabled={loading || !canGenerateVideoByCredits}
-                  className="inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-cyan-400/45 bg-cyan-500/20 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/30 disabled:cursor-not-allowed disabled:opacity-50"
+                  className={`inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                    isLightTheme
+                      ? "border border-cyan-800 bg-cyan-800 text-white hover:bg-cyan-700"
+                      : "border border-cyan-400/45 bg-cyan-500/20 text-cyan-100 hover:bg-cyan-500/30"
+                  }`}
                 >
                   <FaVideo />
                   Gerar vídeo (-2)
@@ -1613,7 +1700,11 @@ export default function ImageGeneratorScreen() {
                   feedItem.type === "image" ? (
                     <article
                       key={`image-${feedItem.item.id}`}
-                      className="mb-4 break-inside-avoid rounded-xl border border-gray-700 bg-gray-900/70 p-3"
+                      className={`mb-4 break-inside-avoid rounded-xl p-3 ${
+                        isLightTheme
+                          ? "border border-slate-200 bg-white text-slate-900 shadow-sm"
+                          : "border border-gray-700 bg-gray-900/70"
+                      }`}
                     >
                       <button
                         type="button"
@@ -1636,12 +1727,20 @@ export default function ImageGeneratorScreen() {
                         />
                       </button>
 
-                      <p className="mt-2 line-clamp-2 text-[11px] text-gray-300">{feedItem.caption}</p>
+                      <p className={`mt-2 line-clamp-2 text-[11px] ${isLightTheme ? "text-slate-800" : "text-gray-300"}`}>{feedItem.caption}</p>
                       <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
-                        <span className="inline-flex items-center rounded-full border border-cyan-400/35 bg-cyan-500/10 px-2 py-0.5 font-medium text-cyan-200">
+                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${
+                          isLightTheme
+                            ? "border border-slate-300 bg-slate-100 text-slate-800"
+                            : "border border-cyan-400/35 bg-cyan-500/10 text-cyan-200"
+                        }`}>
                           {feedItem.item.model}
                         </span>
-                        <span className="inline-flex items-center rounded-full border border-gray-600 bg-gray-800/70 px-2 py-0.5 font-medium text-gray-300">
+                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${
+                          isLightTheme
+                            ? "border border-slate-300 bg-slate-100 text-slate-700"
+                            : "border border-gray-600 bg-gray-800/70 text-gray-300"
+                        }`}>
                           {formatDatePtBr(feedItem.item.createdAt)}
                         </span>
                       </div>
@@ -1654,13 +1753,23 @@ export default function ImageGeneratorScreen() {
                               current === `image:${feedItem.item.id}` ? null : `image:${feedItem.item.id}`,
                             )
                           }
-                          className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-gray-600 bg-gray-800 text-gray-200 transition hover:bg-gray-700"
+                          className={`inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md transition ${
+                            isLightTheme
+                              ? "border border-slate-300 bg-slate-100 text-slate-800 hover:bg-slate-200"
+                              : "border border-gray-600 bg-gray-800 text-gray-200 hover:bg-gray-700"
+                          }`}
                           aria-label="Abrir ações da imagem"
                         >
                           <MdMoreVert />
                         </button>
                         {feedActionMenuId === `image:${feedItem.item.id}` ? (
-                          <div className="absolute top-9 right-0 z-20 w-44 rounded-md border border-gray-600 bg-gray-900/98 p-1.5 shadow-xl">
+                          <div
+                            className={`absolute top-9 right-0 z-20 w-44 rounded-md p-1.5 shadow-xl ${
+                              isLightTheme
+                                ? "border border-slate-300 bg-white"
+                                : "border border-gray-600 bg-gray-900/98"
+                            }`}
+                          >
                             <button
                               type="button"
                               onClick={() => {
@@ -1668,7 +1777,11 @@ export default function ImageGeneratorScreen() {
                                 downloadBibliotecaImage(feedItem.item);
                               }}
                               disabled={deletingMediaIds.includes(`image:${feedItem.item.id}`)}
-                              className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-xs text-gray-200 transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
+                              className={`flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-xs transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                                isLightTheme
+                                  ? "text-slate-800 hover:bg-slate-100"
+                                  : "text-gray-200 hover:bg-gray-800"
+                              }`}
                             >
                               <FaDownload className="text-[11px]" />
                               Baixar
@@ -1683,7 +1796,11 @@ export default function ImageGeneratorScreen() {
                                 );
                               }}
                               disabled={deletingMediaIds.includes(`image:${feedItem.item.id}`)}
-                              className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-xs text-cyan-100 transition hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                              className={`flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-xs transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                                isLightTheme
+                                  ? "text-slate-800 hover:bg-slate-100"
+                                  : "text-cyan-100 hover:bg-cyan-500/20"
+                              }`}
                             >
                               <FaVideo className="text-[11px]" />
                               Gerar vídeo
@@ -1695,7 +1812,11 @@ export default function ImageGeneratorScreen() {
                                 openDeleteModalForImage(feedItem.item);
                               }}
                               disabled={deletingMediaIds.includes(`image:${feedItem.item.id}`)}
-                              className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-xs text-red-100 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                              className={`flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-xs transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                                isLightTheme
+                                  ? "text-red-700 hover:bg-red-50"
+                                  : "text-red-100 hover:bg-red-500/20"
+                              }`}
                             >
                               <FaTimes className="text-[11px]" />
                               {deletingMediaIds.includes(`image:${feedItem.item.id}`) ? "Excluindo..." : "Excluir"}
@@ -1707,10 +1828,18 @@ export default function ImageGeneratorScreen() {
                   ) : (
                     <article
                       key={`video-${feedItem.item.id}`}
-                      className="mb-4 break-inside-avoid rounded-xl border border-gray-700 bg-gray-900/70 p-3"
+                      className={`mb-4 break-inside-avoid rounded-xl p-3 ${
+                        isLightTheme
+                          ? "border border-slate-200 bg-white text-slate-900 shadow-sm"
+                          : "border border-gray-700 bg-gray-900/70"
+                      }`}
                     >
                       <div className="mb-2 flex items-center justify-between gap-2">
-                        <label className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-black/35 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-100">
+                        <label className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${
+                          isLightTheme
+                            ? "border border-slate-300 bg-slate-100 text-slate-800"
+                            : "border border-white/20 bg-black/35 text-gray-100"
+                        }`}>
                           <input
                             type="checkbox"
                             checked={selectedVideoIdsForMerge.includes(feedItem.item.id)}
@@ -1728,13 +1857,23 @@ export default function ImageGeneratorScreen() {
                                 current === `video:${feedItem.item.id}` ? null : `video:${feedItem.item.id}`,
                               )
                             }
-                            className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-gray-600 bg-gray-800 text-gray-200 transition hover:bg-gray-700"
+                            className={`inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md transition ${
+                              isLightTheme
+                                ? "border border-slate-300 bg-slate-100 text-slate-800 hover:bg-slate-200"
+                                : "border border-gray-600 bg-gray-800 text-gray-200 hover:bg-gray-700"
+                            }`}
                             aria-label="Abrir ações do vídeo"
                           >
                             <MdMoreVert />
                           </button>
                           {feedActionMenuId === `video:${feedItem.item.id}` ? (
-                            <div className="absolute top-9 right-0 z-20 w-40 rounded-md border border-gray-600 bg-gray-900/98 p-1.5 shadow-xl">
+                            <div
+                              className={`absolute top-9 right-0 z-20 w-40 rounded-md p-1.5 shadow-xl ${
+                                isLightTheme
+                                  ? "border border-slate-300 bg-white"
+                                  : "border border-gray-600 bg-gray-900/98"
+                              }`}
+                            >
                               <button
                                 type="button"
                                 onClick={() => {
@@ -1742,7 +1881,11 @@ export default function ImageGeneratorScreen() {
                                   downloadBibliotecaVideo(feedItem.item);
                                 }}
                                 disabled={deletingMediaIds.includes(`video:${feedItem.item.id}`)}
-                                className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-xs text-gray-200 transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
+                                className={`flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-xs transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                                  isLightTheme
+                                    ? "text-slate-800 hover:bg-slate-100"
+                                    : "text-gray-200 hover:bg-gray-800"
+                                }`}
                               >
                                 <FaDownload className="text-[11px]" />
                                 Baixar vídeo
@@ -1754,7 +1897,11 @@ export default function ImageGeneratorScreen() {
                                   openDeleteModalForVideo(feedItem.item);
                                 }}
                                 disabled={deletingMediaIds.includes(`video:${feedItem.item.id}`)}
-                                className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-xs text-red-100 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                                className={`flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-xs transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                                  isLightTheme
+                                    ? "text-red-700 hover:bg-red-50"
+                                    : "text-red-100 hover:bg-red-500/20"
+                                }`}
                               >
                                 <FaTimes className="text-[11px]" />
                                 {deletingMediaIds.includes(`video:${feedItem.item.id}`) ? "Excluindo..." : "Excluir"}
@@ -1787,16 +1934,28 @@ export default function ImageGeneratorScreen() {
                         />
                       </button>
 
-                      <p className="mt-2 line-clamp-2 text-[11px] text-gray-300">{feedItem.caption}</p>
+                      <p className={`mt-2 line-clamp-2 text-[11px] ${isLightTheme ? "text-slate-800" : "text-gray-300"}`}>{feedItem.caption}</p>
                       <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
-                        <span className="inline-flex items-center rounded-full border border-cyan-400/35 bg-cyan-500/10 px-2 py-0.5 font-medium text-cyan-200">
+                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${
+                          isLightTheme
+                            ? "border border-slate-300 bg-slate-100 text-slate-800"
+                            : "border border-cyan-400/35 bg-cyan-500/10 text-cyan-200"
+                        }`}>
                           {feedItem.item.model}
                         </span>
-                        <span className="inline-flex items-center rounded-full border border-gray-600 bg-gray-800/70 px-2 py-0.5 font-medium text-gray-300">
+                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${
+                          isLightTheme
+                            ? "border border-slate-300 bg-slate-100 text-slate-700"
+                            : "border border-gray-600 bg-gray-800/70 text-gray-300"
+                        }`}>
                           {feedItem.item.resolution} • {feedItem.item.aspectRatio} •{" "}
                           {feedItem.item.durationSeconds}s
                         </span>
-                        <span className="inline-flex items-center rounded-full border border-gray-600 bg-gray-800/70 px-2 py-0.5 font-medium text-gray-300">
+                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${
+                          isLightTheme
+                            ? "border border-slate-300 bg-slate-100 text-slate-700"
+                            : "border border-gray-600 bg-gray-800/70 text-gray-300"
+                        }`}>
                           {formatDatePtBr(feedItem.item.createdAt)}
                         </span>
                       </div>
