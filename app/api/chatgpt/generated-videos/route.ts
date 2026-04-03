@@ -11,12 +11,10 @@ export async function GET(request: NextRequest) {
     }
 
     const videos = await prisma.generatedVideo.findMany({
-      where: {
-        OR: [{ deviceId }, { deviceId: null }],
-      },
       orderBy: { createdAt: "desc" },
       select: {
         id: true,
+        deviceId: true,
         sourceImageId: true,
         model: true,
         aspectRatio: true,
@@ -32,7 +30,7 @@ export async function GET(request: NextRequest) {
         sourceImageId: video.sourceImageId,
         sourceImageThumbnailUrl: video.sourceImageId
           ? `/api/chatgpt/generated-image/${video.sourceImageId}?deviceId=${encodeURIComponent(
-              deviceId,
+              video.deviceId || deviceId,
             )}&thumb=1&w=480&q=55`
           : null,
         model: video.model,
@@ -40,7 +38,9 @@ export async function GET(request: NextRequest) {
         durationSeconds: video.durationSeconds,
         resolution: video.resolution,
         createdAt: video.createdAt.toISOString(),
-        videoUrl: `/api/chatgpt/generated-video/${video.id}?deviceId=${encodeURIComponent(deviceId)}`,
+        videoUrl: `/api/chatgpt/generated-video/${video.id}?deviceId=${encodeURIComponent(
+          video.deviceId || deviceId,
+        )}`,
       })),
     });
   } catch {
