@@ -35,6 +35,9 @@ export async function GET(request: NextRequest) {
         action: image.action,
         createdAt: image.createdAt.toISOString(),
         imageUrl: `/api/chatgpt/generated-image/${image.id}?deviceId=${encodeURIComponent(deviceId)}`,
+        thumbnailUrl: `/api/chatgpt/generated-image/${image.id}?deviceId=${encodeURIComponent(
+          deviceId,
+        )}&thumb=1&w=480&q=60`,
       })),
     });
   } catch {

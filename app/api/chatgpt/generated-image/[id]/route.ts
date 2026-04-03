@@ -1,8 +1,11 @@
 import { del, get } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
+import sharp from "sharp";
 
 import { normalizeDeviceId } from "@/lib/chatgpt-credits";
 import { prisma } from "@/lib/prisma";
+
+export const runtime = "nodejs";
 
 function extensionFromContentType(contentType: string): string {
   const normalized = contentType.toLowerCase();
@@ -146,8 +149,43 @@ export async function GET(
     }
 
     const download = request.nextUrl.searchParams.get("download") === "1";
+    const wantsThumbnail = request.nextUrl.searchParams.get("thumb") === "1";
+    const thumbWidthRaw = Number.parseInt(request.nextUrl.searchParams.get("w") || "", 10);
+    const thumbQualityRaw = Number.parseInt(request.nextUrl.searchParams.get("q") || "", 10);
+    const thumbWidth = Number.isFinite(thumbWidthRaw)
+      ? Math.min(Math.max(thumbWidthRaw, 120), 1024)
+      : 480;
+    const thumbQuality = Number.isFinite(thumbQualityRaw)
+      ? Math.min(Math.max(thumbQualityRaw, 35), 90)
+      : 60;
     const extension = extensionFromContentType(contentType);
     const filename = `imagem-${imageRecord.id}.${extension}`;
+
+    if (wantsThumbnail) {
+      try {
+        const sourceBuffer = Buffer.from(await new Response(stream).arrayBuffer());
+        const thumbnailBuffer = await sharp(sourceBuffer)
+          .rotate()
+          .resize({
+            width: thumbWidth,
+            fit: "inside",
+            withoutEnlargement: true,
+          })
+          .webp({ quality: thumbQuality })
+          .toBuffer();
+
+        return new NextResponse(thumbnailBuffer, {
+          status: 200,
+          headers: {
+            "Content-Type": "image/webp",
+            "Content-Disposition": `inline; filename="imagem-${imageRecord.id}-thumb.webp"`,
+            "Cache-Control": "private, max-age=86400",
+          },
+        });
+      } catch {
+        // se falhar a miniatura, retorna imagem original em seguida
+      }
+    }
 
     return new NextResponse(stream, {
       status: 200,

@@ -30,6 +30,11 @@ export async function GET(request: NextRequest) {
       videos: videos.map((video) => ({
         id: video.id,
         sourceImageId: video.sourceImageId,
+        sourceImageThumbnailUrl: video.sourceImageId
+          ? `/api/chatgpt/generated-image/${video.sourceImageId}?deviceId=${encodeURIComponent(
+              deviceId,
+            )}&thumb=1&w=480&q=55`
+          : null,
         model: video.model,
         aspectRatio: video.aspectRatio,
         durationSeconds: video.durationSeconds,

@@ -54,11 +54,13 @@ type GeneratedImageItem = {
   action: "generate" | "edit";
   createdAt: string;
   imageUrl: string;
+  thumbnailUrl?: string;
 };
 
 type GeneratedVideoItem = {
   id: string;
   sourceImageId: string | null;
+  sourceImageThumbnailUrl?: string | null;
   model: string;
   aspectRatio: string;
   durationSeconds: number;
@@ -71,6 +73,7 @@ type BibliotecaLightboxItem = {
   type: "image" | "video";
   url: string;
   title: string;
+  previewUrl?: string;
 } | null;
 
 type DeleteModalState =
@@ -327,7 +330,7 @@ export default function ImageGeneratorScreen() {
   const [deleteModalState, setDeleteModalState] = useState<DeleteModalState>(null);
   const [bibliotecaLightboxItem, setBibliotecaLightboxItem] =
     useState<BibliotecaLightboxItem>(null);
-  const [bibliotecaImageLightboxLoading, setBibliotecaImageLightboxLoading] = useState(false);
+  const [bibliotecaLightboxImageLoaded, setBibliotecaLightboxImageLoaded] = useState(false);
   const [mergeModalOpen, setMergeModalOpen] = useState(false);
   const [selectedVideoIdsForMerge, setSelectedVideoIdsForMerge] = useState<string[]>([]);
   const [mergePreserveAudio, setMergePreserveAudio] = useState(true);
@@ -486,24 +489,56 @@ export default function ImageGeneratorScreen() {
   }, [chatDeviceId]);
 
   useEffect(() => {
-    if (!bibliotecaLightboxItem || bibliotecaLightboxItem.type !== "image") {
-      setBibliotecaImageLightboxLoading(false);
-      return;
-    }
-
-    setBibliotecaImageLightboxLoading(true);
-    const timer = window.setTimeout(() => {
-      setBibliotecaImageLightboxLoading(false);
-    }, 2000);
-
-    return () => window.clearTimeout(timer);
-  }, [bibliotecaLightboxItem]);
-
-  useEffect(() => {
     setSelectedVideoIdsForMerge((current) =>
       current.filter((id) => generatedVideos.some((video) => video.id === id)),
     );
   }, [generatedVideos]);
+
+  useEffect(() => {
+    if (bibliotecaLightboxItem?.type !== "image") {
+      setBibliotecaLightboxImageLoaded(false);
+      return;
+    }
+    setBibliotecaLightboxImageLoaded(false);
+  }, [bibliotecaLightboxItem]);
+
+  const saveReferenceImageToLibrary = useCallback(
+    async (file: File) => {
+      const deviceIdForUpload = chatDeviceId || getOrCreateChatDeviceId();
+      if (!chatDeviceId) {
+        setChatDeviceId(deviceIdForUpload);
+      }
+
+      const formData = new FormData();
+      formData.append("sourceImage", file);
+      formData.append("deviceId", deviceIdForUpload);
+
+      try {
+        const response = await fetch("/api/chatgpt/reference-image", {
+          method: "POST",
+          body: formData,
+        });
+        const payload = (await response.json().catch(() => null)) as
+          | {
+              ok?: boolean;
+              error?: string;
+            }
+          | null;
+
+        if (!response.ok || payload?.error) {
+          throw new Error(payload?.error || "Falha ao salvar imagem na biblioteca.");
+        }
+
+        notify("success", "Imagem de referência adicionada à biblioteca.");
+        void loadBiblioteca(deviceIdForUpload);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Falha ao salvar imagem na biblioteca.";
+        notify("error", message);
+      }
+    },
+    [chatDeviceId],
+  );
 
   const handleProdutoPrincipalFile = useCallback((
     file: File,
@@ -528,7 +563,8 @@ export default function ImageGeneratorScreen() {
     const actionLabel =
       source === "paste" ? "colada" : source === "drop" ? "arrastada" : "carregada";
     notify("success", `Imagem do produto principal ${actionLabel} com sucesso!`);
-  }, []);
+    void saveReferenceImageToLibrary(file);
+  }, [saveReferenceImageToLibrary]);
 
   useEffect(() => {
     const handlePaste = (event: ClipboardEvent) => {
@@ -1499,14 +1535,17 @@ export default function ImageGeneratorScreen() {
                           type: "image",
                           url: item.imageUrl,
                           title: item.prompt || "Imagem gerada",
+                          previewUrl: item.thumbnailUrl || item.imageUrl,
                         })
                       }
                       className="relative w-full cursor-pointer overflow-hidden rounded-md bg-black"
                     >
                       <img
-                        src={item.imageUrl}
+                        src={item.thumbnailUrl || item.imageUrl}
                         alt={item.prompt || "Imagem gerada"}
                         className="h-auto w-full object-cover"
+                        loading="lazy"
+                        decoding="async"
                       />
                     </button>
 
@@ -1596,6 +1635,7 @@ export default function ImageGeneratorScreen() {
                     <video
                       src={item.videoUrl}
                       preload="metadata"
+                      poster={item.sourceImageThumbnailUrl || undefined}
                       muted
                       className="h-auto w-full object-cover"
                     />
@@ -1847,7 +1887,7 @@ export default function ImageGeneratorScreen() {
 
       {bibliotecaLightboxItem && (
         <div
-          className="fixed inset-0 z-60 flex items-center justify-center bg-black/85 px-4 py-6 backdrop-blur-sm"
+          className="fixed inset-0 z-[120] flex items-center justify-center bg-black/85 px-4 py-6 backdrop-blur-sm"
           onClick={() => setBibliotecaLightboxItem(null)}
         >
           <div
@@ -1876,19 +1916,30 @@ export default function ImageGeneratorScreen() {
                   src={bibliotecaLightboxItem.url}
                   controls
                   autoPlay
-                  className="mx-auto max-h-[75vh] w-full object-contain"
+                  className="mx-auto h-[75vh] w-full object-contain"
                 />
-              ) : bibliotecaImageLightboxLoading ? (
-                <div className="flex min-h-80 w-full flex-col items-center justify-center gap-3 px-4 py-10 text-center text-gray-200">
-                  <div className="h-10 w-10 animate-spin rounded-full border-4 border-cyan-400 border-t-transparent" />
-                  <p className="text-sm">Carregando imagem...</p>
-                </div>
               ) : (
-                <img
-                  src={bibliotecaLightboxItem.url}
-                  alt={bibliotecaLightboxItem.title}
-                  className="mx-auto max-h-[75vh] w-full object-contain"
-                />
+                <div className="relative mx-auto h-[75vh] w-full overflow-hidden">
+                  {bibliotecaLightboxItem.previewUrl ? (
+                    <img
+                      src={bibliotecaLightboxItem.previewUrl}
+                      alt=""
+                      aria-hidden="true"
+                      className={`absolute inset-0 h-full w-full scale-105 object-contain blur-xl transition-opacity duration-200 ${
+                        bibliotecaLightboxImageLoaded ? "opacity-0" : "opacity-100"
+                      }`}
+                    />
+                  ) : null}
+                  <img
+                    src={bibliotecaLightboxItem.url}
+                    alt={bibliotecaLightboxItem.title}
+                    onLoad={() => setBibliotecaLightboxImageLoaded(true)}
+                    onError={() => setBibliotecaLightboxImageLoaded(true)}
+                    className={`relative mx-auto h-full w-full object-contain transition-opacity duration-200 ${
+                      bibliotecaLightboxImageLoaded ? "opacity-100" : "opacity-0"
+                    }`}
+                  />
+                </div>
               )}
             </div>
           </div>
@@ -1927,11 +1978,11 @@ export default function ImageGeneratorScreen() {
                       className="relative flex w-full items-center justify-center overflow-hidden rounded-xl border border-gray-700 bg-black/80"
                       style={{ aspectRatio: selectedVideoFormat.previewAspectRatio }}
                     >
-                      {videoResult ? (
-                        <video controls src={videoResult} className="h-full w-full object-cover" />
-                      ) : videoSourceUrl ? (
-                        <img
-                          src={videoSourceUrl}
+                    {videoResult ? (
+                      <video controls src={videoResult} className="h-full w-full object-cover" />
+                    ) : videoSourceUrl ? (
+                      <img
+                        src={videoSourceUrl}
                           alt="Preview da imagem para geração de vídeo"
                           className="h-full w-full object-cover"
                         />
@@ -1940,6 +1991,9 @@ export default function ImageGeneratorScreen() {
                           A prévia será exibida quando a geração iniciar.
                         </p>
                       )}
+                      {!videoResult ? (
+                        <div className="pointer-events-none absolute inset-0 bg-black/80" />
+                      ) : null}
                       {videoLoading ? (
                         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/35 px-4 text-center text-gray-100 backdrop-blur-[1px]">
                           <div className="h-10 w-10 animate-spin rounded-full border-4 border-cyan-400 border-t-transparent" />
