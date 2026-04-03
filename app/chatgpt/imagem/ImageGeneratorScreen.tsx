@@ -341,6 +341,9 @@ export default function ImageGeneratorScreen() {
   const [creditsLoading, setCreditsLoading] = useState(false);
   const toastTimerRef = useRef<number | null>(null);
   const videoPreviewAnchorRef = useRef<HTMLDivElement | null>(null);
+  const feedVideoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
+  const feedVideoVisibilityRef = useRef<Map<string, number>>(new Map());
+  const feedVideoObserverRef = useRef<IntersectionObserver | null>(null);
 
   const selectedVideoModelOption = useMemo(
     () => VIDEO_MODEL_OPTIONS.find((option) => option.value === videoModel) || VIDEO_MODEL_OPTIONS[0],
@@ -521,6 +524,85 @@ export default function ImageGeneratorScreen() {
   useEffect(() => {
     setFeedActionMenuId(null);
   }, [generatedImages, generatedVideos]);
+
+  const syncFeedVideoPlayback = useCallback(() => {
+    let bestVisibleId: string | null = null;
+    let bestRatio = 0;
+
+    feedVideoVisibilityRef.current.forEach((ratio, id) => {
+      if (ratio > bestRatio) {
+        bestRatio = ratio;
+        bestVisibleId = id;
+      }
+    });
+
+    feedVideoRefs.current.forEach((video, id) => {
+      const shouldPlay = bestVisibleId === id && bestRatio >= 0.6;
+      if (shouldPlay) {
+        video.muted = true;
+        const playAttempt = video.play();
+        if (playAttempt && typeof playAttempt.catch === "function") {
+          playAttempt.catch(() => undefined);
+        }
+      } else if (!video.paused) {
+        video.pause();
+      }
+    });
+  }, []);
+
+  const setFeedVideoRef = useCallback(
+    (videoId: string, node: HTMLVideoElement | null) => {
+      const refs = feedVideoRefs.current;
+      const observer = feedVideoObserverRef.current;
+      const prev = refs.get(videoId);
+
+      if (prev && observer) {
+        observer.unobserve(prev);
+      }
+
+      if (node) {
+        refs.set(videoId, node);
+        if (observer) {
+          observer.observe(node);
+        }
+      } else {
+        refs.delete(videoId);
+        feedVideoVisibilityRef.current.delete(videoId);
+      }
+
+      syncFeedVideoPlayback();
+    },
+    [syncFeedVideoPlayback],
+  );
+
+  useEffect(() => {
+    const visibilityMap = feedVideoVisibilityRef.current;
+    const videoRefs = feedVideoRefs.current;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const target = entry.target as HTMLVideoElement;
+          const id = target.dataset.feedVideoId;
+          if (!id) continue;
+          feedVideoVisibilityRef.current.set(id, entry.isIntersecting ? entry.intersectionRatio : 0);
+        }
+        syncFeedVideoPlayback();
+      },
+      {
+        threshold: [0, 0.25, 0.5, 0.6, 0.75, 1],
+      },
+    );
+
+    feedVideoObserverRef.current = observer;
+    videoRefs.forEach((video) => observer.observe(video));
+
+    return () => {
+      observer.disconnect();
+      feedVideoObserverRef.current = null;
+      visibilityMap.clear();
+      videoRefs.forEach((video) => video.pause());
+    };
+  }, [syncFeedVideoPlayback]);
 
   useEffect(() => {
     if (bibliotecaLightboxItem?.type !== "image") {
@@ -1693,10 +1775,14 @@ export default function ImageGeneratorScreen() {
                         className="relative w-full cursor-pointer overflow-hidden rounded-md bg-black"
                       >
                         <video
+                          ref={(node) => setFeedVideoRef(feedItem.item.id, node)}
+                          data-feed-video-id={feedItem.item.id}
                           src={feedItem.item.videoUrl}
                           preload="metadata"
                           poster={feedItem.item.sourceImageThumbnailUrl || undefined}
                           muted
+                          playsInline
+                          loop
                           className="h-auto w-full object-cover"
                         />
                       </button>
@@ -1930,7 +2016,7 @@ export default function ImageGeneratorScreen() {
 
       {bibliotecaLightboxItem && (
         <div
-          className="fixed inset-0 z-[120] flex items-center justify-center bg-black/85 px-4 py-6 backdrop-blur-sm"
+          className="fixed inset-0 z-120 flex items-center justify-center bg-black/85 px-4 py-6 backdrop-blur-sm"
           onClick={() => setBibliotecaLightboxItem(null)}
         >
           <div
