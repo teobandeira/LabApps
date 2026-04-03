@@ -2369,7 +2369,7 @@ export default function ImageGeneratorScreen() {
                           A prévia será exibida quando a geração iniciar.
                         </p>
                       )}
-                      {!videoResult ? (
+                      {videoLoading ? (
                         <div className="pointer-events-none absolute inset-0 bg-black/80" />
                       ) : null}
                       {videoLoading ? (
