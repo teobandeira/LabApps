@@ -153,6 +153,8 @@ const CHAT_DEVICE_ID_STORAGE_KEY = "chatgpt-device-id-v1";
 const IMAGE_STUDIO_THEME_STORAGE_KEY = "chatgpt-image-studio-theme-v1";
 const IMAGE_GENERATION_CREDIT_COST = 1;
 const VIDEO_GENERATION_CREDIT_COST = 2;
+const BIBLIOTECA_INITIAL_VISIBLE_ITEMS = 8;
+const BIBLIOTECA_LOAD_MORE_ITEMS = 4;
 const ALLOWED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
 const ALLOWED_IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp"];
 const VIDEO_PROMPT_PTBR_GUARDRAIL =
@@ -322,6 +324,10 @@ export default function ImageGeneratorScreen() {
   const [isMainDropzoneActive, setIsMainDropzoneActive] = useState(false);
   const [generatedImages, setGeneratedImages] = useState<GeneratedImageItem[]>([]);
   const [generatedVideos, setGeneratedVideos] = useState<GeneratedVideoItem[]>([]);
+  const [bibliotecaVisibleCount, setBibliotecaVisibleCount] = useState<number>(
+    BIBLIOTECA_INITIAL_VISIBLE_ITEMS,
+  );
+  const [bibliotecaAutoLoadingMore, setBibliotecaAutoLoadingMore] = useState(false);
   const [bibliotecaLoading, setBibliotecaLoading] = useState(false);
   const [bibliotecaError, setBibliotecaError] = useState<string | null>(null);
   const [deletingMediaIds, setDeletingMediaIds] = useState<string[]>([]);
@@ -343,6 +349,8 @@ export default function ImageGeneratorScreen() {
   const [creditsLoading, setCreditsLoading] = useState(false);
   const toastTimerRef = useRef<number | null>(null);
   const videoPreviewAnchorRef = useRef<HTMLDivElement | null>(null);
+  const bibliotecaLoadMoreAnchorRef = useRef<HTMLDivElement | null>(null);
+  const bibliotecaLoadMoreTimerRef = useRef<number | null>(null);
   const feedVideoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
   const feedVideoVisibilityRef = useRef<Map<string, number>>(new Map());
   const feedVideoObserverRef = useRef<IntersectionObserver | null>(null);
@@ -435,6 +443,11 @@ export default function ImageGeneratorScreen() {
       .map((id) => map.get(id))
       .filter((item): item is GeneratedVideoItem => !!item);
   }, [generatedVideos, selectedVideoIdsForMerge]);
+  const bibliotecaVisibleItems = useMemo(
+    () => bibliotecaFeedItems.slice(0, bibliotecaVisibleCount),
+    [bibliotecaFeedItems, bibliotecaVisibleCount],
+  );
+  const hasMoreBibliotecaItems = bibliotecaVisibleCount < bibliotecaFeedItems.length;
 
   const notify = (type: "success" | "error", message: string) => {
     setToastState({ type, message });
@@ -556,6 +569,66 @@ export default function ImageGeneratorScreen() {
   useEffect(() => {
     setFeedActionMenuId(null);
   }, [generatedImages, generatedVideos]);
+
+  useEffect(() => {
+    setBibliotecaVisibleCount(BIBLIOTECA_INITIAL_VISIBLE_ITEMS);
+  }, [chatDeviceId]);
+
+  useEffect(() => {
+    if (!hasMoreBibliotecaItems) {
+      setBibliotecaAutoLoadingMore(false);
+    }
+  }, [hasMoreBibliotecaItems]);
+
+  useEffect(() => {
+    const anchor = bibliotecaLoadMoreAnchorRef.current;
+    if (!anchor || bibliotecaLoading || !!bibliotecaError || !hasMoreBibliotecaItems) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const [entry] = entries;
+        if (!entry?.isIntersecting) return;
+        if (bibliotecaAutoLoadingMore) return;
+
+        setBibliotecaAutoLoadingMore(true);
+        if (bibliotecaLoadMoreTimerRef.current) {
+          window.clearTimeout(bibliotecaLoadMoreTimerRef.current);
+        }
+        bibliotecaLoadMoreTimerRef.current = window.setTimeout(() => {
+          setBibliotecaVisibleCount((current) =>
+            Math.min(current + BIBLIOTECA_LOAD_MORE_ITEMS, bibliotecaFeedItems.length),
+          );
+          setBibliotecaAutoLoadingMore(false);
+          bibliotecaLoadMoreTimerRef.current = null;
+        }, 220);
+      },
+      {
+        root: null,
+        threshold: 0.1,
+        rootMargin: "200px 0px",
+      },
+    );
+
+    observer.observe(anchor);
+    return () => observer.disconnect();
+  }, [
+    bibliotecaAutoLoadingMore,
+    bibliotecaError,
+    bibliotecaFeedItems.length,
+    bibliotecaLoading,
+    hasMoreBibliotecaItems,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (bibliotecaLoadMoreTimerRef.current) {
+        window.clearTimeout(bibliotecaLoadMoreTimerRef.current);
+        bibliotecaLoadMoreTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const syncFeedVideoPlayback = useCallback(() => {
     let bestVisibleId: string | null = null;
@@ -1695,9 +1768,10 @@ export default function ImageGeneratorScreen() {
                 Nenhum item encontrado.
               </div>
             ) : (
-              <div className="columns-1 gap-4 sm:columns-2 lg:columns-3 xl:columns-4">
-                {bibliotecaFeedItems.map((feedItem) =>
-                  feedItem.type === "image" ? (
+              <>
+                <div className="columns-1 gap-4 sm:columns-2 lg:columns-3 xl:columns-4">
+                  {bibliotecaVisibleItems.map((feedItem) =>
+                    feedItem.type === "image" ? (
                     <article
                       key={`image-${feedItem.item.id}`}
                       className={`mb-4 break-inside-avoid rounded-xl p-3 ${
@@ -1825,15 +1899,15 @@ export default function ImageGeneratorScreen() {
                         ) : null}
                       </div>
                     </article>
-                  ) : (
-                    <article
-                      key={`video-${feedItem.item.id}`}
-                      className={`mb-4 break-inside-avoid rounded-xl p-3 ${
-                        isLightTheme
-                          ? "border border-slate-200 bg-white text-slate-900 shadow-sm"
-                          : "border border-gray-700 bg-gray-900/70"
-                      }`}
-                    >
+                    ) : (
+                      <article
+                        key={`video-${feedItem.item.id}`}
+                        className={`mb-4 break-inside-avoid rounded-xl p-3 ${
+                          isLightTheme
+                            ? "border border-slate-200 bg-white text-slate-900 shadow-sm"
+                            : "border border-gray-700 bg-gray-900/70"
+                        }`}
+                      >
                       <div className="mb-2 flex items-center justify-between gap-2">
                         <label className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${
                           isLightTheme
@@ -1960,10 +2034,26 @@ export default function ImageGeneratorScreen() {
                         </span>
                       </div>
 
-                    </article>
-                  ),
-                )}
-              </div>
+                      </article>
+                    ),
+                  )}
+                </div>
+                {(hasMoreBibliotecaItems || bibliotecaAutoLoadingMore) ? (
+                  <div
+                    ref={bibliotecaLoadMoreAnchorRef}
+                    className={`mt-4 flex items-center justify-center rounded-lg border px-3 py-2 text-xs ${
+                      isLightTheme
+                        ? "border-slate-200 bg-white text-slate-600"
+                        : "border-gray-700 bg-gray-900/60 text-gray-300"
+                    }`}
+                  >
+                    <span className="inline-flex items-center gap-2">
+                      <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-r-transparent" />
+                      Carregando mais itens...
+                    </span>
+                  </div>
+                ) : null}
+              </>
             )
           )}
         </section>
