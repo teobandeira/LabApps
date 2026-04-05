@@ -34,6 +34,7 @@ type VideoModelOption = {
   provider: VideoProvider;
   allowedDurations: readonly number[];
   allowedResolutions: readonly string[];
+  allowedAspectRatios: readonly ("16:9" | "9:16" | "1:1")[];
   defaultDuration: number;
   defaultResolution: string;
 };
@@ -80,14 +81,27 @@ type DeleteModalState =
   | null;
 
 type SocialFormatOption = {
-  value: "9:16" | "1:1";
+  value: "16:9" | "9:16" | "1:1";
   label: string;
   details: string;
   imageSize: string;
   previewAspectRatio: string;
 };
+type ImageSizeOption = {
+  value: string;
+  label: string;
+  details: string;
+  videoAspectRatio: "16:9" | "9:16" | "1:1" | null;
+};
 
 const SOCIAL_FORMAT_OPTIONS = [
+  {
+    value: "16:9",
+    label: "Paisagem (horizontal)",
+    details: "1280x720 (16:9)",
+    imageSize: "1280x720",
+    previewAspectRatio: "16 / 9",
+  },
   {
     value: "9:16",
     label: "Story (vertical)",
@@ -104,6 +118,36 @@ const SOCIAL_FORMAT_OPTIONS = [
   },
 ] as const satisfies readonly SocialFormatOption[];
 
+const DEFAULT_IMAGE_SIZE_OPTIONS: readonly ImageSizeOption[] = [
+  {
+    value: "1024x1792",
+    label: "Story (vertical)",
+    details: "1080x1920 (9:16)",
+    videoAspectRatio: "9:16",
+  },
+  {
+    value: "1024x1024",
+    label: "Feed (quadrada)",
+    details: "1080x1080 (1:1)",
+    videoAspectRatio: "1:1",
+  },
+];
+
+const SORA_IMAGE_SIZE_OPTIONS: readonly ImageSizeOption[] = [
+  {
+    value: "720x1280",
+    label: "Sora Vertical HD",
+    details: "720x1280 (9:16)",
+    videoAspectRatio: "9:16",
+  },
+  {
+    value: "1280x720",
+    label: "Sora Horizontal HD",
+    details: "1280x720 (16:9)",
+    videoAspectRatio: "16:9",
+  },
+];
+
 const VIDEO_MODEL_OPTIONS: VideoModelOption[] = [
   {
     value: "veo-3.1-generate-preview",
@@ -111,6 +155,7 @@ const VIDEO_MODEL_OPTIONS: VideoModelOption[] = [
     provider: "veo",
     allowedDurations: [8],
     allowedResolutions: ["720p"],
+    allowedAspectRatios: ["16:9", "9:16", "1:1"],
     defaultDuration: 8,
     defaultResolution: "720p",
   },
@@ -120,6 +165,7 @@ const VIDEO_MODEL_OPTIONS: VideoModelOption[] = [
     provider: "veo",
     allowedDurations: [8],
     allowedResolutions: ["720p"],
+    allowedAspectRatios: ["16:9", "9:16", "1:1"],
     defaultDuration: 8,
     defaultResolution: "720p",
   },
@@ -129,6 +175,7 @@ const VIDEO_MODEL_OPTIONS: VideoModelOption[] = [
     provider: "sora",
     allowedDurations: [8],
     allowedResolutions: ["720p"],
+    allowedAspectRatios: ["16:9", "9:16"],
     defaultDuration: 8,
     defaultResolution: "720p",
   },
@@ -138,6 +185,7 @@ const VIDEO_MODEL_OPTIONS: VideoModelOption[] = [
     provider: "sora",
     allowedDurations: [8, 12],
     allowedResolutions: ["720p"],
+    allowedAspectRatios: ["16:9", "9:16"],
     defaultDuration: 8,
     defaultResolution: "720p",
   },
@@ -148,7 +196,6 @@ const IMAGE_MODEL_OPTIONS: ImageModelOption[] = [
   { value: "chatgpt-image-latest", label: "ChatGPT Image Latest" },
 ];
 
-const FIXED_VIDEO_RESOLUTION = "720p";
 const CHAT_DEVICE_ID_STORAGE_KEY = "chatgpt-device-id-v1";
 const IMAGE_STUDIO_THEME_STORAGE_KEY = "chatgpt-image-studio-theme-v1";
 const IMAGE_GENERATION_CREDIT_COST = 1;
@@ -265,7 +312,7 @@ function isAcceptedImageFile(file: File) {
   return ALLOWED_IMAGE_EXTENSIONS.some((ext) => normalizedName.endsWith(ext));
 }
 
-function resolveAspectRatioFromImageSize(size: string): "9:16" | "1:1" | null {
+function resolveAspectRatioFromImageSize(size: string): "16:9" | "9:16" | "1:1" | null {
   const normalized = normalizeResultUrl(size);
   const match = normalized.match(/^(\d+)x(\d+)$/i);
   if (!match) {
@@ -286,6 +333,10 @@ function resolveAspectRatioFromImageSize(size: string): "9:16" | "1:1" | null {
     return "9:16";
   }
 
+  if (width > height) {
+    return "16:9";
+  }
+
   return null;
 }
 
@@ -295,7 +346,7 @@ export default function ImageGeneratorScreen() {
     preview: null,
   });
   const [model, setModel] = useState<string>(IMAGE_MODEL_OPTIONS[0].value);
-  const [imageSize, setImageSize] = useState<string>(SOCIAL_FORMAT_OPTIONS[0].imageSize);
+  const [imageSize, setImageSize] = useState<string>(DEFAULT_IMAGE_SIZE_OPTIONS[0].value);
   const [loading, setLoading] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
   const [ambientacaoLightboxOpen, setAmbientacaoLightboxOpen] = useState(false);
@@ -314,10 +365,12 @@ export default function ImageGeneratorScreen() {
   const [videoDurationSeconds, setVideoDurationSeconds] = useState<number>(
     VIDEO_MODEL_OPTIONS[0].defaultDuration,
   );
+  const [videoResolution, setVideoResolution] = useState<string>(
+    VIDEO_MODEL_OPTIONS[0].defaultResolution,
+  );
   const [videoAspectRatio, setVideoAspectRatio] = useState<string>(
     SOCIAL_FORMAT_OPTIONS[0].value,
   );
-  const videoResolution = FIXED_VIDEO_RESOLUTION;
   const [videoErrorMessage, setVideoErrorMessage] = useState<string | null>(null);
   const [toastState, setToastState] = useState<ToastState>(null);
   const [isTopMenuOpen, setIsTopMenuOpen] = useState(false);
@@ -363,11 +416,23 @@ export default function ImageGeneratorScreen() {
     () => IMAGE_MODEL_OPTIONS.find((option) => option.value === model)?.label || model,
     [model],
   );
+  const isSoraImageModel = useMemo(() => model.toLowerCase().includes("sora"), [model]);
+  const imageSizeOptions = useMemo(
+    () => (isSoraImageModel ? SORA_IMAGE_SIZE_OPTIONS : DEFAULT_IMAGE_SIZE_OPTIONS),
+    [isSoraImageModel],
+  );
   const selectedVideoFormat = useMemo(
     () =>
       SOCIAL_FORMAT_OPTIONS.find((option) => option.value === videoAspectRatio) ||
       SOCIAL_FORMAT_OPTIONS[0],
     [videoAspectRatio],
+  );
+  const availableVideoFormatOptions = useMemo(
+    () =>
+      SOCIAL_FORMAT_OPTIONS.filter((option) =>
+        selectedVideoModelOption.allowedAspectRatios.includes(option.value),
+      ),
+    [selectedVideoModelOption],
   );
   const shouldShowVideoPreviewPanel = Boolean(
     videoSourceUrl || videoResult || videoLoading || videoErrorMessage,
@@ -388,6 +453,31 @@ export default function ImageGeneratorScreen() {
     }
     setVideoDurationSeconds(selectedVideoModelOption.defaultDuration);
   }, [selectedVideoModelOption, videoDurationSeconds]);
+
+  useEffect(() => {
+    if (selectedVideoModelOption.allowedResolutions.includes(videoResolution)) {
+      return;
+    }
+    setVideoResolution(selectedVideoModelOption.defaultResolution);
+  }, [selectedVideoModelOption, videoResolution]);
+
+  useEffect(() => {
+    if (
+      selectedVideoModelOption.allowedAspectRatios.includes(
+        videoAspectRatio as "16:9" | "9:16" | "1:1",
+      )
+    ) {
+      return;
+    }
+    setVideoAspectRatio(selectedVideoModelOption.allowedAspectRatios[0] || SOCIAL_FORMAT_OPTIONS[0].value);
+  }, [selectedVideoModelOption, videoAspectRatio]);
+
+  useEffect(() => {
+    if (imageSizeOptions.some((option) => option.value === imageSize)) {
+      return;
+    }
+    setImageSize(imageSizeOptions[0]?.value || DEFAULT_IMAGE_SIZE_OPTIONS[0].value);
+  }, [imageSize, imageSizeOptions]);
 
   const sectionCardClass = isLightTheme
     ? "rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5"
@@ -909,7 +999,10 @@ export default function ImageGeneratorScreen() {
     }
   };
 
-  const openVideoModal = (sourceUrl?: string, preferredAspectRatio?: "9:16" | "1:1" | null) => {
+  const openVideoModal = (
+    sourceUrl?: string,
+    preferredAspectRatio?: "16:9" | "9:16" | "1:1" | null,
+  ) => {
     const targetSource = sourceUrl || preview || produtoPrincipal.preview;
     if (loading) return;
     setIsTopMenuOpen(false);
@@ -1638,18 +1731,18 @@ export default function ImageGeneratorScreen() {
                       onChange={(e) => {
                         const nextSize = e.target.value;
                         setImageSize(nextSize);
-                        const selectedOption = SOCIAL_FORMAT_OPTIONS.find(
-                          (option) => option.imageSize === nextSize,
+                        const selectedOption = imageSizeOptions.find(
+                          (option) => option.value === nextSize,
                         );
-                        if (selectedOption) {
-                          setVideoAspectRatio(selectedOption.value);
+                        if (selectedOption?.videoAspectRatio) {
+                          setVideoAspectRatio(selectedOption.videoAspectRatio);
                         }
                       }}
                       className={selectClass}
                       disabled={loading}
                     >
-                      {SOCIAL_FORMAT_OPTIONS.map((option) => (
-                        <option key={`image-size-${option.value}`} value={option.imageSize}>
+                      {imageSizeOptions.map((option) => (
+                        <option key={`image-size-${option.value}`} value={option.value}>
                           {option.label} - {option.details}
                         </option>
                       ))}
@@ -2423,6 +2516,7 @@ export default function ImageGeneratorScreen() {
                                 VIDEO_MODEL_OPTIONS[0];
                               setVideoModel(nextModel);
                               setVideoDurationSeconds(nextOption.defaultDuration);
+                              setVideoResolution(nextOption.defaultResolution);
                             }}
                             className={selectClass}
                             disabled={videoLoading}
@@ -2439,8 +2533,20 @@ export default function ImageGeneratorScreen() {
 
                       <div>
                         <label className={fieldLabelClass}>Resolução</label>
-                        <div className="rounded-xl border border-cyan-400/45 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100">
-                          {videoResolution} (fixa)
+                        <div className={selectWrapperClass}>
+                          <select
+                            value={videoResolution}
+                            onChange={(e) => setVideoResolution(e.target.value)}
+                            className={selectClass}
+                            disabled={videoLoading}
+                          >
+                            {selectedVideoModelOption.allowedResolutions.map((resolution) => (
+                              <option key={`${selectedVideoModelOption.value}-${resolution}`} value={resolution}>
+                                {resolution}
+                              </option>
+                            ))}
+                          </select>
+                          <FaChevronDown className={selectIconClass} />
                         </div>
                       </div>
                     </div>
@@ -2448,11 +2554,11 @@ export default function ImageGeneratorScreen() {
                     <div className="rounded-xl border border-gray-700/70 bg-gray-800/55 p-4">
                       <label className={fieldLabelClass}>Formato para redes</label>
                       <div className="rounded-xl border border-cyan-400/45 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100">
-                        {SOCIAL_FORMAT_OPTIONS.find((option) => option.value === videoAspectRatio)?.label ||
+                        {availableVideoFormatOptions.find((option) => option.value === videoAspectRatio)?.label ||
                           "Formato selecionado"}
                       </div>
                       <div className="mt-2 grid grid-cols-2 gap-2">
-                        {SOCIAL_FORMAT_OPTIONS.map((option) => (
+                        {availableVideoFormatOptions.map((option) => (
                           <button
                             key={option.value}
                             type="button"

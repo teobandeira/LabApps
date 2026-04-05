@@ -36,24 +36,18 @@ const ALLOWED_ASPECT_RATIOS = new Set(["16:9", "9:16", "1:1"]);
 const ALLOWED_GEMINI_VIDEO_DURATIONS = new Set([4, 6, 8]);
 const ALLOWED_SORA_VIDEO_DURATIONS = new Set([4, 8, 12]);
 const ALLOWED_GEMINI_VIDEO_RESOLUTIONS = new Set(["720p", "1080p"]);
-const ALLOWED_SORA_VIDEO_RESOLUTIONS = new Set(["720p", "1024p"]);
+const ALLOWED_SORA_VIDEO_RESOLUTIONS = new Set(["720p"]);
 const DEFAULT_VIDEO_RESOLUTION = "720p";
 const RETRYABLE_START_STATUSES = new Set([429, 500, 502, 503, 504]);
 const START_REQUEST_MAX_ATTEMPTS = 3;
 const START_REQUEST_BASE_RETRY_MS = 1200;
 const SORA_SIZE_BY_RESOLUTION_AND_ASPECT_RATIO: Record<
-  "720p" | "1024p",
-  Record<"16:9" | "9:16" | "1:1", string>
+  "720p",
+  Record<"16:9" | "9:16", string>
 > = {
   "720p": {
     "16:9": "1280x720",
     "9:16": "720x1280",
-    "1:1": "720x720",
-  },
-  "1024p": {
-    "16:9": "1792x1024",
-    "9:16": "1024x1792",
-    "1:1": "1024x1024",
   },
 };
 
@@ -756,9 +750,8 @@ async function fetchImageBytes(
 
 function resolveSoraSize(aspectRatio: string, resolution: string): string | null {
   const parsedAspectRatio =
-    aspectRatio === "9:16" ? "9:16" : aspectRatio === "16:9" ? "16:9" : aspectRatio === "1:1" ? "1:1" : null;
-  const parsedResolution =
-    resolution === "720p" ? "720p" : resolution === "1024p" ? "1024p" : null;
+    aspectRatio === "9:16" ? "9:16" : aspectRatio === "16:9" ? "16:9" : null;
+  const parsedResolution = resolution === "720p" ? "720p" : null;
 
   if (!parsedAspectRatio || !parsedResolution) {
     return null;
