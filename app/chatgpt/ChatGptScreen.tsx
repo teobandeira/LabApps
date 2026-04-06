@@ -71,20 +71,6 @@ type GeneratedVideoHistoryItem = {
   resolution: string;
 };
 
-type CombinedGenerationHistoryItem =
-  | {
-      type: "image";
-      id: string;
-      createdAt: string;
-      image: GeneratedImageHistoryItem;
-    }
-  | {
-      type: "video";
-      id: string;
-      createdAt: string;
-      video: GeneratedVideoHistoryItem;
-    };
-
 type ChatSession = {
   id: string;
   title: string;
@@ -252,6 +238,7 @@ const IMAGE_PROMPT_MAX_HEIGHT = 220;
 const CHAT_AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 88;
 const CHAT_SESSION_TITLE_MAX_LENGTH = 56;
 const CHAT_SESSION_PREVIEW_MAX_LENGTH = 82;
+const HISTORY_PAGE_SIZE = 12;
 const CHAT_TITLE_NOISE_PREFIXES = [
   "arquivos enviados:",
   "arquivos usados no contexto:",
@@ -678,6 +665,27 @@ function createRequestId(): string {
   }
 
   return `req-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function compareByCreatedAtDesc(
+  left: { createdAt: string; id: string },
+  right: { createdAt: string; id: string }
+): number {
+  const leftTime = new Date(left.createdAt).getTime();
+  const rightTime = new Date(right.createdAt).getTime();
+
+  const hasValidLeftTime = Number.isFinite(leftTime);
+  const hasValidRightTime = Number.isFinite(rightTime);
+
+  if (hasValidLeftTime && hasValidRightTime && leftTime !== rightTime) {
+    return rightTime - leftTime;
+  }
+
+  if (left.createdAt !== right.createdAt) {
+    return right.createdAt.localeCompare(left.createdAt);
+  }
+
+  return right.id.localeCompare(left.id);
 }
 
 function isNearChatBottom(container: HTMLDivElement): boolean {
@@ -1129,6 +1137,8 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const [generatedVideoHistory, setGeneratedVideoHistory] = useState<GeneratedVideoHistoryItem[]>(
     []
   );
+  const [generatedHistoryPage, setGeneratedHistoryPage] = useState(1);
+  const [generatedVideoHistoryPage, setGeneratedVideoHistoryPage] = useState(1);
   const [generatedVideoHistoryWarning, setGeneratedVideoHistoryWarning] = useState("");
   const [videoGenerationModalSource, setVideoGenerationModalSource] =
     useState<VideoGenerationModalSource | null>(null);
@@ -1404,6 +1414,8 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
     let active = true;
     setLoadingGeneratedHistory(true);
+    setGeneratedHistoryPage(1);
+    setGeneratedVideoHistoryPage(1);
     setGeneratedHistoryWarning("");
     setGeneratedVideoHistoryWarning("");
 
@@ -1431,7 +1443,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
           return;
         }
 
-        setGeneratedHistory(images);
+        setGeneratedHistory([...images].sort(compareByCreatedAtDesc));
 
         const videosResponse = await fetch(
           `/api/chatgpt/generated-videos?deviceId=${encodeURIComponent(chatDeviceId)}`,
@@ -1455,7 +1467,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
           return;
         }
 
-        setGeneratedVideoHistory(videos);
+        setGeneratedVideoHistory([...videos].sort(compareByCreatedAtDesc));
         setGeneratedVideoByHistoryId((current) => {
           const merged = { ...current };
           for (const videoItem of videos) {
@@ -1797,7 +1809,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
             return current;
           }
 
-          return [
+          const next = [
             {
               id: storedImageId,
               imageUrl: `/api/chatgpt/generated-image/${storedImageId}?deviceId=${encodeURIComponent(chatDeviceId)}`,
@@ -1810,6 +1822,8 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
             },
             ...current,
           ];
+
+          return next.sort(compareByCreatedAtDesc);
         });
       }
 
@@ -2139,23 +2153,27 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const selectedVideoModelOption = getVideoModelOption(videoGenerationModelInput);
   const selectedVideoProviderLabel = getVideoProviderLabel(videoGenerationModelInput);
   const isSoraSelected = selectedVideoModelOption.provider === "sora";
-  const combinedGenerationHistory = useMemo<CombinedGenerationHistoryItem[]>(() => {
-    const images: CombinedGenerationHistoryItem[] = generatedHistory.map((image) => ({
-      type: "image",
-      id: image.id,
-      createdAt: image.createdAt,
-      image,
-    }));
-
-    const videos: CombinedGenerationHistoryItem[] = generatedVideoHistory.map((video) => ({
-      type: "video",
-      id: video.id,
-      createdAt: video.createdAt,
-      video,
-    }));
-
-    return [...images, ...videos].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  }, [generatedHistory, generatedVideoHistory]);
+  const generatedHistoryTotalPages = Math.max(
+    1,
+    Math.ceil(generatedHistory.length / HISTORY_PAGE_SIZE)
+  );
+  const generatedVideoHistoryTotalPages = Math.max(
+    1,
+    Math.ceil(generatedVideoHistory.length / HISTORY_PAGE_SIZE)
+  );
+  const safeGeneratedHistoryPage = Math.min(generatedHistoryPage, generatedHistoryTotalPages);
+  const safeGeneratedVideoHistoryPage = Math.min(
+    generatedVideoHistoryPage,
+    generatedVideoHistoryTotalPages
+  );
+  const paginatedGeneratedHistory = useMemo(() => {
+    const start = (safeGeneratedHistoryPage - 1) * HISTORY_PAGE_SIZE;
+    return generatedHistory.slice(start, start + HISTORY_PAGE_SIZE);
+  }, [generatedHistory, safeGeneratedHistoryPage]);
+  const paginatedGeneratedVideoHistory = useMemo(() => {
+    const start = (safeGeneratedVideoHistoryPage - 1) * HISTORY_PAGE_SIZE;
+    return generatedVideoHistory.slice(start, start + HISTORY_PAGE_SIZE);
+  }, [generatedVideoHistory, safeGeneratedVideoHistoryPage]);
 
   function openHistoryLightbox(index: number) {
     setPreviewLightboxImageUrl(null);
@@ -3950,197 +3968,321 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
           <article className={historyCardClass}>
             <p className={`mb-3 ${sectionTitleClass}`}>Historico de Geracoes</p>
-            {loadingGeneratedHistory && combinedGenerationHistory.length === 0 ? (
-              <div
-                className={`rounded-xl border px-3 py-3 ${
-                  isLight ? "border-slate-300 bg-slate-100" : "border-purple-400/45 bg-purple-500/12"
-                }`}
-              >
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                  {Array.from({ length: 6 }).map((_, index) => (
-                    <div
-                      key={`history-skeleton-${index}`}
-                      className={`space-y-2 rounded-lg border p-2 ${
-                        isLight ? "border-slate-200 bg-white" : "border-gray-700/80 bg-gray-900/70"
-                      }`}
-                    >
-                      <Skeleton className="aspect-square w-full" />
-                      <Skeleton className="h-2.5 w-2/5" />
-                      <div className="grid grid-cols-2 gap-1">
-                        <Skeleton className="h-7 w-full" />
-                        <Skeleton className="h-7 w-full" />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : combinedGenerationHistory.length > 0 ? (
-              <div className="columns-1 gap-x-2 sm:columns-2 lg:columns-3">
-                {combinedGenerationHistory.map((entry: CombinedGenerationHistoryItem) => {
-                  if (entry.type === "image") {
-                    const imageItem = entry.image;
-                    const imageIndex = generatedHistory.findIndex((item) => item.id === imageItem.id);
-
-                    return (
-                      <article
-                        key={`history-image-${imageItem.id}`}
-                        className={`mb-2 break-inside-avoid overflow-hidden rounded-xl border ${
-                          isLight
-                            ? "border-slate-200 bg-white"
-                            : "border-gray-700/80 bg-gray-900/70"
-                        }`}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (imageIndex >= 0) {
-                              openHistoryLightbox(imageIndex);
-                            }
-                          }}
-                          disabled={imageIndex < 0}
-                          className="block w-full text-left disabled:cursor-not-allowed"
-                          aria-label="Abrir imagem no lightbox"
+            <div className="space-y-4">
+              <section>
+                <p className={`mb-2 text-xs font-semibold ${isLight ? "text-violet-700" : "text-violet-200"}`}>
+                  Imagens
+                </p>
+                {loadingGeneratedHistory && generatedHistory.length === 0 ? (
+                  <div
+                    className={`rounded-xl border px-3 py-3 ${
+                      isLight ? "border-slate-300 bg-slate-100" : "border-purple-400/45 bg-purple-500/12"
+                    }`}
+                  >
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                      {Array.from({ length: 6 }).map((_, index) => (
+                        <div
+                          key={`history-image-skeleton-${index}`}
+                          className={`space-y-2 rounded-lg border p-2 ${
+                            isLight ? "border-slate-200 bg-white" : "border-gray-700/80 bg-gray-900/70"
+                          }`}
                         >
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={imageItem.imageUrl}
-                            alt={`Imagem ${imageItem.id}`}
-                            className="aspect-square h-auto w-full object-cover transition hover:opacity-90"
-                            loading="lazy"
-                          />
-                        </button>
-                        <div className="space-y-2 px-2 py-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <p className={`text-[10px] ${isLight ? "text-slate-600" : "text-gray-300"}`}>
-                              {formatCreatedAt(imageItem.createdAt)}
-                            </p>
-                            <span
-                              className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
-                                isLight
-                                  ? "bg-violet-100 text-violet-700"
-                                  : "bg-violet-500/15 text-violet-200"
-                              }`}
-                            >
-                              Imagem
-                            </span>
-                          </div>
+                          <Skeleton className="aspect-square w-full" />
+                          <Skeleton className="h-2.5 w-2/5" />
                           <div className="grid grid-cols-2 gap-1">
-                            <button
-                              type="button"
-                              onClick={() => openHistoryVideoModal(imageItem)}
-                              className={`inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-2 text-[10px] font-semibold transition ${
-                                isLight
-                                  ? "border-cyan-300 bg-cyan-500 text-white hover:bg-cyan-600"
-                                  : "border-cyan-400/45 bg-cyan-500/15 text-cyan-100 hover:bg-cyan-500/25"
-                              }`}
-                            >
-                              <MdMovie className="h-3.5 w-3.5" />
-                              Gerar video
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                void handleDownloadImage(imageItem.imageUrl, imageItem.id)
-                              }
-                              disabled={downloadingImage}
-                              className={`inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-2 text-[10px] font-semibold transition disabled:cursor-not-allowed ${
-                                isLight
-                                  ? "border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-                                  : "border-gray-600 bg-gray-800 text-gray-100 hover:bg-gray-700 disabled:border-gray-700 disabled:bg-gray-800 disabled:text-gray-500"
-                              }`}
-                            >
-                              <MdDownload className="h-3.5 w-3.5" />
-                              Baixar
-                            </button>
+                            <Skeleton className="h-7 w-full" />
+                            <Skeleton className="h-7 w-full" />
                           </div>
                         </div>
-                      </article>
-                    );
-                  }
+                      ))}
+                    </div>
+                  </div>
+                ) : paginatedGeneratedHistory.length > 0 ? (
+                  <>
+                    <div className="columns-1 gap-x-2 sm:columns-2 lg:columns-3">
+                      {paginatedGeneratedHistory.map((imageItem) => {
+                        const imageIndex = generatedHistory.findIndex((item) => item.id === imageItem.id);
 
-                  const videoItem = entry.video;
-                  const videoRefKey = `video-history:${videoItem.id}`;
-
-                  return (
-                    <article
-                      key={`history-video-${videoItem.id}`}
-                      className={`mb-2 break-inside-avoid rounded-xl border p-2 ${
-                        isLight
-                          ? "border-slate-200 bg-white"
-                          : "border-gray-700/80 bg-gray-900/70"
-                      }`}
-                    >
-                      <video
-                        ref={(element) => {
-                          historyVideoRefs.current[videoRefKey] = element;
-                        }}
-                        src={videoItem.videoUrl}
-                        controls
-                        preload="metadata"
-                        className={`w-full rounded-lg border ${
-                          isLight ? "border-slate-300 bg-slate-100" : "border-gray-700 bg-black/40"
-                        }`}
-                      />
-                      <div className="mt-1 flex items-center justify-between gap-2">
-                        <p className={`text-[10px] ${isLight ? "text-slate-600" : "text-gray-300"}`}>
-                          {formatCreatedAt(videoItem.createdAt)}
-                        </p>
-                        <span
-                          className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                        return (
+                          <article
+                            key={`history-image-${imageItem.id}`}
+                            className={`mb-2 break-inside-avoid overflow-hidden rounded-xl border ${
+                              isLight
+                                ? "border-slate-200 bg-white"
+                                : "border-gray-700/80 bg-gray-900/70"
+                            }`}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (imageIndex >= 0) {
+                                  openHistoryLightbox(imageIndex);
+                                }
+                              }}
+                              disabled={imageIndex < 0}
+                              className="block w-full text-left disabled:cursor-not-allowed"
+                              aria-label="Abrir imagem no lightbox"
+                            >
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={imageItem.imageUrl}
+                                alt={`Imagem ${imageItem.id}`}
+                                className="aspect-square h-auto w-full object-cover transition hover:opacity-90"
+                                loading="lazy"
+                              />
+                            </button>
+                            <div className="space-y-2 px-2 py-2">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className={`text-[10px] ${isLight ? "text-slate-600" : "text-gray-300"}`}>
+                                  {formatCreatedAt(imageItem.createdAt)}
+                                </p>
+                                <span
+                                  className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                                    isLight
+                                      ? "bg-violet-100 text-violet-700"
+                                      : "bg-violet-500/15 text-violet-200"
+                                  }`}
+                                >
+                                  Imagem
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-2 gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => openHistoryVideoModal(imageItem)}
+                                  className={`inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-2 text-[10px] font-semibold transition ${
+                                    isLight
+                                      ? "border-cyan-300 bg-cyan-500 text-white hover:bg-cyan-600"
+                                      : "border-cyan-400/45 bg-cyan-500/15 text-cyan-100 hover:bg-cyan-500/25"
+                                  }`}
+                                >
+                                  <MdMovie className="h-3.5 w-3.5" />
+                                  Gerar video
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    void handleDownloadImage(imageItem.imageUrl, imageItem.id)
+                                  }
+                                  disabled={downloadingImage}
+                                  className={`inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-2 text-[10px] font-semibold transition disabled:cursor-not-allowed ${
+                                    isLight
+                                      ? "border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                                      : "border-gray-600 bg-gray-800 text-gray-100 hover:bg-gray-700 disabled:border-gray-700 disabled:bg-gray-800 disabled:text-gray-500"
+                                  }`}
+                                >
+                                  <MdDownload className="h-3.5 w-3.5" />
+                                  Baixar
+                                </button>
+                              </div>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                    {generatedHistoryTotalPages > 1 ? (
+                      <div className="mt-2 flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setGeneratedHistoryPage((current) => Math.max(1, current - 1))}
+                          disabled={safeGeneratedHistoryPage <= 1}
+                          className={`inline-flex h-8 items-center rounded-lg border px-2 text-xs font-medium transition disabled:cursor-not-allowed ${
                             isLight
-                              ? "bg-cyan-100 text-cyan-700"
-                              : "bg-cyan-500/15 text-cyan-200"
+                              ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:border-slate-200 disabled:text-slate-400"
+                              : "border-gray-600 bg-gray-900/70 text-gray-200 hover:bg-gray-800 disabled:border-gray-700 disabled:text-gray-500"
                           }`}
                         >
-                          Video
+                          Anterior
+                        </button>
+                        <span className={`text-xs ${isLight ? "text-slate-600" : "text-gray-300"}`}>
+                          {safeGeneratedHistoryPage}/{generatedHistoryTotalPages}
                         </span>
-                      </div>
-                      <div className="mt-1 grid grid-cols-2 gap-1">
                         <button
                           type="button"
                           onClick={() =>
-                            void handleDownloadVideo(videoItem.videoUrl, `video-historico-${videoItem.id}`)
+                            setGeneratedHistoryPage((current) =>
+                              Math.min(generatedHistoryTotalPages, current + 1)
+                            )
                           }
-                          disabled={downloadingVideo}
-                          className={`inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-2 text-[10px] font-semibold transition disabled:cursor-not-allowed ${
+                          disabled={safeGeneratedHistoryPage >= generatedHistoryTotalPages}
+                          className={`inline-flex h-8 items-center rounded-lg border px-2 text-xs font-medium transition disabled:cursor-not-allowed ${
                             isLight
-                              ? "border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-                              : "border-gray-600 bg-gray-800 text-gray-100 hover:bg-gray-700 disabled:border-gray-700 disabled:bg-gray-800 disabled:text-gray-500"
+                              ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:border-slate-200 disabled:text-slate-400"
+                              : "border-gray-600 bg-gray-900/70 text-gray-200 hover:bg-gray-800 disabled:border-gray-700 disabled:text-gray-500"
                           }`}
                         >
-                          <MdDownload className="h-3.5 w-3.5" />
-                          Baixar
+                          Proxima
                         </button>
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <div
+                    className={`flex h-20 items-center justify-center rounded-xl border border-dashed text-xs ${
+                      isLight
+                        ? "border-slate-300 bg-slate-100 text-slate-500"
+                        : "border-purple-400/45 bg-purple-500/12 text-purple-100"
+                    }`}
+                  >
+                    Nenhuma imagem gerada ainda.
+                  </div>
+                )}
+              </section>
+
+              <section>
+                <p className={`mb-2 text-xs font-semibold ${isLight ? "text-cyan-700" : "text-cyan-200"}`}>
+                  Videos
+                </p>
+                {loadingGeneratedHistory && generatedVideoHistory.length === 0 ? (
+                  <div
+                    className={`rounded-xl border px-3 py-3 ${
+                      isLight ? "border-slate-300 bg-slate-100" : "border-purple-400/45 bg-purple-500/12"
+                    }`}
+                  >
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                      {Array.from({ length: 4 }).map((_, index) => (
+                        <div
+                          key={`history-video-skeleton-${index}`}
+                          className={`space-y-2 rounded-lg border p-2 ${
+                            isLight ? "border-slate-200 bg-white" : "border-gray-700/80 bg-gray-900/70"
+                          }`}
+                        >
+                          <Skeleton className="aspect-video w-full" />
+                          <Skeleton className="h-2.5 w-2/5" />
+                          <div className="grid grid-cols-2 gap-1">
+                            <Skeleton className="h-7 w-full" />
+                            <Skeleton className="h-7 w-full" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : paginatedGeneratedVideoHistory.length > 0 ? (
+                  <>
+                    <div className="columns-1 gap-x-2 sm:columns-2 lg:columns-3">
+                      {paginatedGeneratedVideoHistory.map((videoItem) => {
+                        const videoRefKey = `video-history:${videoItem.id}`;
+
+                        return (
+                          <article
+                            key={`history-video-${videoItem.id}`}
+                            className={`mb-2 break-inside-avoid rounded-xl border p-2 ${
+                              isLight
+                                ? "border-slate-200 bg-white"
+                                : "border-gray-700/80 bg-gray-900/70"
+                            }`}
+                          >
+                            <video
+                              ref={(element) => {
+                                historyVideoRefs.current[videoRefKey] = element;
+                              }}
+                              src={videoItem.videoUrl}
+                              controls
+                              preload="metadata"
+                              className={`w-full rounded-lg border ${
+                                isLight ? "border-slate-300 bg-slate-100" : "border-gray-700 bg-black/40"
+                              }`}
+                            />
+                            <div className="mt-1 flex items-center justify-between gap-2">
+                              <p className={`text-[10px] ${isLight ? "text-slate-600" : "text-gray-300"}`}>
+                                {formatCreatedAt(videoItem.createdAt)}
+                              </p>
+                              <span
+                                className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                                  isLight
+                                    ? "bg-cyan-100 text-cyan-700"
+                                    : "bg-cyan-500/15 text-cyan-200"
+                                }`}
+                              >
+                                Video
+                              </span>
+                            </div>
+                            <div className="mt-1 grid grid-cols-2 gap-1">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void handleDownloadVideo(videoItem.videoUrl, `video-historico-${videoItem.id}`)
+                                }
+                                disabled={downloadingVideo}
+                                className={`inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-2 text-[10px] font-semibold transition disabled:cursor-not-allowed ${
+                                  isLight
+                                    ? "border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                                    : "border-gray-600 bg-gray-800 text-gray-100 hover:bg-gray-700 disabled:border-gray-700 disabled:bg-gray-800 disabled:text-gray-500"
+                                }`}
+                              >
+                                <MdDownload className="h-3.5 w-3.5" />
+                                Baixar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void handleHistoryVideoFullscreen(videoRefKey, videoItem.videoUrl)
+                                }
+                                className={`inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-2 text-[10px] font-semibold transition ${
+                                  isLight
+                                    ? "border-cyan-300 bg-cyan-500 text-white hover:bg-cyan-600"
+                                    : "border-cyan-400/45 bg-cyan-500/15 text-cyan-100 hover:bg-cyan-500/25"
+                                }`}
+                              >
+                                <MdFullscreen className="h-3.5 w-3.5" />
+                                Fullscreen
+                              </button>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                    {generatedVideoHistoryTotalPages > 1 ? (
+                      <div className="mt-2 flex items-center justify-end gap-2">
                         <button
                           type="button"
                           onClick={() =>
-                            void handleHistoryVideoFullscreen(videoRefKey, videoItem.videoUrl)
+                            setGeneratedVideoHistoryPage((current) => Math.max(1, current - 1))
                           }
-                          className={`inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-2 text-[10px] font-semibold transition ${
+                          disabled={safeGeneratedVideoHistoryPage <= 1}
+                          className={`inline-flex h-8 items-center rounded-lg border px-2 text-xs font-medium transition disabled:cursor-not-allowed ${
                             isLight
-                              ? "border-cyan-300 bg-cyan-500 text-white hover:bg-cyan-600"
-                              : "border-cyan-400/45 bg-cyan-500/15 text-cyan-100 hover:bg-cyan-500/25"
+                              ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:border-slate-200 disabled:text-slate-400"
+                              : "border-gray-600 bg-gray-900/70 text-gray-200 hover:bg-gray-800 disabled:border-gray-700 disabled:text-gray-500"
                           }`}
                         >
-                          <MdFullscreen className="h-3.5 w-3.5" />
-                          Fullscreen
+                          Anterior
+                        </button>
+                        <span className={`text-xs ${isLight ? "text-slate-600" : "text-gray-300"}`}>
+                          {safeGeneratedVideoHistoryPage}/{generatedVideoHistoryTotalPages}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setGeneratedVideoHistoryPage((current) =>
+                              Math.min(generatedVideoHistoryTotalPages, current + 1)
+                            )
+                          }
+                          disabled={safeGeneratedVideoHistoryPage >= generatedVideoHistoryTotalPages}
+                          className={`inline-flex h-8 items-center rounded-lg border px-2 text-xs font-medium transition disabled:cursor-not-allowed ${
+                            isLight
+                              ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:border-slate-200 disabled:text-slate-400"
+                              : "border-gray-600 bg-gray-900/70 text-gray-200 hover:bg-gray-800 disabled:border-gray-700 disabled:text-gray-500"
+                          }`}
+                        >
+                          Proxima
                         </button>
                       </div>
-                    </article>
-                  );
-                })}
-              </div>
-            ) : (
-              <div
-                className={`flex h-24 items-center justify-center rounded-xl border border-dashed text-xs ${
-                  isLight
-                    ? "border-slate-300 bg-slate-100 text-slate-500"
-                    : "border-purple-400/45 bg-purple-500/12 text-purple-100"
-                }`}
-              >
-                Nenhuma geracao ainda.
-              </div>
-            )}
+                    ) : null}
+                  </>
+                ) : (
+                  <div
+                    className={`flex h-20 items-center justify-center rounded-xl border border-dashed text-xs ${
+                      isLight
+                        ? "border-slate-300 bg-slate-100 text-slate-500"
+                        : "border-purple-400/45 bg-purple-500/12 text-purple-100"
+                    }`}
+                  >
+                    Nenhum video gerado ainda.
+                  </div>
+                )}
+              </section>
+            </div>
             {generatedHistoryWarning ? (
               <p className={`mt-2 ${mutedTextClass}`}>{generatedHistoryWarning}</p>
             ) : null}

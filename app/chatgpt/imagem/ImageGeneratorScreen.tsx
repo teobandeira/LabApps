@@ -201,7 +201,7 @@ const IMAGE_STUDIO_THEME_STORAGE_KEY = "chatgpt-image-studio-theme-v1";
 const IMAGE_GENERATION_CREDIT_COST = 1;
 const VIDEO_GENERATION_CREDIT_COST = 2;
 const BIBLIOTECA_INITIAL_VISIBLE_ITEMS = 8;
-const BIBLIOTECA_LOAD_MORE_ITEMS = 4;
+const BIBLIOTECA_PAGE_STEP_ITEMS = 4;
 const ALLOWED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
 const ALLOWED_IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp"];
 const VIDEO_PROMPT_PTBR_GUARDRAIL =
@@ -377,12 +377,15 @@ export default function ImageGeneratorScreen() {
   const [isMainDropzoneActive, setIsMainDropzoneActive] = useState(false);
   const [generatedImages, setGeneratedImages] = useState<GeneratedImageItem[]>([]);
   const [generatedVideos, setGeneratedVideos] = useState<GeneratedVideoItem[]>([]);
-  const [bibliotecaVisibleCount, setBibliotecaVisibleCount] = useState<number>(
+  const [bibliotecaImageVisibleCount, setBibliotecaImageVisibleCount] = useState<number>(
     BIBLIOTECA_INITIAL_VISIBLE_ITEMS,
   );
-  const [bibliotecaAutoLoadingMore, setBibliotecaAutoLoadingMore] = useState(false);
+  const [bibliotecaVideoVisibleCount, setBibliotecaVideoVisibleCount] = useState<number>(
+    BIBLIOTECA_INITIAL_VISIBLE_ITEMS,
+  );
   const [bibliotecaLoading, setBibliotecaLoading] = useState(false);
   const [bibliotecaError, setBibliotecaError] = useState<string | null>(null);
+  const [bibliotecaActiveTab, setBibliotecaActiveTab] = useState<"images" | "videos">("images");
   const [deletingMediaIds, setDeletingMediaIds] = useState<string[]>([]);
   const [deleteModalState, setDeleteModalState] = useState<DeleteModalState>(null);
   const [bibliotecaLightboxItem, setBibliotecaLightboxItem] =
@@ -402,8 +405,6 @@ export default function ImageGeneratorScreen() {
   const [creditsLoading, setCreditsLoading] = useState(false);
   const toastTimerRef = useRef<number | null>(null);
   const videoPreviewAnchorRef = useRef<HTMLDivElement | null>(null);
-  const bibliotecaLoadMoreAnchorRef = useRef<HTMLDivElement | null>(null);
-  const bibliotecaLoadMoreTimerRef = useRef<number | null>(null);
   const feedVideoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
   const feedVideoVisibilityRef = useRef<Map<string, number>>(new Map());
   const feedVideoObserverRef = useRef<IntersectionObserver | null>(null);
@@ -501,31 +502,30 @@ export default function ImageGeneratorScreen() {
 
   const bibliotecaImageCount = generatedImages.length;
   const bibliotecaVideoCount = generatedVideos.length;
-  const bibliotecaFeedItems = useMemo(() => {
+  const bibliotecaImageItems = useMemo(
+    () =>
+      [...generatedImages]
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .map((item) => ({
+          caption: item.revisedPrompt || item.prompt || "",
+          item,
+        })),
+    [generatedImages],
+  );
+  const bibliotecaVideoItems = useMemo(() => {
     const imagePromptById = new Map<string, string>();
     for (const image of generatedImages) {
       imagePromptById.set(image.id, image.revisedPrompt || image.prompt || "");
     }
 
-    const imageItems = generatedImages.map((item) => ({
-      type: "image" as const,
-      id: item.id,
-      createdAtTs: new Date(item.createdAt).getTime() || 0,
-      caption: item.revisedPrompt || item.prompt || "",
-      item,
-    }));
-
-    const videoItems = generatedVideos.map((item) => ({
-      type: "video" as const,
-      id: item.id,
-      createdAtTs: new Date(item.createdAt).getTime() || 0,
-      caption:
-        (item.sourceImageId ? imagePromptById.get(item.sourceImageId) : "") ||
-        "Prompt não disponível para este vídeo.",
-      item,
-    }));
-
-    return [...imageItems, ...videoItems].sort((a, b) => b.createdAtTs - a.createdAtTs);
+    return [...generatedVideos]
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .map((item) => ({
+        caption:
+          (item.sourceImageId ? imagePromptById.get(item.sourceImageId) : "") ||
+          "Prompt não disponível para este vídeo.",
+        item,
+      }));
   }, [generatedImages, generatedVideos]);
   const selectedVideosForMerge = useMemo(() => {
     const map = new Map(generatedVideos.map((video) => [video.id, video]));
@@ -533,11 +533,16 @@ export default function ImageGeneratorScreen() {
       .map((id) => map.get(id))
       .filter((item): item is GeneratedVideoItem => !!item);
   }, [generatedVideos, selectedVideoIdsForMerge]);
-  const bibliotecaVisibleItems = useMemo(
-    () => bibliotecaFeedItems.slice(0, bibliotecaVisibleCount),
-    [bibliotecaFeedItems, bibliotecaVisibleCount],
+  const bibliotecaVisibleImageItems = useMemo(
+    () => bibliotecaImageItems.slice(0, bibliotecaImageVisibleCount),
+    [bibliotecaImageItems, bibliotecaImageVisibleCount],
   );
-  const hasMoreBibliotecaItems = bibliotecaVisibleCount < bibliotecaFeedItems.length;
+  const bibliotecaVisibleVideoItems = useMemo(
+    () => bibliotecaVideoItems.slice(0, bibliotecaVideoVisibleCount),
+    [bibliotecaVideoItems, bibliotecaVideoVisibleCount],
+  );
+  const hasMoreBibliotecaImageItems = bibliotecaImageVisibleCount < bibliotecaImageItems.length;
+  const hasMoreBibliotecaVideoItems = bibliotecaVideoVisibleCount < bibliotecaVideoItems.length;
 
   const notify = (type: "success" | "error", message: string) => {
     setToastState({ type, message });
@@ -661,64 +666,18 @@ export default function ImageGeneratorScreen() {
   }, [generatedImages, generatedVideos]);
 
   useEffect(() => {
-    setBibliotecaVisibleCount(BIBLIOTECA_INITIAL_VISIBLE_ITEMS);
+    setBibliotecaImageVisibleCount(BIBLIOTECA_INITIAL_VISIBLE_ITEMS);
+    setBibliotecaVideoVisibleCount(BIBLIOTECA_INITIAL_VISIBLE_ITEMS);
   }, [chatDeviceId]);
 
   useEffect(() => {
-    if (!hasMoreBibliotecaItems) {
-      setBibliotecaAutoLoadingMore(false);
+    if (bibliotecaActiveTab === "images" && bibliotecaImageCount === 0 && bibliotecaVideoCount > 0) {
+      setBibliotecaActiveTab("videos");
     }
-  }, [hasMoreBibliotecaItems]);
-
-  useEffect(() => {
-    const anchor = bibliotecaLoadMoreAnchorRef.current;
-    if (!anchor || bibliotecaLoading || !!bibliotecaError || !hasMoreBibliotecaItems) {
-      return;
+    if (bibliotecaActiveTab === "videos" && bibliotecaVideoCount === 0 && bibliotecaImageCount > 0) {
+      setBibliotecaActiveTab("images");
     }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const [entry] = entries;
-        if (!entry?.isIntersecting) return;
-        if (bibliotecaAutoLoadingMore) return;
-
-        setBibliotecaAutoLoadingMore(true);
-        if (bibliotecaLoadMoreTimerRef.current) {
-          window.clearTimeout(bibliotecaLoadMoreTimerRef.current);
-        }
-        bibliotecaLoadMoreTimerRef.current = window.setTimeout(() => {
-          setBibliotecaVisibleCount((current) =>
-            Math.min(current + BIBLIOTECA_LOAD_MORE_ITEMS, bibliotecaFeedItems.length),
-          );
-          setBibliotecaAutoLoadingMore(false);
-          bibliotecaLoadMoreTimerRef.current = null;
-        }, 220);
-      },
-      {
-        root: null,
-        threshold: 0.1,
-        rootMargin: "200px 0px",
-      },
-    );
-
-    observer.observe(anchor);
-    return () => observer.disconnect();
-  }, [
-    bibliotecaAutoLoadingMore,
-    bibliotecaError,
-    bibliotecaFeedItems.length,
-    bibliotecaLoading,
-    hasMoreBibliotecaItems,
-  ]);
-
-  useEffect(() => {
-    return () => {
-      if (bibliotecaLoadMoreTimerRef.current) {
-        window.clearTimeout(bibliotecaLoadMoreTimerRef.current);
-        bibliotecaLoadMoreTimerRef.current = null;
-      }
-    };
-  }, []);
+  }, [bibliotecaActiveTab, bibliotecaImageCount, bibliotecaVideoCount]);
 
   const syncFeedVideoPlayback = useCallback(() => {
     let bestVisibleId: string | null = null;
@@ -1856,15 +1815,58 @@ export default function ImageGeneratorScreen() {
               </div>
             </div>
           ) : (
-            bibliotecaFeedItems.length === 0 ? (
+            bibliotecaImageItems.length === 0 && bibliotecaVideoItems.length === 0 ? (
               <div className="rounded-xl border border-gray-700 bg-gray-900/60 px-4 py-6 text-center text-sm text-gray-300">
                 Nenhum item encontrado.
               </div>
             ) : (
               <>
-                <div className="columns-1 gap-4 sm:columns-2 lg:columns-3 xl:columns-4">
-                  {bibliotecaVisibleItems.map((feedItem) =>
-                    feedItem.type === "image" ? (
+                <div className="space-y-6">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setBibliotecaActiveTab("images")}
+                      className={`inline-flex h-9 items-center rounded-lg border px-3 text-xs font-semibold uppercase tracking-[0.08em] transition ${
+                        bibliotecaActiveTab === "images"
+                          ? isLightTheme
+                            ? "border-violet-500 bg-violet-100 text-violet-800"
+                            : "border-violet-400/55 bg-violet-500/20 text-violet-100"
+                          : isLightTheme
+                            ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                            : "border-gray-600 bg-gray-900/70 text-gray-300 hover:bg-gray-800"
+                      }`}
+                    >
+                      Imagens ({bibliotecaImageCount})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBibliotecaActiveTab("videos")}
+                      className={`inline-flex h-9 items-center rounded-lg border px-3 text-xs font-semibold uppercase tracking-[0.08em] transition ${
+                        bibliotecaActiveTab === "videos"
+                          ? isLightTheme
+                            ? "border-cyan-500 bg-cyan-100 text-cyan-800"
+                            : "border-cyan-400/55 bg-cyan-500/20 text-cyan-100"
+                          : isLightTheme
+                            ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                            : "border-gray-600 bg-gray-900/70 text-gray-300 hover:bg-gray-800"
+                      }`}
+                    >
+                      Vídeos ({bibliotecaVideoCount})
+                    </button>
+                  </div>
+
+                  {bibliotecaActiveTab === "images" ? (
+                  <section>
+                    <div className="mb-2 flex items-center justify-between">
+                      <p className={`text-xs font-semibold uppercase tracking-[0.1em] ${isLightTheme ? "text-violet-700" : "text-violet-200"}`}>
+                        Imagens
+                      </p>
+                      <span className={`text-[11px] ${isLightTheme ? "text-slate-600" : "text-gray-400"}`}>
+                        {bibliotecaImageCount} itens
+                      </span>
+                    </div>
+                    <div className="columns-1 gap-4 sm:columns-2 lg:columns-3 xl:columns-4">
+                      {bibliotecaVisibleImageItems.map((feedItem) => (
                     <article
                       key={`image-${feedItem.item.id}`}
                       className={`mb-4 break-inside-avoid rounded-xl p-3 ${
@@ -1992,7 +1994,40 @@ export default function ImageGeneratorScreen() {
                         ) : null}
                       </div>
                     </article>
-                    ) : (
+                      ))}
+                    </div>
+                    {hasMoreBibliotecaImageItems ? (
+                      <div className="mt-3 flex justify-center">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setBibliotecaImageVisibleCount((current) =>
+                              Math.min(current + BIBLIOTECA_PAGE_STEP_ITEMS, bibliotecaImageItems.length),
+                            )
+                          }
+                          className={`inline-flex h-9 items-center rounded-lg border px-3 text-xs font-semibold transition ${
+                            isLightTheme
+                              ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                              : "border-gray-600 bg-gray-900/70 text-gray-200 hover:bg-gray-800"
+                          }`}
+                        >
+                          Carregar mais imagens
+                        </button>
+                      </div>
+                    ) : null}
+                  </section>
+                  ) : (
+                  <section>
+                    <div className="mb-2 flex items-center justify-between">
+                      <p className={`text-xs font-semibold uppercase tracking-[0.1em] ${isLightTheme ? "text-cyan-700" : "text-cyan-200"}`}>
+                        Vídeos
+                      </p>
+                      <span className={`text-[11px] ${isLightTheme ? "text-slate-600" : "text-gray-400"}`}>
+                        {bibliotecaVideoCount} itens
+                      </span>
+                    </div>
+                    <div className="columns-1 gap-4 sm:columns-2 lg:columns-3 xl:columns-4">
+                      {bibliotecaVisibleVideoItems.map((feedItem) => (
                       <article
                         key={`video-${feedItem.item.id}`}
                         className={`mb-4 break-inside-avoid rounded-xl p-3 ${
@@ -2128,24 +2163,30 @@ export default function ImageGeneratorScreen() {
                       </div>
 
                       </article>
-                    ),
+                      ))}
+                    </div>
+                    {hasMoreBibliotecaVideoItems ? (
+                      <div className="mt-3 flex justify-center">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setBibliotecaVideoVisibleCount((current) =>
+                              Math.min(current + BIBLIOTECA_PAGE_STEP_ITEMS, bibliotecaVideoItems.length),
+                            )
+                          }
+                          className={`inline-flex h-9 items-center rounded-lg border px-3 text-xs font-semibold transition ${
+                            isLightTheme
+                              ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                              : "border-gray-600 bg-gray-900/70 text-gray-200 hover:bg-gray-800"
+                          }`}
+                        >
+                          Carregar mais vídeos
+                        </button>
+                      </div>
+                    ) : null}
+                  </section>
                   )}
                 </div>
-                {(hasMoreBibliotecaItems || bibliotecaAutoLoadingMore) ? (
-                  <div
-                    ref={bibliotecaLoadMoreAnchorRef}
-                    className={`mt-4 flex items-center justify-center rounded-lg border px-3 py-2 text-xs ${
-                      isLightTheme
-                        ? "border-slate-200 bg-white text-slate-600"
-                        : "border-gray-700 bg-gray-900/60 text-gray-300"
-                    }`}
-                  >
-                    <span className="inline-flex items-center gap-2">
-                      <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-r-transparent" />
-                      Carregando mais itens...
-                    </span>
-                  </div>
-                ) : null}
               </>
             )
           )}
