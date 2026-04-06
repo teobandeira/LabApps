@@ -6,7 +6,9 @@ import { prisma } from "@/lib/prisma";
 export async function GET(request: NextRequest) {
   try {
     const deviceId = normalizeDeviceId(request.nextUrl.searchParams.get("deviceId"));
-    if (!deviceId) {
+    const scope = (request.nextUrl.searchParams.get("scope") || "").trim().toLowerCase();
+    const includeAll = scope === "all";
+    if (!deviceId && !includeAll) {
       return NextResponse.json({ error: "deviceId obrigatorio." }, { status: 400 });
     }
 
@@ -16,7 +18,7 @@ export async function GET(request: NextRequest) {
     const cursorId = rawCursor ? rawCursor.trim() : "";
 
     const videos = await prisma.generatedVideo.findMany({
-      where: { deviceId },
+      ...(includeAll ? {} : { where: { deviceId } }),
       orderBy: { createdAt: "desc" },
       take: limit + 1,
       ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
@@ -41,7 +43,7 @@ export async function GET(request: NextRequest) {
         sourceImageId: video.sourceImageId,
         sourceImageThumbnailUrl: video.sourceImageId
           ? `/api/chatgpt/generated-image/${video.sourceImageId}?deviceId=${encodeURIComponent(
-              video.deviceId || deviceId,
+              video.deviceId || deviceId || "",
             )}&thumb=1&w=480&q=55`
           : null,
         model: video.model,
@@ -50,7 +52,7 @@ export async function GET(request: NextRequest) {
         resolution: video.resolution,
         createdAt: video.createdAt.toISOString(),
         videoUrl: `/api/chatgpt/generated-video/${video.id}?deviceId=${encodeURIComponent(
-          video.deviceId || deviceId,
+          video.deviceId || deviceId || "",
         )}`,
       })),
       nextCursor,

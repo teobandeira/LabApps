@@ -579,44 +579,59 @@ export default function ImageGeneratorScreen() {
           const endpoint = isImages
             ? "/api/chatgpt/generated-images"
             : "/api/chatgpt/generated-videos";
-          const cursor = append ? bibliotecaCursorByTab[targetTab] : null;
-          const params = new URLSearchParams();
-          params.set("deviceId", deviceIdParam);
-          params.set("limit", String(BIBLIOTECA_PAGE_LIMIT));
-          if (cursor) {
-            params.set("cursor", cursor);
-          }
+          const mergedItems: (GeneratedImageItem | GeneratedVideoItem)[] = [];
+          let nextCursor: string | null = append ? bibliotecaCursorByTab[targetTab] : null;
+          let hasNextPage = true;
 
-          const res = await fetch(`${endpoint}?${params.toString()}`, {
-            cache: "no-store",
-          });
-          const data = await res.json();
-          if (!res.ok || data?.error) {
-            throw new Error(
-              data?.error ||
-                (isImages
-                  ? "Falha ao carregar imagens da biblioteca."
-                  : "Falha ao carregar vídeos da biblioteca."),
-            );
-          }
+          while (hasNextPage) {
+            const params = new URLSearchParams();
+            params.set("deviceId", deviceIdParam);
+            params.set("scope", "all");
+            params.set("limit", String(BIBLIOTECA_PAGE_LIMIT));
+            if (nextCursor) {
+              params.set("cursor", nextCursor);
+            }
 
-          const incomingItems = Array.isArray(isImages ? data?.images : data?.videos)
-            ? (isImages ? data.images : data.videos)
-            : [];
-          const nextCursor = typeof data?.nextCursor === "string" ? data.nextCursor : null;
+            const res = await fetch(`${endpoint}?${params.toString()}`, {
+              cache: "no-store",
+            });
+            const data = await res.json();
+            if (!res.ok || data?.error) {
+              throw new Error(
+                data?.error ||
+                  (isImages
+                    ? "Falha ao carregar imagens da biblioteca."
+                    : "Falha ao carregar vídeos da biblioteca."),
+              );
+            }
+
+            const pageItems = Array.isArray(isImages ? data?.images : data?.videos)
+              ? (isImages ? data.images : data.videos)
+              : [];
+            if (pageItems.length > 0) {
+              mergedItems.push(...pageItems);
+            }
+
+            nextCursor = typeof data?.nextCursor === "string" ? data.nextCursor : null;
+            if (append) {
+              hasNextPage = false;
+            } else {
+              hasNextPage = Boolean(nextCursor);
+            }
+          }
 
           if (isImages) {
             setGeneratedImages((current) => {
-              if (!append) return incomingItems;
-              const merged = [...current, ...incomingItems];
+              if (!append) return mergedItems as GeneratedImageItem[];
+              const merged = [...current, ...(mergedItems as GeneratedImageItem[])];
               const unique = new Map<string, GeneratedImageItem>();
               merged.forEach((item) => unique.set(item.id, item));
               return Array.from(unique.values());
             });
           } else {
             setGeneratedVideos((current) => {
-              if (!append) return incomingItems;
-              const merged = [...current, ...incomingItems];
+              if (!append) return mergedItems as GeneratedVideoItem[];
+              const merged = [...current, ...(mergedItems as GeneratedVideoItem[])];
               const unique = new Map<string, GeneratedVideoItem>();
               merged.forEach((item) => unique.set(item.id, item));
               return Array.from(unique.values());

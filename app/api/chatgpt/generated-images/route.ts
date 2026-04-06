@@ -6,7 +6,9 @@ import { prisma } from "@/lib/prisma";
 export async function GET(request: NextRequest) {
   try {
     const deviceId = normalizeDeviceId(request.nextUrl.searchParams.get("deviceId"));
-    if (!deviceId) {
+    const scope = (request.nextUrl.searchParams.get("scope") || "").trim().toLowerCase();
+    const includeAll = scope === "all";
+    if (!deviceId && !includeAll) {
       return NextResponse.json({ error: "deviceId obrigatorio." }, { status: 400 });
     }
     const rawLimit = Number.parseInt(request.nextUrl.searchParams.get("limit") || "8", 10);
@@ -15,7 +17,7 @@ export async function GET(request: NextRequest) {
     const cursorId = rawCursor ? rawCursor.trim() : "";
 
     const images = await prisma.generatedImage.findMany({
-      where: { deviceId },
+      ...(includeAll ? {} : { where: { deviceId } }),
       orderBy: { createdAt: "desc" },
       take: limit + 1,
       ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
@@ -44,10 +46,10 @@ export async function GET(request: NextRequest) {
         action: image.action,
         createdAt: image.createdAt.toISOString(),
         imageUrl: `/api/chatgpt/generated-image/${image.id}?deviceId=${encodeURIComponent(
-          image.deviceId || deviceId,
+          image.deviceId || deviceId || "",
         )}`,
         thumbnailUrl: `/api/chatgpt/generated-image/${image.id}?deviceId=${encodeURIComponent(
-          image.deviceId || deviceId,
+          image.deviceId || deviceId || "",
         )}&thumb=1&w=480&q=60`,
       })),
       nextCursor,
