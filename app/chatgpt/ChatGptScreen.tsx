@@ -21,6 +21,7 @@ import {
   MdChevronLeft,
   MdChevronRight,
   MdContentCopy,
+  MdEdit,
   MdDeleteOutline,
   MdClose,
   MdDone,
@@ -1150,7 +1151,10 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   const [chatSessionsLoaded, setChatSessionsLoaded] = useState(false);
   const [isMobileChatSidebarOpen, setIsMobileChatSidebarOpen] = useState(false);
   const [chatIdPendingDelete, setChatIdPendingDelete] = useState<string | null>(null);
+  const [chatIdPendingRename, setChatIdPendingRename] = useState<string | null>(null);
+  const [renameChatTitleInput, setRenameChatTitleInput] = useState("");
   const [isDeletingChat, setIsDeletingChat] = useState(false);
+  const [isRenamingChat, setIsRenamingChat] = useState(false);
   const [isChatStreamActive, setIsChatStreamActive] = useState(false);
   const [isChatNearBottom, setIsChatNearBottom] = useState(true);
   const [copiedCodeKey, setCopiedCodeKey] = useState<string | null>(null);
@@ -1281,6 +1285,15 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
         if (sessions.length === 0) {
           const createdSession = await createChatSessionOnDb(deviceId);
           sessions = [createdSession];
+        } else {
+          const firstSession = sessions[0];
+          const firstSessionHasMessages =
+            Array.isArray(firstSession?.messages) && firstSession.messages.length > 0;
+
+          if (firstSessionHasMessages) {
+            const createdSession = await createChatSessionOnDb(deviceId);
+            sessions = [createdSession, ...sessions];
+          }
         }
 
         if (!active) {
@@ -1362,7 +1375,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   }, [isTopMenuOpen]);
 
   useEffect(() => {
-    if (!isMobileChatSidebarOpen && !chatIdPendingDelete) {
+    if (!isMobileChatSidebarOpen && !chatIdPendingDelete && !chatIdPendingRename) {
       return;
     }
 
@@ -1371,8 +1384,9 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
         return;
       }
 
-      if (!isDeletingChat) {
+      if (!isDeletingChat && !isRenamingChat) {
         setChatIdPendingDelete(null);
+        setChatIdPendingRename(null);
       }
       setIsMobileChatSidebarOpen(false);
     }
@@ -1381,7 +1395,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     return () => {
       window.removeEventListener("keydown", handleEscape);
     };
-  }, [isMobileChatSidebarOpen, chatIdPendingDelete, isDeletingChat]);
+  }, [isMobileChatSidebarOpen, chatIdPendingDelete, chatIdPendingRename, isDeletingChat, isRenamingChat]);
 
   useEffect(() => {
     if (mode !== "image" || !chatDeviceId) {
@@ -2105,6 +2119,10 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
     chatIdPendingDelete !== null
       ? chatSessions.find((session) => session.id === chatIdPendingDelete) ?? null
       : null;
+  const pendingRenameSession =
+    chatIdPendingRename !== null
+      ? chatSessions.find((session) => session.id === chatIdPendingRename) ?? null
+      : null;
   const historyLightboxCaption =
     historyLightboxItem?.revisedPrompt?.trim() || historyLightboxItem?.prompt?.trim() || "";
   const videoGenerationModalTargetKey = videoGenerationModalSource
@@ -2255,9 +2273,11 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
     setChatSessions((current) => {
       const activeSession = current.find((session) => session.id === activeChatId);
+      const activeTitle = activeSession?.title?.trim() ?? "";
+      const isCustomTitle = activeTitle !== "" && activeTitle !== "Novo chat";
       const updatedSession: ChatSession = {
         id: activeChatId,
-        title: nextTitle || activeSession?.title || "Novo chat",
+        title: isCustomTitle ? activeSession?.title ?? "Novo chat" : nextTitle || activeSession?.title || "Novo chat",
         updatedAt,
         messages: nextMessages,
       };
@@ -2414,6 +2434,7 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
   }
 
   function requestDeleteChat(sessionId: string) {
+    setChatIdPendingRename(null);
     setChatIdPendingDelete(sessionId);
   }
 
@@ -2422,6 +2443,67 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
       return;
     }
     setChatIdPendingDelete(null);
+  }
+
+  function requestRenameChat(sessionId: string) {
+    if (loading || isDeletingChat || isRenamingChat) {
+      return;
+    }
+
+    const session = chatSessions.find((item) => item.id === sessionId);
+    if (!session) {
+      return;
+    }
+
+    setChatIdPendingDelete(null);
+    setRenameChatTitleInput(session.title);
+    setChatIdPendingRename(sessionId);
+  }
+
+  function closeRenameChatModal() {
+    if (isRenamingChat) {
+      return;
+    }
+    setChatIdPendingRename(null);
+    setRenameChatTitleInput("");
+  }
+
+  async function confirmRenameChat() {
+    if (!chatIdPendingRename || !chatDeviceId || isRenamingChat) {
+      return;
+    }
+
+    const trimmedTitle = truncateText(renameChatTitleInput.trim(), CHAT_SESSION_TITLE_MAX_LENGTH);
+    if (!trimmedTitle) {
+      setError("Digite um titulo para o chat.");
+      return;
+    }
+
+    const session = chatSessions.find((item) => item.id === chatIdPendingRename);
+    if (!session) {
+      closeRenameChatModal();
+      return;
+    }
+
+    const updatedSession: ChatSession = {
+      ...session,
+      title: trimmedTitle,
+      updatedAt: new Date().toISOString(),
+    };
+
+    try {
+      setIsRenamingChat(true);
+      setChatSessions((current) =>
+        current.map((item) => (item.id === updatedSession.id ? updatedSession : item))
+      );
+      await saveChatSessionOnDb(chatDeviceId, updatedSession);
+      setChatIdPendingRename(null);
+      setRenameChatTitleInput("");
+    } catch {
+      setError("Nao foi possivel renomear o chat agora.");
+    } finally {
+      setIsRenamingChat(false);
+    }
   }
 
   async function confirmDeleteChat() {
@@ -4761,8 +4843,23 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
                           <button
                             type="button"
+                            onClick={() => requestRenameChat(session.id)}
+                            disabled={loading || isDeletingChat || isRenamingChat}
+                            className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${
+                              isLight
+                                ? "text-slate-500 hover:bg-slate-200 hover:text-slate-700"
+                                : "text-gray-400 hover:bg-gray-800 hover:text-gray-200"
+                            }`}
+                            aria-label={`Renomear chat ${session.title}`}
+                            title="Renomear chat"
+                          >
+                            <MdEdit className="h-4 w-4" />
+                          </button>
+
+                          <button
+                            type="button"
                             onClick={() => requestDeleteChat(session.id)}
-                            disabled={loading || isDeletingChat}
+                            disabled={loading || isDeletingChat || isRenamingChat}
                             className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${
                               isLight
                                 ? "text-slate-500 hover:bg-slate-200 hover:text-slate-700"
@@ -4793,9 +4890,25 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                     );
                   })
                 ) : (
-                  <p className={`px-2 text-xs ${isLight ? "text-slate-500" : "text-gray-400"}`}>
-                    Carregando chats...
-                  </p>
+                  Array.from({ length: 6 }).map((_, index) => (
+                    <article
+                      key={`mobile-chat-skeleton-${index}`}
+                      className={`w-full rounded-xl border px-3 py-2 ${
+                        isLight ? "border-slate-200 bg-white" : "border-gray-700 bg-gray-900/70"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1 space-y-2">
+                          <Skeleton className="h-4 w-3/5" />
+                        </div>
+                        <Skeleton className="h-7 w-7 rounded-md" />
+                      </div>
+                      <div className="mt-2 space-y-2">
+                        <Skeleton className="h-3 w-11/12" />
+                        <Skeleton className="h-2.5 w-2/5" />
+                      </div>
+                    </article>
+                  ))
                 )}
               </div>
             </aside>
@@ -4863,8 +4976,23 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
                         <button
                           type="button"
+                          onClick={() => requestRenameChat(session.id)}
+                          disabled={loading || isDeletingChat || isRenamingChat}
+                          className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${
+                            isLight
+                              ? "text-slate-500 hover:bg-slate-200 hover:text-slate-700"
+                              : "text-gray-400 hover:bg-gray-800 hover:text-gray-200"
+                          }`}
+                          aria-label={`Renomear chat ${session.title}`}
+                          title="Renomear chat"
+                        >
+                          <MdEdit className="h-4 w-4" />
+                        </button>
+
+                        <button
+                          type="button"
                           onClick={() => requestDeleteChat(session.id)}
-                          disabled={loading || isDeletingChat}
+                          disabled={loading || isDeletingChat || isRenamingChat}
                           className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${
                             isLight
                               ? "text-slate-500 hover:bg-slate-200 hover:text-slate-700"
@@ -4895,9 +5023,25 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                   );
                 })
               ) : (
-                <p className={`px-2 text-xs ${isLight ? "text-slate-500" : "text-gray-400"}`}>
-                  Carregando chats...
-                </p>
+                Array.from({ length: 8 }).map((_, index) => (
+                  <article
+                    key={`desktop-chat-skeleton-${index}`}
+                    className={`w-full rounded-xl border px-3 py-2 ${
+                      isLight ? "border-slate-200 bg-white" : "border-gray-700 bg-gray-900/70"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1 space-y-2">
+                        <Skeleton className="h-4 w-3/5" />
+                      </div>
+                      <Skeleton className="h-7 w-7 rounded-md" />
+                    </div>
+                    <div className="mt-2 space-y-2">
+                      <Skeleton className="h-3 w-11/12" />
+                      <Skeleton className="h-2.5 w-2/5" />
+                    </div>
+                  </article>
+                ))
               )}
             </div>
 
@@ -4922,13 +5066,13 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
                 <section className="flex min-h-[62vh] flex-1 items-center justify-center sm:min-h-[66vh]">
                   <div className="flex max-w-md flex-col items-center justify-center text-center">
                     <span
-                      className={`inline-flex h-20 w-20 items-center justify-center rounded-2xl border ${
+                      className={`inline-flex h-16 w-16 items-center justify-center rounded-2xl border ${
                         isLight
                           ? "border-violet-200 bg-violet-50 text-violet-600"
                           : "border-purple-400/45 bg-purple-500/15 text-purple-200"
                       }`}
                     >
-                      <SiOpenai className="h-11 w-11" />
+                      <SiOpenai className="h-9 w-9" />
                     </span>
                     <h2
                       className={`chat-empty-greeting-title mt-6 font-medium ${
@@ -5140,6 +5284,82 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
         </div>
         </div>
       </section>
+
+      {chatIdPendingRename ? (
+        <div
+          className="fixed inset-0 z-92 flex items-center justify-center bg-black/60 p-4"
+          onClick={closeRenameChatModal}
+        >
+          <div
+            className={`w-full max-w-md rounded-2xl border p-5 shadow-2xl ${
+              isLight ? "border-slate-200 bg-white text-slate-900" : "border-gray-700 bg-gray-900 text-gray-100"
+            }`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 className="text-base font-semibold">Renomear chat</h3>
+            <p className={`mt-2 text-sm leading-relaxed ${isLight ? "text-slate-600" : "text-gray-300"}`}>
+              Altere o nome de{" "}
+              <strong>{pendingRenameSession?.title ?? "este chat"}</strong>.
+            </p>
+            <form
+              className="mt-3"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void confirmRenameChat();
+              }}
+            >
+              <label
+                htmlFor="rename-chat-title"
+                className={`mb-2 block text-xs font-medium ${isLight ? "text-slate-600" : "text-gray-300"}`}
+              >
+                Novo titulo
+              </label>
+              <input
+                id="rename-chat-title"
+                type="text"
+                maxLength={CHAT_SESSION_TITLE_MAX_LENGTH}
+                value={renameChatTitleInput}
+                onChange={(event) => setRenameChatTitleInput(event.target.value)}
+                disabled={isRenamingChat}
+                autoFocus
+                className={`h-11 w-full rounded-xl px-3 text-sm outline-none transition ${
+                  isLight
+                    ? "border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:border-violet-400"
+                    : "border border-gray-700/90 bg-gray-900/85 text-gray-100 placeholder:text-gray-500 focus:border-purple-400"
+                }`}
+                placeholder="Digite o titulo do chat"
+              />
+
+              <div className="mt-4 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={closeRenameChatModal}
+                  disabled={isRenamingChat}
+                  className={`inline-flex h-10 items-center justify-center rounded-xl px-4 text-sm font-medium transition disabled:cursor-not-allowed ${
+                    isLight
+                      ? "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:border-slate-200 disabled:text-slate-400"
+                      : "border border-gray-600 bg-gray-900/70 text-gray-200 hover:bg-gray-800 disabled:border-gray-700 disabled:text-gray-500"
+                  }`}
+                >
+                  Cancelar
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={isRenamingChat}
+                  className={`inline-flex h-10 items-center justify-center rounded-xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed ${
+                    isLight
+                      ? "border border-violet-300 bg-violet-500 text-white hover:bg-violet-600 disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-400"
+                      : "border border-purple-400/45 bg-purple-500/25 text-purple-100 hover:bg-purple-500/35 disabled:border-gray-600 disabled:bg-gray-700 disabled:text-gray-500"
+                  }`}
+                >
+                  {isRenamingChat ? "Salvando..." : "Salvar"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
 
       {chatIdPendingDelete ? (
         <div
