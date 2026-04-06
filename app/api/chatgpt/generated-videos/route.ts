@@ -10,8 +10,16 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "deviceId obrigatorio." }, { status: 400 });
     }
 
+    const rawLimit = Number.parseInt(request.nextUrl.searchParams.get("limit") || "8", 10);
+    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 50) : 8;
+    const rawCursor = request.nextUrl.searchParams.get("cursor");
+    const cursorId = rawCursor ? rawCursor.trim() : "";
+
     const videos = await prisma.generatedVideo.findMany({
+      where: { deviceId },
       orderBy: { createdAt: "desc" },
+      take: limit + 1,
+      ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
       select: {
         id: true,
         deviceId: true,
@@ -23,9 +31,12 @@ export async function GET(request: NextRequest) {
         createdAt: true,
       },
     });
+    const hasMore = videos.length > limit;
+    const pageItems = hasMore ? videos.slice(0, limit) : videos;
+    const nextCursor = hasMore ? pageItems[pageItems.length - 1]?.id ?? null : null;
 
     return NextResponse.json({
-      videos: videos.map((video) => ({
+      videos: pageItems.map((video) => ({
         id: video.id,
         sourceImageId: video.sourceImageId,
         sourceImageThumbnailUrl: video.sourceImageId
@@ -42,6 +53,7 @@ export async function GET(request: NextRequest) {
           video.deviceId || deviceId,
         )}`,
       })),
+      nextCursor,
     });
   } catch {
     return NextResponse.json(

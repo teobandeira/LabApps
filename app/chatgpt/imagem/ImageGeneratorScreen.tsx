@@ -200,8 +200,7 @@ const CHAT_DEVICE_ID_STORAGE_KEY = "chatgpt-device-id-v1";
 const IMAGE_STUDIO_THEME_STORAGE_KEY = "chatgpt-image-studio-theme-v1";
 const IMAGE_GENERATION_CREDIT_COST = 1;
 const VIDEO_GENERATION_CREDIT_COST = 2;
-const BIBLIOTECA_INITIAL_VISIBLE_ITEMS = 8;
-const BIBLIOTECA_PAGE_STEP_ITEMS = 4;
+const BIBLIOTECA_PAGE_LIMIT = 8;
 const ALLOWED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
 const ALLOWED_IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp"];
 const VIDEO_PROMPT_PTBR_GUARDRAIL =
@@ -377,12 +376,23 @@ export default function ImageGeneratorScreen() {
   const [isMainDropzoneActive, setIsMainDropzoneActive] = useState(false);
   const [generatedImages, setGeneratedImages] = useState<GeneratedImageItem[]>([]);
   const [generatedVideos, setGeneratedVideos] = useState<GeneratedVideoItem[]>([]);
-  const [bibliotecaImageVisibleCount, setBibliotecaImageVisibleCount] = useState<number>(
-    BIBLIOTECA_INITIAL_VISIBLE_ITEMS,
-  );
-  const [bibliotecaVideoVisibleCount, setBibliotecaVideoVisibleCount] = useState<number>(
-    BIBLIOTECA_INITIAL_VISIBLE_ITEMS,
-  );
+  const [bibliotecaCursorByTab, setBibliotecaCursorByTab] = useState<{
+    images: string | null;
+    videos: string | null;
+  }>({
+    images: null,
+    videos: null,
+  });
+  const [bibliotecaHasMoreByTab, setBibliotecaHasMoreByTab] = useState<{
+    images: boolean;
+    videos: boolean;
+  }>({
+    images: false,
+    videos: false,
+  });
+  const [bibliotecaLoadingMoreTab, setBibliotecaLoadingMoreTab] = useState<
+    "images" | "videos" | null
+  >(null);
   const [bibliotecaLoading, setBibliotecaLoading] = useState(false);
   const [bibliotecaError, setBibliotecaError] = useState<string | null>(null);
   const [bibliotecaActiveTab, setBibliotecaActiveTab] = useState<"images" | "videos">("images");
@@ -533,16 +543,8 @@ export default function ImageGeneratorScreen() {
       .map((id) => map.get(id))
       .filter((item): item is GeneratedVideoItem => !!item);
   }, [generatedVideos, selectedVideoIdsForMerge]);
-  const bibliotecaVisibleImageItems = useMemo(
-    () => bibliotecaImageItems.slice(0, bibliotecaImageVisibleCount),
-    [bibliotecaImageItems, bibliotecaImageVisibleCount],
-  );
-  const bibliotecaVisibleVideoItems = useMemo(
-    () => bibliotecaVideoItems.slice(0, bibliotecaVideoVisibleCount),
-    [bibliotecaVideoItems, bibliotecaVideoVisibleCount],
-  );
-  const hasMoreBibliotecaImageItems = bibliotecaImageVisibleCount < bibliotecaImageItems.length;
-  const hasMoreBibliotecaVideoItems = bibliotecaVideoVisibleCount < bibliotecaVideoItems.length;
+  const hasMoreBibliotecaImageItems = bibliotecaHasMoreByTab.images;
+  const hasMoreBibliotecaVideoItems = bibliotecaHasMoreByTab.videos;
 
   const notify = (type: "success" | "error", message: string) => {
     setToastState({ type, message });
@@ -555,38 +557,92 @@ export default function ImageGeneratorScreen() {
     }, 3500);
   };
 
-  const loadBiblioteca = async (deviceIdParam: string) => {
-    setBibliotecaLoading(true);
+  const loadBiblioteca = async (
+    deviceIdParam: string,
+    options?: { append?: boolean; tab?: "images" | "videos" },
+  ) => {
+    const append = Boolean(options?.append);
+    const tab = options?.tab;
+    const targetTabs = tab ? [tab] : (["images", "videos"] as const);
+
+    if (append && tab) {
+      setBibliotecaLoadingMoreTab(tab);
+    } else {
+      setBibliotecaLoading(true);
+    }
     setBibliotecaError(null);
 
     try {
-      const [imagesRes, videosRes] = await Promise.all([
-        fetch(`/api/chatgpt/generated-images?deviceId=${encodeURIComponent(deviceIdParam)}`, {
-          cache: "no-store",
+      await Promise.all(
+        targetTabs.map(async (targetTab) => {
+          const isImages = targetTab === "images";
+          const endpoint = isImages
+            ? "/api/chatgpt/generated-images"
+            : "/api/chatgpt/generated-videos";
+          const cursor = append ? bibliotecaCursorByTab[targetTab] : null;
+          const params = new URLSearchParams();
+          params.set("deviceId", deviceIdParam);
+          params.set("limit", String(BIBLIOTECA_PAGE_LIMIT));
+          if (cursor) {
+            params.set("cursor", cursor);
+          }
+
+          const res = await fetch(`${endpoint}?${params.toString()}`, {
+            cache: "no-store",
+          });
+          const data = await res.json();
+          if (!res.ok || data?.error) {
+            throw new Error(
+              data?.error ||
+                (isImages
+                  ? "Falha ao carregar imagens da biblioteca."
+                  : "Falha ao carregar vídeos da biblioteca."),
+            );
+          }
+
+          const incomingItems = Array.isArray(isImages ? data?.images : data?.videos)
+            ? (isImages ? data.images : data.videos)
+            : [];
+          const nextCursor = typeof data?.nextCursor === "string" ? data.nextCursor : null;
+
+          if (isImages) {
+            setGeneratedImages((current) => {
+              if (!append) return incomingItems;
+              const merged = [...current, ...incomingItems];
+              const unique = new Map<string, GeneratedImageItem>();
+              merged.forEach((item) => unique.set(item.id, item));
+              return Array.from(unique.values());
+            });
+          } else {
+            setGeneratedVideos((current) => {
+              if (!append) return incomingItems;
+              const merged = [...current, ...incomingItems];
+              const unique = new Map<string, GeneratedVideoItem>();
+              merged.forEach((item) => unique.set(item.id, item));
+              return Array.from(unique.values());
+            });
+          }
+
+          setBibliotecaCursorByTab((current) => ({
+            ...current,
+            [targetTab]: nextCursor,
+          }));
+          setBibliotecaHasMoreByTab((current) => ({
+            ...current,
+            [targetTab]: Boolean(nextCursor),
+          }));
         }),
-        fetch(`/api/chatgpt/generated-videos?deviceId=${encodeURIComponent(deviceIdParam)}`, {
-          cache: "no-store",
-        }),
-      ]);
-
-      const imagesData = await imagesRes.json();
-      const videosData = await videosRes.json();
-
-      if (!imagesRes.ok || imagesData?.error) {
-        throw new Error(imagesData?.error || "Falha ao carregar imagens da biblioteca.");
-      }
-      if (!videosRes.ok || videosData?.error) {
-        throw new Error(videosData?.error || "Falha ao carregar vídeos da biblioteca.");
-      }
-
-      setGeneratedImages(Array.isArray(imagesData?.images) ? imagesData.images : []);
-      setGeneratedVideos(Array.isArray(videosData?.videos) ? videosData.videos : []);
+      );
     } catch (error: unknown) {
       const message =
         error instanceof Error ? error.message : "Não foi possível carregar a biblioteca.";
       setBibliotecaError(message);
     } finally {
-      setBibliotecaLoading(false);
+      if (append && tab) {
+        setBibliotecaLoadingMoreTab((current) => (current === tab ? null : current));
+      } else {
+        setBibliotecaLoading(false);
+      }
     }
   };
 
@@ -664,11 +720,6 @@ export default function ImageGeneratorScreen() {
   useEffect(() => {
     setFeedActionMenuId(null);
   }, [generatedImages, generatedVideos]);
-
-  useEffect(() => {
-    setBibliotecaImageVisibleCount(BIBLIOTECA_INITIAL_VISIBLE_ITEMS);
-    setBibliotecaVideoVisibleCount(BIBLIOTECA_INITIAL_VISIBLE_ITEMS);
-  }, [chatDeviceId]);
 
   useEffect(() => {
     if (bibliotecaActiveTab === "images" && bibliotecaImageCount === 0 && bibliotecaVideoCount > 0) {
@@ -1865,11 +1916,11 @@ export default function ImageGeneratorScreen() {
                         {bibliotecaImageCount} itens
                       </span>
                     </div>
-                    <div className="columns-1 gap-4 sm:columns-2 lg:columns-3 xl:columns-4">
-                      {bibliotecaVisibleImageItems.map((feedItem) => (
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                      {bibliotecaImageItems.map((feedItem) => (
                     <article
                       key={`image-${feedItem.item.id}`}
-                      className={`mb-4 break-inside-avoid rounded-xl p-3 ${
+                      className={`rounded-xl p-3 ${
                         isLightTheme
                           ? "border border-slate-200 bg-white text-slate-900 shadow-sm"
                           : "border border-gray-700 bg-gray-900/70"
@@ -2000,18 +2051,17 @@ export default function ImageGeneratorScreen() {
                       <div className="mt-3 flex justify-center">
                         <button
                           type="button"
-                          onClick={() =>
-                            setBibliotecaImageVisibleCount((current) =>
-                              Math.min(current + BIBLIOTECA_PAGE_STEP_ITEMS, bibliotecaImageItems.length),
-                            )
-                          }
+                          onClick={() => void loadBiblioteca(chatDeviceId, { append: true, tab: "images" })}
+                          disabled={bibliotecaLoadingMoreTab === "images" || !chatDeviceId}
                           className={`inline-flex h-9 items-center rounded-lg border px-3 text-xs font-semibold transition ${
                             isLightTheme
                               ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                               : "border-gray-600 bg-gray-900/70 text-gray-200 hover:bg-gray-800"
                           }`}
                         >
-                          Carregar mais imagens
+                          {bibliotecaLoadingMoreTab === "images"
+                            ? "Carregando..."
+                            : "Carregar mais imagens"}
                         </button>
                       </div>
                     ) : null}
@@ -2026,11 +2076,11 @@ export default function ImageGeneratorScreen() {
                         {bibliotecaVideoCount} itens
                       </span>
                     </div>
-                    <div className="columns-1 gap-4 sm:columns-2 lg:columns-3 xl:columns-4">
-                      {bibliotecaVisibleVideoItems.map((feedItem) => (
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                      {bibliotecaVideoItems.map((feedItem) => (
                       <article
                         key={`video-${feedItem.item.id}`}
-                        className={`mb-4 break-inside-avoid rounded-xl p-3 ${
+                        className={`rounded-xl p-3 ${
                           isLightTheme
                             ? "border border-slate-200 bg-white text-slate-900 shadow-sm"
                             : "border border-gray-700 bg-gray-900/70"
@@ -2169,18 +2219,17 @@ export default function ImageGeneratorScreen() {
                       <div className="mt-3 flex justify-center">
                         <button
                           type="button"
-                          onClick={() =>
-                            setBibliotecaVideoVisibleCount((current) =>
-                              Math.min(current + BIBLIOTECA_PAGE_STEP_ITEMS, bibliotecaVideoItems.length),
-                            )
-                          }
+                          onClick={() => void loadBiblioteca(chatDeviceId, { append: true, tab: "videos" })}
+                          disabled={bibliotecaLoadingMoreTab === "videos" || !chatDeviceId}
                           className={`inline-flex h-9 items-center rounded-lg border px-3 text-xs font-semibold transition ${
                             isLightTheme
                               ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                               : "border-gray-600 bg-gray-900/70 text-gray-200 hover:bg-gray-800"
                           }`}
                         >
-                          Carregar mais vídeos
+                          {bibliotecaLoadingMoreTab === "videos"
+                            ? "Carregando..."
+                            : "Carregar mais vídeos"}
                         </button>
                       </div>
                     ) : null}
