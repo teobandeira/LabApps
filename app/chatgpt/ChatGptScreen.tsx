@@ -1532,7 +1532,8 @@ export default function ChatGptScreen({ mode }: ChatGptScreenProps) {
 
     const filesToSend = mode === "chat" ? [...selectedFiles] : [];
     const sourceImageToSend = mode === "image" ? sourceImage : null;
-    const imageAction = mode === "image" && sourceImageToSend ? "edit" : "generate";
+    const imageAction: GeneratedImageHistoryItem["action"] =
+      mode === "image" && sourceImageToSend ? "edit" : "generate";
     const chatHistoryToSend =
       mode === "chat"
         ? messages
