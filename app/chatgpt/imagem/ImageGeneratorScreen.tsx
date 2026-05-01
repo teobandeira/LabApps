@@ -276,6 +276,23 @@ function createRequestId(): string {
   return `req-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
 }
 
+function extractGeneratedImageIdFromUrl(value?: string | null): string | null {
+  if (!value) return null;
+  const raw = value.trim();
+  if (!raw) return null;
+
+  try {
+    const parsed = raw.startsWith("/") ? new URL(raw, "http://localhost") : new URL(raw);
+    const match = parsed.pathname.match(/\/api\/chatgpt\/generated-image\/([^/?#]+)/i);
+    if (!match?.[1]) return null;
+    return decodeURIComponent(match[1]);
+  } catch {
+    const match = raw.match(/\/api\/chatgpt\/generated-image\/([^/?#]+)/i);
+    if (!match?.[1]) return null;
+    return decodeURIComponent(match[1]);
+  }
+}
+
 async function blobUrlToDataUrl(blobUrl: string): Promise<string> {
   const response = await fetch(blobUrl);
   if (!response.ok) {
@@ -296,6 +313,96 @@ async function blobUrlToDataUrl(blobUrl: string): Promise<string> {
     reader.onerror = () => reject(new Error("Falha ao converter imagem local."));
     reader.readAsDataURL(blob);
   });
+}
+
+async function captureVideoFrameThumbnail(videoUrl: string): Promise<string | null> {
+  if (typeof document === "undefined") return null;
+
+  const video = document.createElement("video");
+  video.preload = "metadata";
+  video.muted = true;
+  video.playsInline = true;
+  video.crossOrigin = "anonymous";
+  video.src = videoUrl;
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const timeoutId = window.setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error("timeout"));
+      }, 10000);
+
+      const cleanup = () => {
+        window.clearTimeout(timeoutId);
+        video.onloadeddata = null;
+        video.onerror = null;
+      };
+
+      video.onloadeddata = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve();
+      };
+      video.onerror = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error("load-error"));
+      };
+    });
+
+    const duration = Number.isFinite(video.duration) ? video.duration : 0;
+    const seekTime = duration > 0.15 ? Math.min(duration - 0.05, Math.max(0.05, duration * 0.1)) : 0;
+    if (seekTime > 0) {
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          video.onseeked = null;
+          resolve();
+        };
+        const timeoutId = window.setTimeout(finish, 1200);
+        video.onseeked = () => {
+          window.clearTimeout(timeoutId);
+          finish();
+        };
+        try {
+          video.currentTime = seekTime;
+        } catch {
+          window.clearTimeout(timeoutId);
+          finish();
+        }
+      });
+    }
+
+    if (!video.videoWidth || !video.videoHeight) return null;
+
+    const size = 480;
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    const scale = Math.max(size / video.videoWidth, size / video.videoHeight);
+    const drawWidth = video.videoWidth * scale;
+    const drawHeight = video.videoHeight * scale;
+    const offsetX = (size - drawWidth) / 2;
+    const offsetY = (size - drawHeight) / 2;
+
+    ctx.drawImage(video, offsetX, offsetY, drawWidth, drawHeight);
+    return canvas.toDataURL("image/webp", 0.72);
+  } catch {
+    return null;
+  } finally {
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+  }
 }
 
 function promptRequestsOnScreenText(prompt: string) {
@@ -434,15 +541,20 @@ export default function ImageGeneratorScreen() {
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [mergeResultUrl, setMergeResultUrl] = useState<string | null>(null);
   const [feedActionMenuId, setFeedActionMenuId] = useState<string | null>(null);
+  const [videoThumbnailFallbackById, setVideoThumbnailFallbackById] = useState<
+    Record<string, string>
+  >({});
+  const [brokenSourceVideoThumbIds, setBrokenSourceVideoThumbIds] = useState<Record<string, true>>(
+    {},
+  );
   const [isLightTheme, setIsLightTheme] = useState(false);
   const [chatDeviceId, setChatDeviceId] = useState<string>("");
   const [creditsBalance, setCreditsBalance] = useState<number | null>(null);
   const [creditsLoading, setCreditsLoading] = useState(false);
   const toastTimerRef = useRef<number | null>(null);
   const videoPreviewAnchorRef = useRef<HTMLDivElement | null>(null);
-  const feedVideoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
-  const feedVideoVisibilityRef = useRef<Map<string, number>>(new Map());
-  const feedVideoObserverRef = useRef<IntersectionObserver | null>(null);
+  const processingVideoThumbIdsRef = useRef<Set<string>>(new Set());
+  const failedVideoThumbIdsRef = useRef<Set<string>>(new Set());
 
   const selectedVideoModelOption = useMemo(
     () => VIDEO_MODEL_OPTIONS.find((option) => option.value === videoModel) || VIDEO_MODEL_OPTIONS[0],
@@ -605,6 +717,19 @@ export default function ImageGeneratorScreen() {
           names.push(project.name);
         }
         map.set(imageId, names);
+      }
+    }
+    return map;
+  }, [mediaProjects]);
+  const videoProjectsByVideoId = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const project of mediaProjects) {
+      for (const videoId of project.videoIds) {
+        const names = map.get(videoId) || [];
+        if (!names.includes(project.name)) {
+          names.push(project.name);
+        }
+        map.set(videoId, names);
       }
     }
     return map;
@@ -912,84 +1037,67 @@ export default function ImageGeneratorScreen() {
     }
   }, [mediaProjects, projectMediaModalProjectId]);
 
-  const syncFeedVideoPlayback = useCallback(() => {
-    let bestVisibleId: string | null = null;
-    let bestRatio = 0;
-
-    feedVideoVisibilityRef.current.forEach((ratio, id) => {
-      if (ratio > bestRatio) {
-        bestRatio = ratio;
-        bestVisibleId = id;
+  useEffect(() => {
+    const validIds = new Set(generatedVideos.map((video) => video.id));
+    setVideoThumbnailFallbackById((current) => {
+      const nextEntries = Object.entries(current).filter(([id]) => validIds.has(id));
+      if (nextEntries.length === Object.keys(current).length) return current;
+      return Object.fromEntries(nextEntries);
+    });
+    setBrokenSourceVideoThumbIds((current) => {
+      const nextEntries = Object.entries(current).filter(([id]) => validIds.has(id));
+      if (nextEntries.length === Object.keys(current).length) return current;
+      return Object.fromEntries(nextEntries);
+    });
+    processingVideoThumbIdsRef.current.forEach((id) => {
+      if (!validIds.has(id)) {
+        processingVideoThumbIdsRef.current.delete(id);
       }
     });
-
-    feedVideoRefs.current.forEach((video, id) => {
-      const shouldPlay = bestVisibleId === id && bestRatio >= 0.6;
-      if (shouldPlay) {
-        video.muted = true;
-        const playAttempt = video.play();
-        if (playAttempt && typeof playAttempt.catch === "function") {
-          playAttempt.catch(() => undefined);
-        }
-      } else if (!video.paused) {
-        video.pause();
+    failedVideoThumbIdsRef.current.forEach((id) => {
+      if (!validIds.has(id)) {
+        failedVideoThumbIdsRef.current.delete(id);
       }
     });
-  }, []);
-
-  const setFeedVideoRef = useCallback(
-    (videoId: string, node: HTMLVideoElement | null) => {
-      const refs = feedVideoRefs.current;
-      const observer = feedVideoObserverRef.current;
-      const prev = refs.get(videoId);
-
-      if (prev && observer) {
-        observer.unobserve(prev);
-      }
-
-      if (node) {
-        refs.set(videoId, node);
-        if (observer) {
-          observer.observe(node);
-        }
-      } else {
-        refs.delete(videoId);
-        feedVideoVisibilityRef.current.delete(videoId);
-      }
-
-      syncFeedVideoPlayback();
-    },
-    [syncFeedVideoPlayback],
-  );
+  }, [generatedVideos]);
 
   useEffect(() => {
-    const visibilityMap = feedVideoVisibilityRef.current;
-    const videoRefs = feedVideoRefs.current;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          const target = entry.target as HTMLVideoElement;
-          const id = target.dataset.feedVideoId;
-          if (!id) continue;
-          feedVideoVisibilityRef.current.set(id, entry.isIntersecting ? entry.intersectionRatio : 0);
-        }
-        syncFeedVideoPlayback();
-      },
-      {
-        threshold: [0, 0.25, 0.5, 0.6, 0.75, 1],
-      },
-    );
+    const candidates = bibliotecaVideoItems
+      .map((entry) => entry.item)
+      .filter((item) => {
+        const hasUsableSourceThumb =
+          Boolean(item.sourceImageThumbnailUrl) && !brokenSourceVideoThumbIds[item.id];
+        if (hasUsableSourceThumb) return false;
+        if (videoThumbnailFallbackById[item.id]) return false;
+        if (processingVideoThumbIdsRef.current.has(item.id)) return false;
+        if (failedVideoThumbIdsRef.current.has(item.id)) return false;
+        return true;
+      })
+      .slice(0, 4);
 
-    feedVideoObserverRef.current = observer;
-    videoRefs.forEach((video) => observer.observe(video));
+    if (candidates.length === 0) return;
 
-    return () => {
-      observer.disconnect();
-      feedVideoObserverRef.current = null;
-      visibilityMap.clear();
-      videoRefs.forEach((video) => video.pause());
-    };
-  }, [syncFeedVideoPlayback]);
+    candidates.forEach((item) => {
+      processingVideoThumbIdsRef.current.add(item.id);
+      void captureVideoFrameThumbnail(item.videoUrl)
+        .then((thumbnail) => {
+          if (!thumbnail) {
+            failedVideoThumbIdsRef.current.add(item.id);
+            return;
+          }
+          setVideoThumbnailFallbackById((current) => {
+            if (current[item.id]) return current;
+            return {
+              ...current,
+              [item.id]: thumbnail,
+            };
+          });
+        })
+        .finally(() => {
+          processingVideoThumbIdsRef.current.delete(item.id);
+        });
+    });
+  }, [bibliotecaVideoItems, videoThumbnailFallbackById, brokenSourceVideoThumbIds]);
 
   useEffect(() => {
     if (bibliotecaLightboxItem?.type !== "image") {
@@ -1264,6 +1372,10 @@ export default function ImageGeneratorScreen() {
       };
 
       if (videoSourceUrl) {
+        const resolvedSourceImageId = extractGeneratedImageIdFromUrl(videoSourceUrl);
+        if (resolvedSourceImageId) {
+          body.sourceImageId = resolvedSourceImageId;
+        }
         body.imageUrl = videoSourceUrl.startsWith("blob:")
           ? await blobUrlToDataUrl(videoSourceUrl)
           : videoSourceUrl;
@@ -2487,7 +2599,17 @@ export default function ImageGeneratorScreen() {
                       </span>
                     </div>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                      {bibliotecaVideoItems.map((feedItem) => (
+                      {bibliotecaVideoItems.map((feedItem) => {
+                        const sourceThumbUrl =
+                          feedItem.item.sourceImageThumbnailUrl &&
+                          !brokenSourceVideoThumbIds[feedItem.item.id]
+                            ? feedItem.item.sourceImageThumbnailUrl
+                            : "";
+                        const videoThumbUrl =
+                          sourceThumbUrl ||
+                          videoThumbnailFallbackById[feedItem.item.id] ||
+                          "";
+                        return (
                       <article
                         key={`video-${feedItem.item.id}`}
                         className={`relative rounded-xl p-3 ${
@@ -2524,20 +2646,64 @@ export default function ImageGeneratorScreen() {
                         }
                         className="relative aspect-square w-full cursor-pointer overflow-hidden rounded-md bg-black"
                       >
-                        <video
-                          ref={(node) => setFeedVideoRef(feedItem.item.id, node)}
-                          data-feed-video-id={feedItem.item.id}
-                          src={feedItem.item.videoUrl}
-                          preload="metadata"
-                          poster={feedItem.item.sourceImageThumbnailUrl || undefined}
-                          muted
-                          playsInline
-                          loop
-                          className="absolute inset-0 h-full w-full object-cover"
-                        />
+                        {videoThumbUrl ? (
+                          <img
+                            src={videoThumbUrl}
+                            alt={`Thumbnail do vídeo ${feedItem.item.id}`}
+                            onError={() => {
+                              if (!feedItem.item.sourceImageThumbnailUrl) return;
+                              setBrokenSourceVideoThumbIds((current) => {
+                                if (current[feedItem.item.id]) return current;
+                                return {
+                                  ...current,
+                                  [feedItem.item.id]: true,
+                                };
+                              });
+                            }}
+                            className="absolute inset-0 h-full w-full object-cover"
+                            loading="lazy"
+                            decoding="async"
+                          />
+                        ) : (
+                          <div className="absolute inset-0 bg-gray-900/80" />
+                        )}
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <span className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-black/60 text-white ring-1 ring-white/35">
+                            <FaPlay className="ml-0.5 text-sm" />
+                          </span>
+                        </div>
                       </button>
 
                       <p className={`mt-2 line-clamp-2 text-[11px] ${isLightTheme ? "text-slate-800" : "text-gray-300"}`}>{feedItem.caption}</p>
+                      {(videoProjectsByVideoId.get(feedItem.item.id) || []).length > 0 ? (
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                          {(videoProjectsByVideoId.get(feedItem.item.id) || [])
+                            .slice(0, 2)
+                            .map((projectName) => (
+                              <span
+                                key={`video-project-${feedItem.item.id}-${projectName}`}
+                                className={`inline-flex items-center rounded-xl px-2 py-0.5 text-[10px] font-semibold ${
+                                  isLightTheme
+                                    ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
+                                    : "border border-emerald-400/35 bg-emerald-500/15 text-emerald-100"
+                                }`}
+                              >
+                                {projectName}
+                              </span>
+                            ))}
+                          {(videoProjectsByVideoId.get(feedItem.item.id) || []).length > 2 ? (
+                            <span
+                              className={`inline-flex items-center rounded-xl px-2 py-0.5 text-[10px] font-semibold ${
+                                isLightTheme
+                                  ? "border border-slate-200 bg-slate-100 text-slate-600"
+                                  : "border border-gray-600 bg-gray-800/80 text-gray-300"
+                              }`}
+                            >
+                              +{(videoProjectsByVideoId.get(feedItem.item.id) || []).length - 2}
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : null}
                       <div className="mt-1 flex items-start justify-between gap-2">
                         <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[10px]">
                           <span className={`inline-flex items-center rounded-xl px-2.5 py-1 font-semibold tracking-[0.02em] ${
@@ -2618,9 +2784,7 @@ export default function ImageGeneratorScreen() {
                                     type: "video",
                                     itemId: feedItem.item.id,
                                     itemTitle: feedItem.caption || `Vídeo ${feedItem.item.id}`,
-                                    previewUrl:
-                                      feedItem.item.sourceImageThumbnailUrl ||
-                                      null,
+                                    previewUrl: videoThumbUrl || null,
                                   });
                                 }}
                                 disabled={deletingMediaIds.includes(`video:${feedItem.item.id}`)}
@@ -2654,7 +2818,8 @@ export default function ImageGeneratorScreen() {
                       </div>
 
                       </article>
-                      ))}
+                        );
+                      })}
                     </div>
                     {hasMoreBibliotecaVideoItems ? (
                       <div className="mt-3 flex justify-center">

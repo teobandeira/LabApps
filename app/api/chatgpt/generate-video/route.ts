@@ -159,6 +159,14 @@ function parseInputImageUrl(imageUrl: string, request: NextRequest): URL | null 
   }
 }
 
+function extractSourceImageIdFromImageUrl(imageUrl: string, request: NextRequest): string | null {
+  const parsed = parseInputImageUrl(imageUrl, request);
+  if (!parsed) return null;
+  const match = parsed.pathname.match(/\/api\/chatgpt\/generated-image\/([^/?#]+)/i);
+  if (!match?.[1]) return null;
+  return normalizeSourceImageId(decodeURIComponent(match[1]));
+}
+
 function parseImageDataUrl(value: string): { bytes: Uint8Array; mimeType: string } | null {
   const match = value.match(/^data:([^;,]+);base64,([\s\S]+)$/i);
   if (!match) {
@@ -1332,7 +1340,10 @@ async function handleStartVideo(
     );
   }
 
-  const sourceImageId = hasReferenceImage ? normalizeSourceImageId(body.sourceImageId) : null;
+  const sourceImageId = hasReferenceImage
+    ? normalizeSourceImageId(body.sourceImageId) ||
+      extractSourceImageIdFromImageUrl(imageUrl, request)
+    : null;
   const imagePayload = hasReferenceImage ? await fetchImageBytes(imageUrl, request) : null;
 
   if (provider === "sora") {

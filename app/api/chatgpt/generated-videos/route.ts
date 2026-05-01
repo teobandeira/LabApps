@@ -36,6 +36,22 @@ export async function GET(request: NextRequest) {
     const hasMore = videos.length > limit;
     const pageItems = hasMore ? videos.slice(0, limit) : videos;
     const nextCursor = hasMore ? pageItems[pageItems.length - 1]?.id ?? null : null;
+    const sourceImageIds = Array.from(
+      new Set(
+        pageItems
+          .map((video) => video.sourceImageId)
+          .filter((id): id is string => typeof id === "string" && id.trim().length > 0),
+      ),
+    );
+    const sourceImages = sourceImageIds.length
+      ? await prisma.generatedImage.findMany({
+          where: { id: { in: sourceImageIds } },
+          select: { id: true, deviceId: true },
+        })
+      : [];
+    const sourceImageDeviceIdById = new Map(
+      sourceImages.map((image) => [image.id, image.deviceId || ""]),
+    );
 
     return NextResponse.json({
       videos: pageItems.map((video) => ({
@@ -43,7 +59,7 @@ export async function GET(request: NextRequest) {
         sourceImageId: video.sourceImageId,
         sourceImageThumbnailUrl: video.sourceImageId
           ? `/api/chatgpt/generated-image/${video.sourceImageId}?deviceId=${encodeURIComponent(
-              video.deviceId || deviceId || "",
+              sourceImageDeviceIdById.get(video.sourceImageId) || video.deviceId || deviceId || "public",
             )}&thumb=1&w=480&q=55`
           : null,
         model: video.model,
