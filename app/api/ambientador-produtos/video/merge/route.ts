@@ -4,7 +4,6 @@ import { promisify } from "node:util";
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import jwt from "jsonwebtoken";
 import sharp from "sharp";
 import { put } from "@vercel/blob";
 import { prisma } from "@/lib/prisma";
@@ -29,9 +28,17 @@ const VIDEO_EXTENSIONS = [
 ];
 
 const execFileAsync = promisify(execFile);
-const ffmpegStatic = (() => {
+const nodeRequire: NodeJS.Require | null = (() => {
   try {
-    return require("ffmpeg-static") as string | null;
+    return eval("require") as NodeJS.Require;
+  } catch {
+    return null;
+  }
+})();
+const ffmpegStatic = (() => {
+  if (!nodeRequire) return null;
+  try {
+    return nodeRequire("ffmpeg" + "-static") as string | null;
   } catch {
     return null;
   }
@@ -67,12 +74,14 @@ function buildFfmpegBinaryCandidates() {
   addCandidateWithRootFallback(candidates, process.env.FFMPEG_BIN);
   addCandidateWithRootFallback(candidates, ffmpegStatic);
 
-  try {
-    const ffmpegStaticModulePath = require.resolve("ffmpeg-static");
-    const ffmpegStaticDir = path.dirname(ffmpegStaticModulePath);
-    addCandidate(candidates, path.join(ffmpegStaticDir, executableName));
-  } catch {
-    // Pacote pode não estar resolvível em alguns empacotamentos.
+  if (nodeRequire) {
+    try {
+      const ffmpegStaticModulePath = nodeRequire.resolve("ffmpeg" + "-static");
+      const ffmpegStaticDir = path.dirname(ffmpegStaticModulePath);
+      addCandidate(candidates, path.join(ffmpegStaticDir, executableName));
+    } catch {
+      // Pacote pode não estar resolvível em alguns empacotamentos.
+    }
   }
 
   addCandidate(
@@ -102,19 +111,10 @@ function buildFfmpegBinaryCandidates() {
 const FFMPEG_BINARY_CANDIDATES = buildFfmpegBinaryCandidates();
 
 type RequestPayload = {
-  videoIds?: number[];
+  videoIds?: string[] | number[];
   estimateOnly?: boolean;
   preserveAudio?: boolean;
   aspectRatio?: string;
-};
-
-type TokenPayload = {
-  id: number;
-  email: string;
-  permissao: string;
-  nome: string;
-  iat?: number;
-  exp?: number;
 };
 
 type AspectRatio = keyof typeof TARGET_VIDEO_PRESETS;
@@ -138,33 +138,16 @@ function buildNewestFirstPath(originalName: string, folder = "ambientador") {
   return `/${folder}/${inv}_${rand}_${safe}`;
 }
 
-function getAuthFromCookie(req: NextRequest): TokenPayload | null {
-  const token = req.cookies.get("token")?.value;
-  if (!token) return null;
-
-  try {
-    const decoded = jwt.verify(
-      token,
-      process.env.JWT_SECRET as string,
-    ) as TokenPayload;
-
-    if (!decoded?.id) return null;
-    return decoded;
-  } catch {
-    return null;
-  }
-}
-
 function isVideoPath(pathname: string, url: string) {
   const source = `${pathname || ""} ${url || ""}`.toLowerCase();
   return VIDEO_EXTENSIONS.some((ext) => source.includes(ext));
 }
 
-function asNumberArray(value: unknown): number[] {
+function asStringIdArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   const parsed = value
-    .map((entry) => Number(entry))
-    .filter((entry) => Number.isInteger(entry) && entry > 0);
+    .map((entry) => normalizeText(entry))
+    .filter((entry) => entry.length > 0);
   return Array.from(new Set(parsed));
 }
 
@@ -571,7 +554,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = (await req.json()) as RequestPayload;
-    const videoIds = asNumberArray(body.videoIds);
+    const videoIds = asStringIdArray(body.videoIds);
     const estimateOnly = Boolean(body.estimateOnly);
     const preserveAudio = body.preserveAudio !== false;
     const requestedAspectRatio = parseAspectRatio(body.aspectRatio);
@@ -583,12 +566,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const items = await prisma.ambientadorImagem.findMany({
+    const items = await prisma.generatedVideo.findMany({
       where: { id: { in: videoIds } },
       select: {
         id: true,
-        pathname: true,
-        url: true,
+        blobPath: true,
+        blobUrl: true,
       },
     });
 
@@ -605,7 +588,7 @@ export async function POST(req: NextRequest) {
       .filter((item): item is (typeof items)[number] => Boolean(item));
 
     const nonVideoItem = orderedItems.find(
-      (item) => !isVideoPath(item.pathname, item.url),
+      (item) => !isVideoPath(item.blobPath, item.blobUrl),
     );
     if (nonVideoItem) {
       return NextResponse.json(
@@ -627,7 +610,7 @@ export async function POST(req: NextRequest) {
     for (let index = 0; index < orderedItems.length; index += 1) {
       const item = orderedItems[index];
       const inputPath = path.join(tempDir, `input-${index + 1}.mp4`);
-      const sizeBytes = await downloadVideoToFile(item.url, inputPath);
+      const sizeBytes = await downloadVideoToFile(item.blobUrl, inputPath);
       const mediaInfo = await probeMediaInfo(inputPath);
       const durationSeconds = mediaInfo.durationSeconds;
       const hasAudioStream = mediaInfo.hasAudioStream;
@@ -737,31 +720,20 @@ export async function POST(req: NextRequest) {
       token: process.env.BLOB_READ_WRITE_TOKEN,
     });
 
-    const auth = getAuthFromCookie(req);
-
-    const imagem = await prisma.ambientadorImagem.create({
+    const mergedVideo = await prisma.generatedVideo.create({
       data: {
-        pathname: uploadedVideo.pathname,
-        url: uploadedVideo.url,
+        sourceImageId: null,
+        operationName: `ambientador-merge-${crypto.randomUUID()}`,
         model: "video_merge",
-        thumbPathname: uploadedThumb.pathname,
-        thumbUrl: uploadedThumb.url,
-        createdById: auth?.id || null,
+        aspectRatio: targetVideoPreset.aspectRatio,
+        durationSeconds: Math.max(1, Math.round(mergedDurationSeconds)),
+        resolution: "720p",
+        blobUrl: uploadedVideo.url,
+        blobPath: uploadedVideo.pathname,
+        mimeType: "video/mp4",
+        bytes: mergedStats.size,
       },
       select: { id: true },
-    });
-
-    const ip =
-      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-      req.headers.get("x-real-ip") ||
-      "desconhecido";
-
-    await prisma.ambientadorImagemLog.create({
-      data: {
-        imagemId: imagem.id,
-        userId: auth?.id || null,
-        ip,
-      },
     });
 
     return NextResponse.json(
@@ -770,7 +742,8 @@ export async function POST(req: NextRequest) {
         video_pathname: uploadedVideo.pathname,
         thumb_url: uploadedThumb.url,
         thumb_pathname: uploadedThumb.pathname,
-        image_id: imagem.id,
+        image_id: mergedVideo.id,
+        video_id: mergedVideo.id,
         merged_size_bytes: mergedStats.size,
         total_duration_seconds: mergedDurationSeconds,
         estimated_size_bytes: estimatedSizeBytes,

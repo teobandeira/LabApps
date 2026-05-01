@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import jwt from "jsonwebtoken";
 import sharp from "sharp";
 import { put } from "@vercel/blob";
 import { prisma } from "@/lib/prisma";
@@ -70,15 +69,6 @@ type RequestPayload = {
   durationSeconds?: number;
 };
 
-type TokenPayload = {
-  id: number;
-  email: string;
-  permissao: string;
-  nome: string;
-  iat?: number;
-  exp?: number;
-};
-
 function normalizeText(value: unknown) {
   if (typeof value !== "string") return "";
   return value.trim();
@@ -132,23 +122,6 @@ function detectImageMimeType(buffer: Buffer): string | null {
   }
 
   return null;
-}
-
-function getAuthFromCookie(req: NextRequest): TokenPayload | null {
-  const token = req.cookies.get("token")?.value;
-  if (!token) return null;
-
-  try {
-    const decoded = jwt.verify(
-      token,
-      process.env.JWT_SECRET as string,
-    ) as TokenPayload;
-
-    if (!decoded?.id) return null;
-    return decoded;
-  } catch {
-    return null;
-  }
 }
 
 function buildOpenAIAuthHeaders(apiKey: string, openAiOrgId?: string) {
@@ -217,6 +190,20 @@ function resolveSoraSize(aspectRatio: string, resolution: string): string | null
     SORA_SIZE_BY_RESOLUTION_AND_ASPECT_RATIO[parsedResolution]?.[parsedAspectRatio] ||
     null
   );
+}
+
+function extractSourceImageIdFromUrl(imageUrl: string): string | null {
+  if (!imageUrl) return null;
+  try {
+    const parsed = new URL(imageUrl);
+    const match = parsed.pathname.match(/\/api\/chatgpt\/generated-image\/([^/?#]+)/i);
+    if (match?.[1]) {
+      return decodeURIComponent(match[1]);
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 function parseSoraSize(size: string): { width: number; height: number } | null {
@@ -358,8 +345,6 @@ export async function POST(req: NextRequest) {
     const openAiOrgId = process.env.OPENAI_ORG_ID?.trim();
 
     const body = (await req.json()) as RequestPayload;
-    const auth = getAuthFromCookie(req);
-
     const imageUrl = normalizeText(body.imageUrl);
     const prompt = buildPromptWithSoraGuardrails(normalizeText(body.prompt));
     const model = normalizeText(body.model) || "sora-2";
@@ -583,29 +568,21 @@ export async function POST(req: NextRequest) {
       token: process.env.BLOB_READ_WRITE_TOKEN,
     });
 
-    const imagem = await prisma.ambientadorImagem.create({
+    const sourceImageId = extractSourceImageIdFromUrl(imageUrl);
+    const persistedVideo = await prisma.generatedVideo.create({
       data: {
-        pathname: uploadedVideo.pathname,
-        url: uploadedVideo.url,
+        sourceImageId,
+        operationName: `ambientador-${model}-${crypto.randomUUID()}`,
         model,
-        thumbPathname: uploadedThumb.pathname,
-        thumbUrl: uploadedThumb.url,
-        createdById: auth?.id || null,
+        aspectRatio,
+        durationSeconds,
+        resolution,
+        blobUrl: uploadedVideo.url,
+        blobPath: uploadedVideo.pathname,
+        mimeType: fetchedVideo.mimeType,
+        bytes: fetchedVideo.bytes.byteLength,
       },
       select: { id: true },
-    });
-
-    const ip =
-      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-      req.headers.get("x-real-ip") ||
-      "desconhecido";
-
-    await prisma.ambientadorImagemLog.create({
-      data: {
-        imagemId: imagem.id,
-        userId: auth?.id || null,
-        ip,
-      },
     });
 
     return NextResponse.json(
@@ -614,7 +591,8 @@ export async function POST(req: NextRequest) {
         video_pathname: uploadedVideo.pathname,
         thumb_url: uploadedThumb.url,
         thumb_pathname: uploadedThumb.pathname,
-        image_id: imagem.id,
+        image_id: persistedVideo.id,
+        video_id: persistedVideo.id,
         mime_type: fetchedVideo.mimeType,
       },
       { status: 200 },
