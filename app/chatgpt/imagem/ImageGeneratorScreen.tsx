@@ -70,14 +70,33 @@ type GeneratedVideoItem = {
 
 type BibliotecaLightboxItem = {
   type: "image" | "video";
+  itemId: string;
   url: string;
   title: string;
-  previewUrl?: string;
+  previewUrl?: string | null;
 } | null;
 
 type DeleteModalState =
   | { type: "image"; item: GeneratedImageItem }
   | { type: "video"; item: GeneratedVideoItem }
+  | null;
+
+type MediaProject = {
+  id: string;
+  name: string;
+  createdAt: string;
+  coverImageUrl?: string | null;
+  imageIds: string[];
+  videoIds: string[];
+};
+
+type AssignProjectTarget =
+  | {
+      type: "image" | "video";
+      itemId: string;
+      itemTitle: string;
+      previewUrl?: string | null;
+    }
   | null;
 
 type SocialFormatOption = {
@@ -198,6 +217,7 @@ const IMAGE_MODEL_OPTIONS: ImageModelOption[] = [
 
 const CHAT_DEVICE_ID_STORAGE_KEY = "chatgpt-device-id-v1";
 const IMAGE_STUDIO_THEME_STORAGE_KEY = "chatgpt-image-studio-theme-v1";
+const MEDIA_PROJECTS_STORAGE_PREFIX = "chatgpt-media-projects-v1";
 const IMAGE_GENERATION_CREDIT_COST = 1;
 const VIDEO_GENERATION_CREDIT_COST = 2;
 const BIBLIOTECA_PAGE_LIMIT = 8;
@@ -393,12 +413,19 @@ export default function ImageGeneratorScreen() {
   >(null);
   const [bibliotecaLoading, setBibliotecaLoading] = useState(false);
   const [bibliotecaError, setBibliotecaError] = useState<string | null>(null);
-  const [bibliotecaActiveTab, setBibliotecaActiveTab] = useState<"images" | "videos">("images");
+  const [bibliotecaActiveTab, setBibliotecaActiveTab] = useState<"images" | "videos" | "projects">("images");
   const [deletingMediaIds, setDeletingMediaIds] = useState<string[]>([]);
   const [deleteModalState, setDeleteModalState] = useState<DeleteModalState>(null);
   const [bibliotecaLightboxItem, setBibliotecaLightboxItem] =
     useState<BibliotecaLightboxItem>(null);
   const [bibliotecaLightboxImageLoaded, setBibliotecaLightboxImageLoaded] = useState(false);
+  const [mediaProjects, setMediaProjects] = useState<MediaProject[]>([]);
+  const [createProjectModalOpen, setCreateProjectModalOpen] = useState(false);
+  const [createProjectName, setCreateProjectName] = useState("");
+  const [createProjectError, setCreateProjectError] = useState<string | null>(null);
+  const [assignProjectTarget, setAssignProjectTarget] = useState<AssignProjectTarget>(null);
+  const [pendingAssignTarget, setPendingAssignTarget] = useState<AssignProjectTarget>(null);
+  const [projectMediaModalProjectId, setProjectMediaModalProjectId] = useState<string | null>(null);
   const [mergeModalOpen, setMergeModalOpen] = useState(false);
   const [selectedVideoIdsForMerge, setSelectedVideoIdsForMerge] = useState<string[]>([]);
   const [mergePreserveAudio, setMergePreserveAudio] = useState(true);
@@ -541,8 +568,91 @@ export default function ImageGeneratorScreen() {
       .map((id) => map.get(id))
       .filter((item): item is GeneratedVideoItem => !!item);
   }, [generatedVideos, selectedVideoIdsForMerge]);
+  const projectCards = useMemo(() => {
+    const imageById = new Map(generatedImages.map((image) => [image.id, image]));
+    const videoById = new Map(generatedVideos.map((video) => [video.id, video]));
+
+    return [...mediaProjects]
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .map((project) => {
+        let coverImageUrl = project.coverImageUrl || "";
+        if (!coverImageUrl) {
+          const firstImage = project.imageIds
+            .map((id) => imageById.get(id))
+            .find((item): item is GeneratedImageItem => Boolean(item));
+          coverImageUrl = firstImage?.thumbnailUrl || firstImage?.imageUrl || "";
+        }
+
+        if (!coverImageUrl) {
+          const firstVideo = project.videoIds
+            .map((id) => videoById.get(id))
+            .find((item): item is GeneratedVideoItem => Boolean(item));
+          coverImageUrl = firstVideo?.sourceImageThumbnailUrl || "";
+        }
+
+        return {
+          project,
+          coverImageUrl,
+        };
+      });
+  }, [generatedImages, generatedVideos, mediaProjects]);
+  const imageProjectsByImageId = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const project of mediaProjects) {
+      for (const imageId of project.imageIds) {
+        const names = map.get(imageId) || [];
+        if (!names.includes(project.name)) {
+          names.push(project.name);
+        }
+        map.set(imageId, names);
+      }
+    }
+    return map;
+  }, [mediaProjects]);
+  const selectedProjectMedia = useMemo(() => {
+    if (!projectMediaModalProjectId) return null;
+    const project = mediaProjects.find((entry) => entry.id === projectMediaModalProjectId);
+    if (!project) return null;
+
+    const imageById = new Map(generatedImages.map((image) => [image.id, image]));
+    const videoById = new Map(generatedVideos.map((video) => [video.id, video]));
+    const images = project.imageIds
+      .map((id) => imageById.get(id))
+      .filter((item): item is GeneratedImageItem => Boolean(item))
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    const videos = project.videoIds
+      .map((id) => videoById.get(id))
+      .filter((item): item is GeneratedVideoItem => Boolean(item))
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    return {
+      project,
+      images,
+      videos,
+      missingImages: Math.max(project.imageIds.length - images.length, 0),
+      missingVideos: Math.max(project.videoIds.length - videos.length, 0),
+    };
+  }, [generatedImages, generatedVideos, mediaProjects, projectMediaModalProjectId]);
+  const selectedLightboxImage = useMemo(() => {
+    if (bibliotecaLightboxItem?.type !== "image") return null;
+    return (
+      generatedImages.find((item) => item.id === bibliotecaLightboxItem.itemId) ||
+      generatedImages.find((item) => item.imageUrl === bibliotecaLightboxItem.url) ||
+      null
+    );
+  }, [bibliotecaLightboxItem, generatedImages]);
+  const selectedLightboxVideo = useMemo(() => {
+    if (bibliotecaLightboxItem?.type !== "video") return null;
+    return (
+      generatedVideos.find((item) => item.id === bibliotecaLightboxItem.itemId) ||
+      generatedVideos.find((item) => item.videoUrl === bibliotecaLightboxItem.url) ||
+      null
+    );
+  }, [bibliotecaLightboxItem, generatedVideos]);
   const hasMoreBibliotecaImageItems = bibliotecaHasMoreByTab.images;
   const hasMoreBibliotecaVideoItems = bibliotecaHasMoreByTab.videos;
+  const hasAnyBibliotecaContent =
+    bibliotecaImageItems.length > 0 || bibliotecaVideoItems.length > 0 || mediaProjects.length > 0;
 
   const notify = (type: "success" | "error", message: string) => {
     setToastState({ type, message });
@@ -662,6 +772,70 @@ export default function ImageGeneratorScreen() {
     }
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined" || !chatDeviceId) return;
+    const storageKey = `${MEDIA_PROJECTS_STORAGE_PREFIX}:${chatDeviceId}`;
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (!raw) {
+        setMediaProjects([]);
+        return;
+      }
+
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        setMediaProjects([]);
+        return;
+      }
+
+      const normalized = parsed
+        .filter((entry) => entry && typeof entry === "object")
+        .map((entry) => {
+          const candidate = entry as {
+            id?: unknown;
+            name?: unknown;
+            createdAt?: unknown;
+            coverImageUrl?: unknown;
+            imageIds?: unknown;
+            videoIds?: unknown;
+          };
+          return {
+            id: typeof candidate.id === "string" ? candidate.id : createRequestId(),
+            name: typeof candidate.name === "string" ? candidate.name.trim() : "",
+            createdAt:
+              typeof candidate.createdAt === "string"
+                ? candidate.createdAt
+                : new Date().toISOString(),
+            coverImageUrl:
+              typeof candidate.coverImageUrl === "string"
+                ? candidate.coverImageUrl
+                : null,
+            imageIds: Array.isArray(candidate.imageIds)
+              ? candidate.imageIds.filter((id): id is string => typeof id === "string")
+              : [],
+            videoIds: Array.isArray(candidate.videoIds)
+              ? candidate.videoIds.filter((id): id is string => typeof id === "string")
+              : [],
+          };
+        })
+        .filter((entry) => entry.name.length > 0);
+
+      setMediaProjects(normalized);
+    } catch {
+      setMediaProjects([]);
+    }
+  }, [chatDeviceId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !chatDeviceId) return;
+    const storageKey = `${MEDIA_PROJECTS_STORAGE_PREFIX}:${chatDeviceId}`;
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify(mediaProjects));
+    } catch {
+      // ignore storage issues
+    }
+  }, [chatDeviceId, mediaProjects]);
+
   const toggleTheme = useCallback(() => {
     setIsLightTheme((current) => {
       const next = !current;
@@ -721,6 +895,7 @@ export default function ImageGeneratorScreen() {
   }, [generatedImages, generatedVideos]);
 
   useEffect(() => {
+    if (bibliotecaActiveTab === "projects") return;
     if (bibliotecaActiveTab === "images" && bibliotecaImageCount === 0 && bibliotecaVideoCount > 0) {
       setBibliotecaActiveTab("videos");
     }
@@ -728,6 +903,14 @@ export default function ImageGeneratorScreen() {
       setBibliotecaActiveTab("images");
     }
   }, [bibliotecaActiveTab, bibliotecaImageCount, bibliotecaVideoCount]);
+
+  useEffect(() => {
+    if (!projectMediaModalProjectId) return;
+    const exists = mediaProjects.some((project) => project.id === projectMediaModalProjectId);
+    if (!exists) {
+      setProjectMediaModalProjectId(null);
+    }
+  }, [mediaProjects, projectMediaModalProjectId]);
 
   const syncFeedVideoPlayback = useCallback(() => {
     let bestVisibleId: string | null = null;
@@ -1222,6 +1405,15 @@ export default function ImageGeneratorScreen() {
       }
 
       setGeneratedImages((current) => current.filter((entry) => entry.id !== item.id));
+      setMediaProjects((current) =>
+        current.map((project) => ({
+          ...project,
+          imageIds: project.imageIds.filter((id) => id !== item.id),
+        })),
+      );
+      if (assignProjectTarget?.type === "image" && assignProjectTarget.itemId === item.id) {
+        setAssignProjectTarget(null);
+      }
       if (bibliotecaLightboxItem?.type === "image" && bibliotecaLightboxItem.url === item.imageUrl) {
         setBibliotecaLightboxItem(null);
       }
@@ -1248,6 +1440,15 @@ export default function ImageGeneratorScreen() {
       }
 
       setGeneratedVideos((current) => current.filter((entry) => entry.id !== item.id));
+      setMediaProjects((current) =>
+        current.map((project) => ({
+          ...project,
+          videoIds: project.videoIds.filter((id) => id !== item.id),
+        })),
+      );
+      if (assignProjectTarget?.type === "video" && assignProjectTarget.itemId === item.id) {
+        setAssignProjectTarget(null);
+      }
       setSelectedVideoIdsForMerge((current) => current.filter((id) => id !== item.id));
       if (bibliotecaLightboxItem?.type === "video" && bibliotecaLightboxItem.url === item.videoUrl) {
         setBibliotecaLightboxItem(null);
@@ -1285,6 +1486,104 @@ export default function ImageGeneratorScreen() {
 
     await handleDeleteBibliotecaVideo(deleteModalState.item);
     setDeleteModalState(null);
+  };
+
+  const openCreateProjectModal = (target: AssignProjectTarget = null) => {
+    setCreateProjectError(null);
+    setCreateProjectName("");
+    setPendingAssignTarget(target);
+    setCreateProjectModalOpen(true);
+  };
+
+  const closeCreateProjectModal = () => {
+    setCreateProjectModalOpen(false);
+    setCreateProjectError(null);
+    setCreateProjectName("");
+    setPendingAssignTarget(null);
+  };
+
+  const handleCreateProject = () => {
+    const normalizedName = createProjectName.trim();
+    if (normalizedName.length < 2) {
+      setCreateProjectError("Informe um nome com pelo menos 2 caracteres.");
+      return;
+    }
+
+    const alreadyExists = mediaProjects.some(
+      (project) => project.name.toLowerCase() === normalizedName.toLowerCase(),
+    );
+    if (alreadyExists) {
+      setCreateProjectError("Já existe um projeto com esse nome.");
+      return;
+    }
+
+    const nextProject: MediaProject = {
+      id: createRequestId(),
+      name: normalizedName,
+      createdAt: new Date().toISOString(),
+      coverImageUrl: null,
+      imageIds: [],
+      videoIds: [],
+    };
+
+    setMediaProjects((current) => [nextProject, ...current]);
+    closeCreateProjectModal();
+    notify("success", "Projeto criado com sucesso.");
+
+    if (pendingAssignTarget) {
+      setAssignProjectTarget(pendingAssignTarget);
+      setPendingAssignTarget(null);
+    }
+  };
+
+  const openAssignProjectModal = (target: Exclude<AssignProjectTarget, null>) => {
+    if (mediaProjects.length === 0) {
+      openCreateProjectModal(target);
+      notify("error", "Crie um projeto para organizar suas mídias.");
+      return;
+    }
+    setAssignProjectTarget(target);
+  };
+
+  const targetExistsInProject = (project: MediaProject, target: Exclude<AssignProjectTarget, null>) => {
+    if (target.type === "image") {
+      return project.imageIds.includes(target.itemId);
+    }
+    return project.videoIds.includes(target.itemId);
+  };
+
+  const handleAssignTargetToProject = (projectId: string) => {
+    if (!assignProjectTarget) return;
+
+    const selectedProject = mediaProjects.find((project) => project.id === projectId);
+    if (!selectedProject) return;
+
+    if (targetExistsInProject(selectedProject, assignProjectTarget)) {
+      notify("success", "Essa mídia já está neste projeto.");
+      setAssignProjectTarget(null);
+      return;
+    }
+
+    setMediaProjects((current) =>
+      current.map((project) => {
+        if (project.id !== projectId) return project;
+        if (assignProjectTarget.type === "image") {
+          return {
+            ...project,
+            coverImageUrl: project.coverImageUrl || assignProjectTarget.previewUrl || null,
+            imageIds: [...project.imageIds, assignProjectTarget.itemId],
+          };
+        }
+        return {
+          ...project,
+          coverImageUrl: project.coverImageUrl || assignProjectTarget.previewUrl || null,
+          videoIds: [...project.videoIds, assignProjectTarget.itemId],
+        };
+      }),
+    );
+
+    notify("success", `Mídia adicionada ao projeto "${selectedProject.name}".`);
+    setAssignProjectTarget(null);
   };
 
   const toggleVideoSelectionForMerge = (videoId: string) => {
@@ -1887,43 +2186,71 @@ export default function ImageGeneratorScreen() {
               </div>
             </div>
           ) : (
-            bibliotecaImageItems.length === 0 && bibliotecaVideoItems.length === 0 ? (
+            !hasAnyBibliotecaContent ? (
               <div className="rounded-xl border border-gray-700 bg-gray-900/60 px-4 py-6 text-center text-sm text-gray-300">
                 Nenhum item encontrado.
               </div>
             ) : (
               <>
                 <div className="space-y-6">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setBibliotecaActiveTab("images")}
+                        className={`inline-flex h-9 items-center rounded-lg border px-3 text-xs font-semibold uppercase tracking-[0.08em] transition ${
+                          bibliotecaActiveTab === "images"
+                            ? isLightTheme
+                              ? "border-violet-500 bg-violet-100 text-violet-800"
+                              : "border-violet-400/55 bg-violet-500/20 text-violet-100"
+                            : isLightTheme
+                              ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                              : "border-gray-600 bg-gray-900/70 text-gray-300 hover:bg-gray-800"
+                        }`}
+                      >
+                        Imagens ({bibliotecaImageCount})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBibliotecaActiveTab("videos")}
+                        className={`inline-flex h-9 items-center rounded-lg border px-3 text-xs font-semibold uppercase tracking-[0.08em] transition ${
+                          bibliotecaActiveTab === "videos"
+                            ? isLightTheme
+                              ? "border-cyan-500 bg-cyan-100 text-cyan-800"
+                              : "border-cyan-400/55 bg-cyan-500/20 text-cyan-100"
+                            : isLightTheme
+                              ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                              : "border-gray-600 bg-gray-900/70 text-gray-300 hover:bg-gray-800"
+                        }`}
+                      >
+                        Vídeos ({bibliotecaVideoCount})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBibliotecaActiveTab("projects")}
+                        className={`inline-flex h-9 items-center rounded-lg border px-3 text-xs font-semibold uppercase tracking-[0.08em] transition ${
+                          bibliotecaActiveTab === "projects"
+                            ? isLightTheme
+                              ? "border-emerald-500 bg-emerald-100 text-emerald-800"
+                              : "border-emerald-400/55 bg-emerald-500/20 text-emerald-100"
+                            : isLightTheme
+                              ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                              : "border-gray-600 bg-gray-900/70 text-gray-300 hover:bg-gray-800"
+                        }`}
+                      >
+                        Ver projetos ({mediaProjects.length})
+                      </button>
+                    </div>
                     <button
                       type="button"
-                      onClick={() => setBibliotecaActiveTab("images")}
+                      onClick={() => openCreateProjectModal()}
                       className={`inline-flex h-9 items-center rounded-lg border px-3 text-xs font-semibold uppercase tracking-[0.08em] transition ${
-                        bibliotecaActiveTab === "images"
-                          ? isLightTheme
-                            ? "border-violet-500 bg-violet-100 text-violet-800"
-                            : "border-violet-400/55 bg-violet-500/20 text-violet-100"
-                          : isLightTheme
-                            ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                            : "border-gray-600 bg-gray-900/70 text-gray-300 hover:bg-gray-800"
+                        isLightTheme
+                          ? "border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
+                          : "border-emerald-400/40 bg-emerald-500/20 text-emerald-100 hover:bg-emerald-500/30"
                       }`}
                     >
-                      Imagens ({bibliotecaImageCount})
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setBibliotecaActiveTab("videos")}
-                      className={`inline-flex h-9 items-center rounded-lg border px-3 text-xs font-semibold uppercase tracking-[0.08em] transition ${
-                        bibliotecaActiveTab === "videos"
-                          ? isLightTheme
-                            ? "border-cyan-500 bg-cyan-100 text-cyan-800"
-                            : "border-cyan-400/55 bg-cyan-500/20 text-cyan-100"
-                          : isLightTheme
-                            ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                            : "border-gray-600 bg-gray-900/70 text-gray-300 hover:bg-gray-800"
-                      }`}
-                    >
-                      Vídeos ({bibliotecaVideoCount})
+                      Novo projeto ({mediaProjects.length})
                     </button>
                   </div>
 
@@ -1952,6 +2279,7 @@ export default function ImageGeneratorScreen() {
                         onClick={() =>
                           setBibliotecaLightboxItem({
                             type: "image",
+                            itemId: feedItem.item.id,
                             url: feedItem.item.imageUrl,
                             title: feedItem.item.prompt || "Imagem gerada",
                             previewUrl: feedItem.item.thumbnailUrl || feedItem.item.imageUrl,
@@ -1969,6 +2297,35 @@ export default function ImageGeneratorScreen() {
                       </button>
 
                       <p className={`mt-2 line-clamp-2 text-[11px] ${isLightTheme ? "text-slate-800" : "text-gray-300"}`}>{feedItem.caption}</p>
+                      {(imageProjectsByImageId.get(feedItem.item.id) || []).length > 0 ? (
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                          {(imageProjectsByImageId.get(feedItem.item.id) || [])
+                            .slice(0, 2)
+                            .map((projectName) => (
+                              <span
+                                key={`image-project-${feedItem.item.id}-${projectName}`}
+                                className={`inline-flex items-center rounded-xl px-2 py-0.5 text-[10px] font-semibold ${
+                                  isLightTheme
+                                    ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
+                                    : "border border-emerald-400/35 bg-emerald-500/15 text-emerald-100"
+                                }`}
+                              >
+                                {projectName}
+                              </span>
+                            ))}
+                          {(imageProjectsByImageId.get(feedItem.item.id) || []).length > 2 ? (
+                            <span
+                              className={`inline-flex items-center rounded-xl px-2 py-0.5 text-[10px] font-semibold ${
+                                isLightTheme
+                                  ? "border border-slate-200 bg-slate-100 text-slate-600"
+                                  : "border border-gray-600 bg-gray-800/80 text-gray-300"
+                              }`}
+                            >
+                              +{(imageProjectsByImageId.get(feedItem.item.id) || []).length - 2}
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : null}
                       <div className="mt-1 flex items-start justify-between gap-2">
                         <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[10px]">
                           <span className={`inline-flex items-center rounded-xl px-2.5 py-1 font-semibold tracking-[0.02em] ${
@@ -2057,6 +2414,30 @@ export default function ImageGeneratorScreen() {
                                 type="button"
                                 onClick={() => {
                                   setFeedActionMenuId(null);
+                                  openAssignProjectModal({
+                                    type: "image",
+                                    itemId: feedItem.item.id,
+                                    itemTitle:
+                                      feedItem.item.prompt ||
+                                      feedItem.caption ||
+                                      `Imagem ${feedItem.item.id}`,
+                                    previewUrl:
+                                      feedItem.item.thumbnailUrl || feedItem.item.imageUrl,
+                                  });
+                                }}
+                                disabled={deletingMediaIds.includes(`image:${feedItem.item.id}`)}
+                                className={`flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-xl px-3 text-left text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                                  isLightTheme
+                                    ? "text-emerald-700 hover:bg-emerald-50"
+                                    : "text-emerald-100 hover:bg-emerald-500/20"
+                                }`}
+                              >
+                                + Adicionar ao projeto
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setFeedActionMenuId(null);
                                   openDeleteModalForImage(feedItem.item);
                                 }}
                                 disabled={deletingMediaIds.includes(`image:${feedItem.item.id}`)}
@@ -2095,7 +2476,7 @@ export default function ImageGeneratorScreen() {
                       </div>
                     ) : null}
                   </section>
-                  ) : (
+                  ) : bibliotecaActiveTab === "videos" ? (
                   <section>
                     <div className="mb-2 flex items-center justify-between">
                       <p className={`text-xs font-semibold uppercase tracking-[0.1em] ${isLightTheme ? "text-cyan-700" : "text-cyan-200"}`}>
@@ -2136,6 +2517,7 @@ export default function ImageGeneratorScreen() {
                         onClick={() =>
                           setBibliotecaLightboxItem({
                             type: "video",
+                            itemId: feedItem.item.id,
                             url: feedItem.item.videoUrl,
                             title: `Vídeo ${feedItem.item.id}`,
                           })
@@ -2232,6 +2614,28 @@ export default function ImageGeneratorScreen() {
                                 type="button"
                                 onClick={() => {
                                   setFeedActionMenuId(null);
+                                  openAssignProjectModal({
+                                    type: "video",
+                                    itemId: feedItem.item.id,
+                                    itemTitle: feedItem.caption || `Vídeo ${feedItem.item.id}`,
+                                    previewUrl:
+                                      feedItem.item.sourceImageThumbnailUrl ||
+                                      null,
+                                  });
+                                }}
+                                disabled={deletingMediaIds.includes(`video:${feedItem.item.id}`)}
+                                className={`flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-xl px-3 text-left text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                                  isLightTheme
+                                    ? "text-emerald-700 hover:bg-emerald-50"
+                                    : "text-emerald-100 hover:bg-emerald-500/20"
+                                }`}
+                              >
+                                + Adicionar ao projeto
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setFeedActionMenuId(null);
                                   openDeleteModalForVideo(feedItem.item);
                                 }}
                                 disabled={deletingMediaIds.includes(`video:${feedItem.item.id}`)}
@@ -2271,6 +2675,63 @@ export default function ImageGeneratorScreen() {
                       </div>
                     ) : null}
                   </section>
+                  ) : (
+                  <section>
+                    <div className="mb-2 flex items-center justify-between">
+                      <p className={`text-xs font-semibold uppercase tracking-[0.1em] ${isLightTheme ? "text-emerald-700" : "text-emerald-200"}`}>
+                        Projetos
+                      </p>
+                      <span className={`text-[11px] ${isLightTheme ? "text-slate-600" : "text-gray-400"}`}>
+                        {mediaProjects.length} itens
+                      </span>
+                    </div>
+
+                    {projectCards.length > 0 ? (
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                        {projectCards.map(({ project, coverImageUrl }) => (
+                          <button
+                            key={`project-${project.id}`}
+                            type="button"
+                            onClick={() => setProjectMediaModalProjectId(project.id)}
+                            className={`cursor-pointer rounded-xl p-3 text-left transition ${
+                              isLightTheme
+                                ? "border border-slate-200 bg-white text-slate-900 shadow-sm hover:border-emerald-300 hover:bg-emerald-50/30"
+                                : "border border-gray-700 bg-gray-900/70 hover:border-emerald-400/40 hover:bg-gray-900/90"
+                            }`}
+                          >
+                            <div className="relative aspect-square w-full overflow-hidden rounded-md bg-black">
+                              {coverImageUrl ? (
+                                <img
+                                  src={coverImageUrl}
+                                  alt={`Capa do projeto ${project.name}`}
+                                  className="absolute inset-0 h-full w-full object-cover"
+                                  loading="lazy"
+                                  decoding="async"
+                                />
+                              ) : (
+                                <div className="absolute inset-0 flex items-center justify-center bg-gray-900/80">
+                                  <FaImage className="text-lg text-gray-300" />
+                                </div>
+                              )}
+                            </div>
+                            <p className={`mt-2 truncate text-sm font-semibold ${isLightTheme ? "text-slate-900" : "text-white"}`}>
+                              {project.name}
+                            </p>
+                            <p className={`mt-1 text-[11px] ${isLightTheme ? "text-slate-600" : "text-gray-300"}`}>
+                              {project.imageIds.length} imagens • {project.videoIds.length} vídeos
+                            </p>
+                            <p className={`mt-1 text-[10px] ${isLightTheme ? "text-slate-500" : "text-gray-400"}`}>
+                              Clique para abrir as mídias do projeto
+                            </p>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="rounded-xl border border-gray-700 bg-gray-900/60 px-4 py-6 text-center text-sm text-gray-300">
+                        Nenhum projeto criado ainda.
+                      </div>
+                    )}
+                  </section>
                   )}
                 </div>
               </>
@@ -2278,6 +2739,176 @@ export default function ImageGeneratorScreen() {
           )}
         </section>
       </main>
+
+      {selectedProjectMedia ? (
+        <div
+          className="fixed inset-0 z-80 overflow-y-auto bg-black/65 p-3 backdrop-blur-[2px] sm:p-5"
+          onClick={() => setProjectMediaModalProjectId(null)}
+        >
+          <div
+            className={`mx-auto my-2 w-full max-w-6xl rounded-2xl border p-4 shadow-2xl sm:my-6 sm:p-5 ${
+              isLightTheme
+                ? "border-slate-200 bg-white text-slate-900 shadow-slate-300/35"
+                : "border-gray-700 bg-gray-900 text-white shadow-black/40"
+            }`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-semibold">{selectedProjectMedia.project.name}</h3>
+                <p className={`mt-1 text-xs ${isLightTheme ? "text-slate-600" : "text-gray-300"}`}>
+                  {selectedProjectMedia.project.imageIds.length} imagens •{" "}
+                  {selectedProjectMedia.project.videoIds.length} vídeos
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setProjectMediaModalProjectId(null)}
+                className={`inline-flex h-9 w-9 items-center justify-center rounded-lg border transition ${
+                  isLightTheme
+                    ? "border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
+                    : "border-gray-600 bg-gray-800 text-gray-200 hover:bg-gray-700"
+                }`}
+                aria-label="Fechar mídias do projeto"
+              >
+                <FaTimes className="text-xs" />
+              </button>
+            </div>
+
+            {selectedProjectMedia.missingImages > 0 || selectedProjectMedia.missingVideos > 0 ? (
+              <p
+                className={`mb-4 rounded-lg border px-3 py-2 text-xs ${
+                  isLightTheme
+                    ? "border-amber-200 bg-amber-50 text-amber-700"
+                    : "border-amber-400/35 bg-amber-500/15 text-amber-100"
+                }`}
+              >
+                Algumas mídias não foram carregadas nesta página. Carregue mais itens na biblioteca para exibir tudo.
+              </p>
+            ) : null}
+
+            {selectedProjectMedia.images.length === 0 && selectedProjectMedia.videos.length === 0 ? (
+              <div
+                className={`rounded-xl border px-4 py-7 text-center text-sm ${
+                  isLightTheme
+                    ? "border-slate-200 bg-slate-50 text-slate-600"
+                    : "border-gray-700 bg-gray-900/70 text-gray-300"
+                }`}
+              >
+                Nenhuma mídia disponível para este projeto.
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {selectedProjectMedia.images.length > 0 ? (
+                  <section>
+                    <div className="mb-2 flex items-center justify-between">
+                      <p
+                        className={`text-xs font-semibold uppercase tracking-[0.1em] ${
+                          isLightTheme ? "text-violet-700" : "text-violet-200"
+                        }`}
+                      >
+                        Imagens
+                      </p>
+                      <span className={`text-[11px] ${isLightTheme ? "text-slate-600" : "text-gray-400"}`}>
+                        {selectedProjectMedia.images.length} itens
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                      {selectedProjectMedia.images.map((item) => (
+                        <button
+                          key={`project-image-${item.id}`}
+                          type="button"
+                          onClick={() =>
+                            setBibliotecaLightboxItem({
+                              type: "image",
+                              itemId: item.id,
+                              url: item.imageUrl,
+                              title: item.prompt || "Imagem gerada",
+                              previewUrl: item.thumbnailUrl || item.imageUrl,
+                            })
+                          }
+                          className={`cursor-pointer rounded-lg border p-2 text-left transition ${
+                            isLightTheme
+                              ? "border-slate-200 bg-white hover:border-violet-300 hover:bg-violet-50/30"
+                              : "border-gray-700 bg-gray-900/70 hover:border-violet-400/35"
+                          }`}
+                        >
+                          <div className="relative aspect-square w-full overflow-hidden rounded-md bg-black">
+                            <img
+                              src={item.thumbnailUrl || item.imageUrl}
+                              alt={item.prompt || "Imagem do projeto"}
+                              className="absolute inset-0 h-full w-full object-cover"
+                              loading="lazy"
+                              decoding="async"
+                            />
+                          </div>
+                          <p className={`mt-1 truncate text-[11px] ${isLightTheme ? "text-slate-700" : "text-gray-300"}`}>
+                            {item.revisedPrompt || item.prompt || "Imagem do projeto"}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+
+                {selectedProjectMedia.videos.length > 0 ? (
+                  <section>
+                    <div className="mb-2 flex items-center justify-between">
+                      <p
+                        className={`text-xs font-semibold uppercase tracking-[0.1em] ${
+                          isLightTheme ? "text-cyan-700" : "text-cyan-200"
+                        }`}
+                      >
+                        Vídeos
+                      </p>
+                      <span className={`text-[11px] ${isLightTheme ? "text-slate-600" : "text-gray-400"}`}>
+                        {selectedProjectMedia.videos.length} itens
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                      {selectedProjectMedia.videos.map((item) => (
+                        <button
+                          key={`project-video-${item.id}`}
+                          type="button"
+                          onClick={() =>
+                            setBibliotecaLightboxItem({
+                              type: "video",
+                              itemId: item.id,
+                              url: item.videoUrl,
+                              title: `Vídeo ${item.id}`,
+                            })
+                          }
+                          className={`cursor-pointer rounded-lg border p-2 text-left transition ${
+                            isLightTheme
+                              ? "border-slate-200 bg-white hover:border-cyan-300 hover:bg-cyan-50/30"
+                              : "border-gray-700 bg-gray-900/70 hover:border-cyan-400/35"
+                          }`}
+                        >
+                          <div className="relative aspect-square w-full overflow-hidden rounded-md bg-black">
+                            <video
+                              src={item.videoUrl}
+                              poster={item.sourceImageThumbnailUrl || undefined}
+                              preload="metadata"
+                              autoPlay
+                              muted
+                              playsInline
+                              loop
+                              className="absolute inset-0 h-full w-full object-cover"
+                            />
+                          </div>
+                          <p className={`mt-1 truncate text-[11px] ${isLightTheme ? "text-slate-700" : "text-gray-300"}`}>
+                            {item.resolution} • {item.aspectRatio}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
 
       {mergeModalOpen ? (
         <div className="fixed inset-0 z-65 overflow-y-auto bg-black/60 p-3 backdrop-blur-[2px] sm:p-5">
@@ -2556,6 +3187,115 @@ export default function ImageGeneratorScreen() {
                 </div>
               )}
             </div>
+
+            <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+              {bibliotecaLightboxItem.type === "image" && selectedLightboxImage ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => downloadBibliotecaImage(selectedLightboxImage)}
+                    disabled={deletingMediaIds.includes(`image:${selectedLightboxImage.id}`)}
+                    className="inline-flex h-10 min-w-36.25 cursor-pointer items-center justify-center gap-2 rounded-lg border border-gray-600 bg-gray-800 px-4 text-sm font-medium text-gray-100 transition hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <FaDownload />
+                    Baixar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBibliotecaLightboxItem(null);
+                      openVideoModal(
+                        selectedLightboxImage.imageUrl,
+                        resolveAspectRatioFromImageSize(selectedLightboxImage.size),
+                      );
+                    }}
+                    disabled={deletingMediaIds.includes(`image:${selectedLightboxImage.id}`)}
+                    className="inline-flex h-10 min-w-41.25 cursor-pointer items-center justify-center gap-2 rounded-lg border border-cyan-400/45 bg-cyan-500/20 px-4 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/30 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <FaVideo />
+                    Gerar vídeo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBibliotecaLightboxItem(null);
+                      openAssignProjectModal({
+                        type: "image",
+                        itemId: selectedLightboxImage.id,
+                        itemTitle:
+                          selectedLightboxImage.prompt ||
+                          selectedLightboxImage.revisedPrompt ||
+                          `Imagem ${selectedLightboxImage.id}`,
+                        previewUrl:
+                          selectedLightboxImage.thumbnailUrl || selectedLightboxImage.imageUrl,
+                      });
+                    }}
+                    disabled={deletingMediaIds.includes(`image:${selectedLightboxImage.id}`)}
+                    className="inline-flex h-10 min-w-52.5 cursor-pointer items-center justify-center rounded-lg border border-emerald-500/45 bg-emerald-500/20 px-4 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-500/30 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    + Adicionar ao projeto
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBibliotecaLightboxItem(null);
+                      openDeleteModalForImage(selectedLightboxImage);
+                    }}
+                    disabled={deletingMediaIds.includes(`image:${selectedLightboxImage.id}`)}
+                    className="inline-flex h-10 min-w-30 cursor-pointer items-center justify-center gap-2 rounded-lg border border-red-500/45 bg-red-500/20 px-4 text-sm font-semibold text-red-100 transition hover:bg-red-500/30 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <FaTimes className="text-xs" />
+                    {deletingMediaIds.includes(`image:${selectedLightboxImage.id}`)
+                      ? "Excluindo..."
+                      : "Excluir"}
+                  </button>
+                </>
+              ) : null}
+
+              {bibliotecaLightboxItem.type === "video" && selectedLightboxVideo ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => downloadBibliotecaVideo(selectedLightboxVideo)}
+                    disabled={deletingMediaIds.includes(`video:${selectedLightboxVideo.id}`)}
+                    className="inline-flex h-10 min-w-41.25 cursor-pointer items-center justify-center gap-2 rounded-lg border border-gray-600 bg-gray-800 px-4 text-sm font-medium text-gray-100 transition hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <FaDownload />
+                    Baixar vídeo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBibliotecaLightboxItem(null);
+                      openAssignProjectModal({
+                        type: "video",
+                        itemId: selectedLightboxVideo.id,
+                        itemTitle: `Vídeo ${selectedLightboxVideo.id}`,
+                        previewUrl: selectedLightboxVideo.sourceImageThumbnailUrl || null,
+                      });
+                    }}
+                    disabled={deletingMediaIds.includes(`video:${selectedLightboxVideo.id}`)}
+                    className="inline-flex h-10 min-w-52.5 cursor-pointer items-center justify-center rounded-lg border border-emerald-500/45 bg-emerald-500/20 px-4 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-500/30 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    + Adicionar ao projeto
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBibliotecaLightboxItem(null);
+                      openDeleteModalForVideo(selectedLightboxVideo);
+                    }}
+                    disabled={deletingMediaIds.includes(`video:${selectedLightboxVideo.id}`)}
+                    className="inline-flex h-10 min-w-30 cursor-pointer items-center justify-center gap-2 rounded-lg border border-red-500/45 bg-red-500/20 px-4 text-sm font-semibold text-red-100 transition hover:bg-red-500/30 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <FaTimes className="text-xs" />
+                    {deletingMediaIds.includes(`video:${selectedLightboxVideo.id}`)
+                      ? "Excluindo..."
+                      : "Excluir"}
+                  </button>
+                </>
+              ) : null}
+            </div>
           </div>
         </div>
       )}
@@ -2786,6 +3526,142 @@ export default function ImageGeneratorScreen() {
           </div>
         </div>
       )}
+
+      {createProjectModalOpen ? (
+        <div className="fixed inset-0 z-80 flex items-center justify-center bg-black/60 px-4 py-6 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-gray-700 bg-gray-900 p-5 shadow-2xl shadow-black/30">
+            <div className="mb-4 flex items-center justify-between">
+              <h4 className="text-base font-semibold text-white">Criar projeto</h4>
+              <button
+                type="button"
+                onClick={closeCreateProjectModal}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-600 bg-gray-800 text-gray-200 transition hover:bg-gray-700"
+                aria-label="Fechar modal de projeto"
+              >
+                <FaTimes className="text-xs" />
+              </button>
+            </div>
+
+            <label className="block text-xs font-semibold uppercase tracking-[0.1em] text-gray-300">
+              Nome do projeto
+            </label>
+            <input
+              type="text"
+              value={createProjectName}
+              onChange={(event) => {
+                setCreateProjectName(event.target.value);
+                if (createProjectError) setCreateProjectError(null);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  handleCreateProject();
+                }
+              }}
+              placeholder="Ex.: Campanha Dia das Mães"
+              className="mt-2 w-full rounded-xl border border-gray-600 bg-gray-800 px-3 py-2.5 text-sm text-gray-100 outline-none transition focus:border-cyan-400/60 focus:ring-4 focus:ring-cyan-500/15"
+              autoFocus
+            />
+            {createProjectError ? (
+              <p className="mt-2 text-xs font-medium text-red-300">{createProjectError}</p>
+            ) : (
+              <p className="mt-2 text-xs text-gray-400">
+                Depois você pode adicionar mídias da biblioteca neste projeto.
+              </p>
+            )}
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeCreateProjectModal}
+                className="inline-flex h-10 min-w-30 items-center justify-center rounded-lg border border-gray-600 bg-gray-800 px-4 text-sm font-medium text-gray-200 transition hover:bg-gray-700"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateProject}
+                className="inline-flex h-10 min-w-36.25 items-center justify-center rounded-lg border border-emerald-500/45 bg-emerald-500/20 px-4 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-500/30"
+              >
+                Criar projeto
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {assignProjectTarget ? (
+        <div className="fixed inset-0 z-80 flex items-center justify-center bg-black/60 px-4 py-6 backdrop-blur-sm">
+          <div className="w-full max-w-lg rounded-2xl border border-gray-700 bg-gray-900 p-5 shadow-2xl shadow-black/30">
+            <div className="mb-4 flex items-center justify-between">
+              <h4 className="text-base font-semibold text-white">Adicionar ao projeto</h4>
+              <button
+                type="button"
+                onClick={() => setAssignProjectTarget(null)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-600 bg-gray-800 text-gray-200 transition hover:bg-gray-700"
+                aria-label="Fechar modal de seleção de projeto"
+              >
+                <FaTimes className="text-xs" />
+              </button>
+            </div>
+
+            <p className="mb-3 line-clamp-2 text-xs text-gray-300">
+              Mídia selecionada: <strong>{assignProjectTarget.itemTitle}</strong>
+            </p>
+
+            <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+              {mediaProjects.length > 0 ? (
+                mediaProjects.map((project) => {
+                  const alreadyAssigned = targetExistsInProject(project, assignProjectTarget);
+                  return (
+                    <button
+                      key={project.id}
+                      type="button"
+                      onClick={() => handleAssignTargetToProject(project.id)}
+                      disabled={alreadyAssigned}
+                      className={`flex w-full items-center justify-between rounded-xl border px-3 py-2.5 text-left transition ${
+                        alreadyAssigned
+                          ? "cursor-not-allowed border-emerald-500/40 bg-emerald-500/15 text-emerald-100 opacity-80"
+                          : "cursor-pointer border-gray-600 bg-gray-800 text-gray-100 hover:border-cyan-400/45 hover:bg-gray-700"
+                      }`}
+                    >
+                      <span className="text-sm font-medium">{project.name}</span>
+                      <span className="text-xs font-semibold uppercase tracking-[0.08em]">
+                        {alreadyAssigned ? "Adicionado" : "Adicionar"}
+                      </span>
+                    </button>
+                  );
+                })
+              ) : (
+                <p className="rounded-xl border border-gray-700 bg-gray-800/80 px-3 py-3 text-sm text-gray-300">
+                  Nenhum projeto criado ainda.
+                </p>
+              )}
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const target = assignProjectTarget;
+                  setAssignProjectTarget(null);
+                  openCreateProjectModal(target);
+                }}
+                className="inline-flex h-10 min-w-36.25 items-center justify-center rounded-lg border border-emerald-500/45 bg-emerald-500/20 px-4 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-500/30"
+              >
+                Novo projeto
+              </button>
+              <button
+                type="button"
+                onClick={() => setAssignProjectTarget(null)}
+                className="inline-flex h-10 min-w-30 items-center justify-center rounded-lg border border-gray-600 bg-gray-800 px-4 text-sm font-medium text-gray-200 transition hover:bg-gray-700"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {deleteModalState ? (
         <div className="fixed inset-0 z-80 flex items-center justify-center bg-black/60 px-4 py-6 backdrop-blur-sm">
