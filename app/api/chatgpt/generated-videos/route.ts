@@ -3,6 +3,46 @@ import { NextRequest, NextResponse } from "next/server";
 import { normalizeDeviceId } from "@/lib/chatgpt-credits";
 import { prisma } from "@/lib/prisma";
 
+type ParsedVideoCursor =
+  | {
+      createdAt: Date;
+      id?: string;
+    }
+  | null;
+
+async function parseVideoCursor(rawCursor: string): Promise<ParsedVideoCursor> {
+  const normalized = rawCursor.trim();
+  if (!normalized) return null;
+
+  if (normalized.includes("::")) {
+    const [msPart, idPart] = normalized.split("::");
+    const ms = Number(msPart);
+    if (!Number.isFinite(ms) || ms <= 0) return null;
+    const date = new Date(ms);
+    if (Number.isNaN(date.getTime())) return null;
+    const id = (idPart || "").trim();
+    return id ? { createdAt: date, id } : { createdAt: date };
+  }
+
+  const asNumber = Number(normalized);
+  if (Number.isFinite(asNumber) && asNumber > 0) {
+    const date = new Date(asNumber);
+    if (!Number.isNaN(date.getTime())) {
+      return { createdAt: date };
+    }
+  }
+
+  const byId = await prisma.generatedVideo.findUnique({
+    where: { id: normalized },
+    select: { id: true, createdAt: true },
+  });
+  if (!byId) return null;
+  return {
+    createdAt: byId.createdAt,
+    id: byId.id,
+  };
+}
+
 export async function GET(request: NextRequest) {
   try {
     const deviceId = normalizeDeviceId(request.nextUrl.searchParams.get("deviceId"));
@@ -15,13 +55,27 @@ export async function GET(request: NextRequest) {
     const rawLimit = Number.parseInt(request.nextUrl.searchParams.get("limit") || "8", 10);
     const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 50) : 8;
     const rawCursor = request.nextUrl.searchParams.get("cursor");
-    const cursorId = rawCursor ? rawCursor.trim() : "";
+    const parsedCursor = rawCursor ? await parseVideoCursor(rawCursor) : null;
+    const baseWhere = includeAll ? {} : { deviceId };
+    const where = parsedCursor
+      ? parsedCursor.id
+        ? {
+            ...baseWhere,
+            OR: [
+              { createdAt: { lt: parsedCursor.createdAt } },
+              { createdAt: parsedCursor.createdAt, id: { lt: parsedCursor.id } },
+            ],
+          }
+        : {
+            ...baseWhere,
+            createdAt: { lt: parsedCursor.createdAt },
+          }
+      : baseWhere;
 
     const videos = await prisma.generatedVideo.findMany({
-      ...(includeAll ? {} : { where: { deviceId } }),
-      orderBy: { createdAt: "desc" },
+      where,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: limit + 1,
-      ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
       select: {
         id: true,
         deviceId: true,
@@ -35,7 +89,13 @@ export async function GET(request: NextRequest) {
     });
     const hasMore = videos.length > limit;
     const pageItems = hasMore ? videos.slice(0, limit) : videos;
-    const nextCursor = hasMore ? pageItems[pageItems.length - 1]?.id ?? null : null;
+    const nextCursor = hasMore
+      ? (() => {
+          const last = pageItems[pageItems.length - 1];
+          if (!last) return null;
+          return `${new Date(last.createdAt).getTime()}::${last.id}`;
+        })()
+      : null;
     const sourceImageIds = Array.from(
       new Set(
         pageItems

@@ -112,6 +112,7 @@ type ImageSizeOption = {
   details: string;
   videoAspectRatio: "16:9" | "9:16" | "1:1" | null;
 };
+type VideoMergeFormatValue = "16:9" | "9:16";
 
 const SOCIAL_FORMAT_OPTIONS = [
   {
@@ -166,6 +167,22 @@ const SORA_IMAGE_SIZE_OPTIONS: readonly ImageSizeOption[] = [
     videoAspectRatio: "16:9",
   },
 ];
+const VIDEO_MERGE_FORMAT_OPTIONS = [
+  {
+    value: "16:9",
+    label: "Paisagem (horizontal)",
+    details: "1280x720 (16:9)",
+  },
+  {
+    value: "9:16",
+    label: "Story (vertical)",
+    details: "1080x1920 (9:16)",
+  },
+] as const satisfies readonly {
+  value: VideoMergeFormatValue;
+  label: string;
+  details: string;
+}[];
 
 const VIDEO_MODEL_OPTIONS: VideoModelOption[] = [
   {
@@ -422,6 +439,17 @@ function formatDatePtBr(value: string) {
   });
 }
 
+function formatBytes(value?: number | null) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return "--";
+  }
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const exponent = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1);
+  const size = value / Math.pow(1024, exponent);
+  const decimals = exponent === 0 ? 0 : size >= 100 ? 0 : size >= 10 ? 1 : 2;
+  return `${size.toFixed(decimals)} ${units[exponent]}`;
+}
+
 function normalizeResultUrl(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -536,10 +564,19 @@ export default function ImageGeneratorScreen() {
   const [mergeModalOpen, setMergeModalOpen] = useState(false);
   const [selectedVideoIdsForMerge, setSelectedVideoIdsForMerge] = useState<string[]>([]);
   const [mergePreserveAudio, setMergePreserveAudio] = useState(true);
-  const [mergeAspectRatio, setMergeAspectRatio] = useState<string>(SOCIAL_FORMAT_OPTIONS[0].value);
+  const [mergeAspectRatio, setMergeAspectRatio] = useState<VideoMergeFormatValue>(
+    VIDEO_MERGE_FORMAT_OPTIONS[0].value,
+  );
+  const [mergeDraggingId, setMergeDraggingId] = useState<string | null>(null);
+  const [mergeDragOverId, setMergeDragOverId] = useState<string | null>(null);
+  const [mergeEstimating, setMergeEstimating] = useState(false);
   const [mergeLoading, setMergeLoading] = useState(false);
+  const [mergeDownloading, setMergeDownloading] = useState(false);
   const [mergeError, setMergeError] = useState<string | null>(null);
+  const [mergeEstimatedSizeBytes, setMergeEstimatedSizeBytes] = useState<number | null>(null);
+  const [mergeSourceTotalBytes, setMergeSourceTotalBytes] = useState<number | null>(null);
   const [mergeResultUrl, setMergeResultUrl] = useState<string | null>(null);
+  const [mergeResultSizeBytes, setMergeResultSizeBytes] = useState<number | null>(null);
   const [feedActionMenuId, setFeedActionMenuId] = useState<string | null>(null);
   const [videoThumbnailFallbackById, setVideoThumbnailFallbackById] = useState<
     Record<string, string>
@@ -552,6 +589,7 @@ export default function ImageGeneratorScreen() {
   const [creditsBalance, setCreditsBalance] = useState<number | null>(null);
   const [creditsLoading, setCreditsLoading] = useState(false);
   const toastTimerRef = useRef<number | null>(null);
+  const mergeRequestAbortRef = useRef<AbortController | null>(null);
   const videoPreviewAnchorRef = useRef<HTMLDivElement | null>(null);
   const processingVideoThumbIdsRef = useRef<Set<string>>(new Set());
   const failedVideoThumbIdsRef = useRef<Set<string>>(new Set());
@@ -1016,6 +1054,82 @@ export default function ImageGeneratorScreen() {
   }, [generatedVideos]);
 
   useEffect(() => {
+    if (!mergeModalOpen) return;
+    if (selectedVideosForMerge.length < 2) {
+      setMergeEstimatedSizeBytes(null);
+      setMergeSourceTotalBytes(null);
+      setMergeError("Selecione ao menos 2 vídeos para juntar.");
+      return;
+    }
+
+    const controller = new AbortController();
+    mergeRequestAbortRef.current?.abort();
+    mergeRequestAbortRef.current = controller;
+    setMergeEstimating(true);
+    setMergeError(null);
+
+    void (async () => {
+      try {
+        const response = await fetch("/api/chatgpt/video/merge", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            videoIds: selectedVideosForMerge.map((item) => item.id),
+            estimateOnly: true,
+            preserveAudio: mergePreserveAudio,
+            aspectRatio: mergeAspectRatio,
+          }),
+        });
+
+        const rawBody = await response.text();
+        let data: any = null;
+        if (rawBody) {
+          data = JSON.parse(rawBody);
+        }
+
+        if (!response.ok || data?.error) {
+          throw new Error(data?.error || "Falha ao estimar tamanho do vídeo.");
+        }
+
+        setMergeEstimatedSizeBytes(
+          Number.isFinite(Number(data?.estimated_size_bytes))
+            ? Number(data.estimated_size_bytes)
+            : null,
+        );
+        setMergeSourceTotalBytes(
+          Number.isFinite(Number(data?.source_total_bytes))
+            ? Number(data.source_total_bytes)
+            : null,
+        );
+      } catch (error: any) {
+        if (error?.name === "AbortError") {
+          return;
+        }
+        const message = error?.message || "Não foi possível calcular o tamanho previsto.";
+        setMergeError(message);
+      } finally {
+        if (mergeRequestAbortRef.current === controller) {
+          mergeRequestAbortRef.current = null;
+        }
+        setMergeEstimating(false);
+      }
+    })();
+
+    return () => {
+      controller.abort();
+      if (mergeRequestAbortRef.current === controller) {
+        mergeRequestAbortRef.current = null;
+      }
+    };
+  }, [
+    mergeModalOpen,
+    mergePreserveAudio,
+    mergeAspectRatio,
+    selectedVideosForMerge,
+  ]);
+
+  useEffect(() => {
     setFeedActionMenuId(null);
   }, [generatedImages, generatedVideos]);
 
@@ -1405,7 +1519,7 @@ export default function ImageGeneratorScreen() {
         setVideoResult(String(startData.videoUrl));
         setVideoErrorMessage(null);
         notify("success", "Vídeo gerado com sucesso!");
-        void loadBiblioteca(chatDeviceId);
+        void loadBiblioteca(chatDeviceId, { tab: "videos" });
         return;
       }
 
@@ -1443,7 +1557,7 @@ export default function ImageGeneratorScreen() {
           setVideoResult(String(statusData.videoUrl));
           setVideoErrorMessage(null);
           notify("success", "Vídeo gerado com sucesso!");
-          void loadBiblioteca(chatDeviceId);
+          void loadBiblioteca(chatDeviceId, { tab: "videos" });
           return;
         }
       }
@@ -1707,6 +1821,21 @@ export default function ImageGeneratorScreen() {
     });
   };
 
+  const reorderSelectedVideosForMerge = (draggedId: string, targetId: string) => {
+    if (draggedId === targetId) return;
+
+    setSelectedVideoIdsForMerge((current) => {
+      const fromIndex = current.indexOf(draggedId);
+      const toIndex = current.indexOf(targetId);
+      if (fromIndex === -1 || toIndex === -1) return current;
+
+      const next = [...current];
+      next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, draggedId);
+      return next;
+    });
+  };
+
   const openMergeModal = () => {
     if (selectedVideoIdsForMerge.length < 2) {
       notify("error", "Selecione ao menos 2 vídeos para juntar.");
@@ -1714,35 +1843,53 @@ export default function ImageGeneratorScreen() {
     }
     setMergeError(null);
     setMergeResultUrl(null);
+    setMergeResultSizeBytes(null);
     setMergeModalOpen(true);
   };
 
   const closeMergeModal = () => {
-    setMergeModalOpen(false);
+    mergeRequestAbortRef.current?.abort();
+    mergeRequestAbortRef.current = null;
+    setMergeEstimating(false);
     setMergeLoading(false);
+    setMergeDownloading(false);
+    setMergeDraggingId(null);
+    setMergeDragOverId(null);
     setMergeError(null);
+    setMergeModalOpen(false);
   };
 
   const handleMergeVideos = async () => {
-    if (selectedVideoIdsForMerge.length < 2) {
+    if (selectedVideosForMerge.length < 2) {
       notify("error", "Selecione ao menos 2 vídeos para juntar.");
       return;
     }
 
+    mergeRequestAbortRef.current?.abort();
+    const controller = new AbortController();
+    mergeRequestAbortRef.current = controller;
     setMergeLoading(true);
     setMergeError(null);
     setMergeResultUrl(null);
+    setMergeResultSizeBytes(null);
     try {
       const response = await fetch("/api/chatgpt/video/merge", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
-          videoIds: selectedVideoIdsForMerge,
+          videoIds: selectedVideosForMerge.map((item) => item.id),
           preserveAudio: mergePreserveAudio,
           aspectRatio: mergeAspectRatio,
         }),
       });
-      const data = await response.json();
+
+      const rawBody = await response.text();
+      let data: any = null;
+      if (rawBody) {
+        data = JSON.parse(rawBody);
+      }
+
       if (!response.ok || data?.error) {
         throw new Error(data?.error || "Falha ao juntar vídeos.");
       }
@@ -1750,28 +1897,66 @@ export default function ImageGeneratorScreen() {
       if (!resultUrl) {
         throw new Error("Nenhum vídeo final foi retornado.");
       }
+
       setMergeResultUrl(resultUrl);
+      setMergeResultSizeBytes(
+        Number.isFinite(Number(data?.merged_size_bytes))
+          ? Number(data.merged_size_bytes)
+          : null,
+      );
+      setMergeEstimatedSizeBytes(
+        Number.isFinite(Number(data?.estimated_size_bytes))
+          ? Number(data.estimated_size_bytes)
+          : mergeEstimatedSizeBytes,
+      );
+      setMergeSourceTotalBytes(
+        Number.isFinite(Number(data?.source_total_bytes))
+          ? Number(data.source_total_bytes)
+          : mergeSourceTotalBytes,
+      );
+
       notify("success", "Vídeos unidos com sucesso!");
       if (chatDeviceId) {
-        void loadBiblioteca(chatDeviceId);
+        void loadBiblioteca(chatDeviceId, { tab: "videos" });
       }
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "Não foi possível juntar os vídeos.";
+    } catch (error: any) {
+      if (error?.name === "AbortError") {
+        return;
+      }
+      const message = error?.message || "Não foi possível juntar os vídeos.";
       setMergeError(message);
       notify("error", message);
     } finally {
+      if (mergeRequestAbortRef.current === controller) {
+        mergeRequestAbortRef.current = null;
+      }
       setMergeLoading(false);
     }
   };
 
-  const downloadMergedVideo = () => {
+  const downloadMergedVideo = async () => {
     if (!mergeResultUrl) return;
-    const link = document.createElement("a");
-    link.href = `${mergeResultUrl}${mergeResultUrl.includes("?") ? "&" : "?"}download=1`;
-    link.download = `video-merge-${Date.now()}.mp4`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
+
+    try {
+      setMergeDownloading(true);
+      const response = await fetch(mergeResultUrl);
+      if (!response.ok) {
+        throw new Error("Falha ao baixar vídeo final.");
+      }
+      const blob = await response.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = `video-merge-${Date.now()}.mp4`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(blobUrl);
+    } catch {
+      notify("error", "Não foi possível baixar o vídeo final.");
+    } finally {
+      setMergeDownloading(false);
+    }
   };
 
   const renderAmbientacaoActions = () =>
