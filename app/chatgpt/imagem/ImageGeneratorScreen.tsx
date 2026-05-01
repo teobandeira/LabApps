@@ -915,6 +915,8 @@ export default function ImageGeneratorScreen() {
       return;
     }
 
+    setAmbientacaoLightboxOpen(true);
+    setPreview(null);
     const imageAction = produtoPrincipal.file ? "edit" : "generate";
     const formData = new FormData();
     formData.append("mode", "image");
@@ -1185,7 +1187,10 @@ export default function ImageGeneratorScreen() {
 
   const downloadBibliotecaImage = (item: GeneratedImageItem) => {
     const link = document.createElement("a");
-    link.href = `/api/chatgpt/generated-image/${item.id}?download=1&deviceId=${encodeURIComponent(chatDeviceId)}`;
+    const downloadUrl = item.imageUrl.includes("?")
+      ? `${item.imageUrl}&download=1`
+      : `${item.imageUrl}?download=1`;
+    link.href = downloadUrl;
     link.download = `imagem-${item.id}.png`;
     document.body.appendChild(link);
     link.click();
@@ -1194,7 +1199,10 @@ export default function ImageGeneratorScreen() {
 
   const downloadBibliotecaVideo = (item: GeneratedVideoItem) => {
     const link = document.createElement("a");
-    link.href = `/api/chatgpt/generated-video/${item.id}?download=1&deviceId=${encodeURIComponent(chatDeviceId)}`;
+    const downloadUrl = item.videoUrl.includes("?")
+      ? `${item.videoUrl}&download=1`
+      : `${item.videoUrl}?download=1`;
+    link.href = downloadUrl;
     link.download = `video-${item.id}.mp4`;
     document.body.appendChild(link);
     link.click();
@@ -1207,15 +1215,7 @@ export default function ImageGeneratorScreen() {
 
     setDeletingMediaIds((current) => [...current, mediaId]);
     try {
-      if (!chatDeviceId) {
-        throw new Error("Identificador do dispositivo indisponivel.");
-      }
-      const response = await fetch(
-        `/api/chatgpt/generated-image/${item.id}?deviceId=${encodeURIComponent(chatDeviceId)}`,
-        {
-          method: "DELETE",
-        },
-      );
+      const response = await fetch(item.imageUrl, { method: "DELETE" });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data?.error) {
         throw new Error(data?.error || "Não foi possível excluir a imagem.");
@@ -1241,15 +1241,7 @@ export default function ImageGeneratorScreen() {
 
     setDeletingMediaIds((current) => [...current, mediaId]);
     try {
-      if (!chatDeviceId) {
-        throw new Error("Identificador do dispositivo indisponivel.");
-      }
-      const response = await fetch(
-        `/api/chatgpt/generated-video/${item.id}?deviceId=${encodeURIComponent(chatDeviceId)}`,
-        {
-          method: "DELETE",
-        },
-      );
+      const response = await fetch(item.videoUrl, { method: "DELETE" });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data?.error) {
         throw new Error(data?.error || "Não foi possível excluir o vídeo.");
@@ -2438,7 +2430,7 @@ export default function ImageGeneratorScreen() {
         </div>
       ) : null}
 
-      {ambientacaoLightboxOpen && preview && (
+      {ambientacaoLightboxOpen ? (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 py-6 backdrop-blur-sm"
           onClick={() => setAmbientacaoLightboxOpen(false)}
@@ -2463,33 +2455,49 @@ export default function ImageGeneratorScreen() {
             </div>
 
             <div className="w-full overflow-hidden rounded-xl border border-gray-700 bg-gray-950/70">
-              <img src={preview} alt="Imagem ambientada" className="mx-auto max-h-[70vh] w-full object-contain" />
+              {loading ? (
+                <div className="flex min-h-[55vh] w-full flex-col items-center justify-center gap-3 px-4 text-center">
+                  <div className="relative h-14 w-14">
+                    <span className="absolute inset-0 animate-ping rounded-2xl bg-cyan-400/25" />
+                    <span className="absolute inset-2 animate-spin rounded-full border-4 border-cyan-300 border-t-transparent" />
+                  </div>
+                  <p className="text-sm font-semibold text-cyan-100">Gerando imagem...</p>
+                </div>
+              ) : preview ? (
+                <img src={preview} alt="Imagem ambientada" className="mx-auto max-h-[70vh] w-full object-contain" />
+              ) : (
+                <div className="flex min-h-[55vh] w-full items-center justify-center px-4 text-center text-sm text-gray-400">
+                  Nenhuma imagem gerada ainda.
+                </div>
+              )}
             </div>
 
-            <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={downloadImage}
-                className="inline-flex h-10 min-w-47.5 cursor-pointer items-center justify-center gap-2 rounded-lg bg-purple-700 px-4 text-sm font-semibold text-white transition hover:bg-purple-600"
-              >
-                <FaDownload />
-                Baixar imagem
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setAmbientacaoLightboxOpen(false);
-                  openVideoModal(preview, resolveAspectRatioFromImageSize(imageSize));
-                }}
-                className="inline-flex h-10 min-w-47.5 cursor-pointer items-center justify-center gap-2 rounded-lg border border-cyan-400/45 bg-cyan-500/20 px-4 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/30"
-              >
-                <FaVideo />
-                Gerar vídeo (Veo)
-              </button>
-            </div>
+            {!loading && preview ? (
+              <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={downloadImage}
+                  className="inline-flex h-10 min-w-47.5 cursor-pointer items-center justify-center gap-2 rounded-lg bg-purple-700 px-4 text-sm font-semibold text-white transition hover:bg-purple-600"
+                >
+                  <FaDownload />
+                  Baixar imagem
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAmbientacaoLightboxOpen(false);
+                    openVideoModal(preview, resolveAspectRatioFromImageSize(imageSize));
+                  }}
+                  className="inline-flex h-10 min-w-47.5 cursor-pointer items-center justify-center gap-2 rounded-lg border border-cyan-400/45 bg-cyan-500/20 px-4 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/30"
+                >
+                  <FaVideo />
+                  Gerar vídeo (Veo)
+                </button>
+              </div>
+            ) : null}
           </div>
         </div>
-      )}
+      ) : null}
 
       {bibliotecaLightboxItem && (
         <div
