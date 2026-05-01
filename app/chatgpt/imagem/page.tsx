@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import ImageGeneratorScreen from "./ImageGeneratorScreen";
 
 export const metadata: Metadata = {
-  title: "IA Studio PRO",
-  description: "Gere imagens e vídeos de ambientação com Gemini.",
+  title: "IA Studio PRO | Ambientador",
+  description: "Ambientador IA no layout GPT Imagem.",
 };
 
 export default function ImageModePage() {

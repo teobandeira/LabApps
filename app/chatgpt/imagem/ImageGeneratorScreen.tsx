@@ -192,8 +192,8 @@ const VIDEO_MODEL_OPTIONS: VideoModelOption[] = [
 ];
 
 const IMAGE_MODEL_OPTIONS: ImageModelOption[] = [
-  { value: "nano_banana", label: "Nano Banana" },
-  { value: "chatgpt-image-latest", label: "ChatGPT Image Latest" },
+  { value: "nano_banana", label: "Nano Banana 2" },
+  { value: "gpt-image-1.5", label: "GPT Image (gpt-image-1.5)" },
 ];
 
 const CHAT_DEVICE_ID_STORAGE_KEY = "chatgpt-device-id-v1";
@@ -288,12 +288,10 @@ function promptRequestsOnScreenText(prompt: string) {
 function formatDatePtBr(value: string) {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return "--";
-  return parsed.toLocaleString("pt-BR", {
+  return parsed.toLocaleDateString("pt-BR", {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
   });
 }
 
@@ -579,59 +577,45 @@ export default function ImageGeneratorScreen() {
           const endpoint = isImages
             ? "/api/chatgpt/generated-images"
             : "/api/chatgpt/generated-videos";
-          const mergedItems: (GeneratedImageItem | GeneratedVideoItem)[] = [];
-          let nextCursor: string | null = append ? bibliotecaCursorByTab[targetTab] : null;
-          let hasNextPage = true;
-
-          while (hasNextPage) {
-            const params = new URLSearchParams();
-            params.set("deviceId", deviceIdParam);
-            params.set("scope", "all");
-            params.set("limit", String(BIBLIOTECA_PAGE_LIMIT));
-            if (nextCursor) {
-              params.set("cursor", nextCursor);
-            }
-
-            const res = await fetch(`${endpoint}?${params.toString()}`, {
-              cache: "no-store",
-            });
-            const data = await res.json();
-            if (!res.ok || data?.error) {
-              throw new Error(
-                data?.error ||
-                  (isImages
-                    ? "Falha ao carregar imagens da biblioteca."
-                    : "Falha ao carregar vídeos da biblioteca."),
-              );
-            }
-
-            const pageItems = Array.isArray(isImages ? data?.images : data?.videos)
-              ? (isImages ? data.images : data.videos)
-              : [];
-            if (pageItems.length > 0) {
-              mergedItems.push(...pageItems);
-            }
-
-            nextCursor = typeof data?.nextCursor === "string" ? data.nextCursor : null;
-            if (append) {
-              hasNextPage = false;
-            } else {
-              hasNextPage = Boolean(nextCursor);
-            }
+          const nextCursor = append ? bibliotecaCursorByTab[targetTab] : null;
+          const params = new URLSearchParams();
+          params.set("deviceId", deviceIdParam);
+          params.set("scope", "all");
+          params.set("limit", String(BIBLIOTECA_PAGE_LIMIT));
+          if (nextCursor) {
+            params.set("cursor", nextCursor);
           }
+
+          const res = await fetch(`${endpoint}?${params.toString()}`, {
+            cache: "no-store",
+          });
+          const data = await res.json();
+          if (!res.ok || data?.error) {
+            throw new Error(
+              data?.error ||
+                (isImages
+                  ? "Falha ao carregar imagens da biblioteca."
+                  : "Falha ao carregar vídeos da biblioteca."),
+            );
+          }
+
+          const pageItems = Array.isArray(isImages ? data?.images : data?.videos)
+            ? (isImages ? data.images : data.videos)
+            : [];
+          const resolvedNextCursor = typeof data?.nextCursor === "string" ? data.nextCursor : null;
 
           if (isImages) {
             setGeneratedImages((current) => {
-              if (!append) return mergedItems as GeneratedImageItem[];
-              const merged = [...current, ...(mergedItems as GeneratedImageItem[])];
+              if (!append) return pageItems as GeneratedImageItem[];
+              const merged = [...current, ...(pageItems as GeneratedImageItem[])];
               const unique = new Map<string, GeneratedImageItem>();
               merged.forEach((item) => unique.set(item.id, item));
               return Array.from(unique.values());
             });
           } else {
             setGeneratedVideos((current) => {
-              if (!append) return mergedItems as GeneratedVideoItem[];
-              const merged = [...current, ...(mergedItems as GeneratedVideoItem[])];
+              if (!append) return pageItems as GeneratedVideoItem[];
+              const merged = [...current, ...(pageItems as GeneratedVideoItem[])];
               const unique = new Map<string, GeneratedVideoItem>();
               merged.forEach((item) => unique.set(item.id, item));
               return Array.from(unique.values());
@@ -640,11 +624,11 @@ export default function ImageGeneratorScreen() {
 
           setBibliotecaCursorByTab((current) => ({
             ...current,
-            [targetTab]: nextCursor,
+            [targetTab]: resolvedNextCursor,
           }));
           setBibliotecaHasMoreByTab((current) => ({
             ...current,
-            [targetTab]: Boolean(nextCursor),
+            [targetTab]: Boolean(resolvedNextCursor),
           }));
         }),
       );
@@ -974,15 +958,6 @@ export default function ImageGeneratorScreen() {
       }
 
       setPreview(generatedImage);
-      setProdutoPrincipal((prev) => {
-        if (prev.preview?.startsWith("blob:")) {
-          URL.revokeObjectURL(prev.preview);
-        }
-        return {
-          ...prev,
-          preview: generatedImage,
-        };
-      });
       setVideoSourceUrl(generatedImage);
       const nextAspectRatio = resolveAspectRatioFromImageSize(imageSize);
       if (nextAspectRatio) {
@@ -1667,49 +1642,88 @@ export default function ImageGeneratorScreen() {
                 />
                 <label
                   htmlFor="produtoPrincipalUpload"
-                  className={`flex h-full w-full flex-col items-center justify-center gap-2 ${
+                  className={`relative flex min-h-[224px] w-full flex-col items-center justify-center gap-2 overflow-hidden ${
                     loading ? "cursor-not-allowed" : "cursor-pointer"
                   }`}
                 >
-                  {produtoPrincipal.preview ? (
+                  {loading ? (
+                    <div
+                      className={`absolute inset-0 flex h-full w-full items-center justify-center ${
+                        isLightTheme
+                          ? "bg-linear-to-br from-sky-50 via-white to-cyan-50"
+                          : "bg-linear-to-br from-gray-900 via-gray-900 to-cyan-900/20"
+                      }`}
+                    >
+                      {produtoPrincipal.preview ? (
+                        <img
+                          src={produtoPrincipal.preview}
+                          alt="Produto principal"
+                          className="absolute inset-0 h-full w-full object-contain p-4 opacity-25 blur-[1px]"
+                        />
+                      ) : null}
+                      <div
+                        className={`absolute inset-0 ${
+                          isLightTheme ? "bg-white/40" : "bg-black/35"
+                        }`}
+                      />
+                      <div className="relative z-10 flex flex-col items-center justify-center gap-2 px-6 text-center">
+                        <div className="relative h-14 w-14">
+                          <span
+                            className={`absolute inset-0 animate-ping rounded-2xl ${
+                              isLightTheme ? "bg-sky-300/45" : "bg-cyan-400/25"
+                            }`}
+                          />
+                          <span
+                            className={`absolute inset-2 animate-spin rounded-full border-4 border-t-transparent ${
+                              isLightTheme ? "border-sky-500" : "border-cyan-300"
+                            }`}
+                          />
+                        </div>
+                        <p className={`text-sm font-semibold ${isLightTheme ? "text-sky-900" : "text-cyan-100"}`}>
+                          Preparando sua imagem
+                        </p>
+                        <div className="flex items-center justify-center gap-1.5">
+                          <span
+                            className={`h-1.5 w-1.5 animate-bounce rounded-full ${
+                              isLightTheme ? "bg-sky-500" : "bg-cyan-300"
+                            }`}
+                            style={{ animationDelay: "-0.2s" }}
+                          />
+                          <span
+                            className={`h-1.5 w-1.5 animate-bounce rounded-full ${
+                              isLightTheme ? "bg-sky-500" : "bg-cyan-300"
+                            }`}
+                            style={{ animationDelay: "-0.1s" }}
+                          />
+                          <span
+                            className={`h-1.5 w-1.5 animate-bounce rounded-full ${
+                              isLightTheme ? "bg-sky-500" : "bg-cyan-300"
+                            }`}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ) : produtoPrincipal.preview ? (
                     <div className="relative flex h-full w-full items-center justify-center">
                       <img
                         src={produtoPrincipal.preview}
                         alt="Produto principal"
-                        className={`mx-auto max-h-60 w-auto rounded-md object-contain transition ${
-                          loading ? "opacity-55" : "opacity-100"
-                        }`}
+                        className="mx-auto max-h-60 w-auto rounded-md object-contain"
                       />
-                      {loading ? (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-md bg-black/45 text-gray-100">
-                          <div className="h-9 w-9 animate-spin rounded-full border-4 border-cyan-400 border-t-transparent" />
-                          <span className="text-xs font-medium">Gerando imagem...</span>
-                        </div>
-                      ) : null}
                     </div>
                   ) : (
                     <>
-                      {loading ? (
-                        <div className="w-full max-w-sm space-y-3 px-6">
-                          <Skeleton rounded="full" className="mx-auto h-14 w-14" />
-                          <Skeleton className="h-4 w-2/3 mx-auto" />
-                          <Skeleton className="h-3 w-1/2 mx-auto" />
-                        </div>
-                      ) : (
-                        <>
-                          <span
-                            className={`inline-flex h-14 w-14 items-center justify-center rounded-2xl ${
-                              isLightTheme
-                                ? "border border-slate-400 bg-slate-200"
-                                : "border border-purple-300/35 bg-purple-500/15"
-                            }`}
-                          >
-                            <FiUploadCloud className={`text-3xl ${isLightTheme ? "text-slate-700" : "text-purple-200"}`} />
-                          </span>
-                          <span className={`font-medium ${isLightTheme ? "text-slate-900" : "text-white"}`}>Clique ou arraste a imagem aqui</span>
-                          <span className={`text-xs ${isLightTheme ? "text-slate-600" : "text-gray-300"}`}>JPG, PNG, WEBP (opcional)</span>
-                        </>
-                      )}
+                      <span
+                        className={`inline-flex h-14 w-14 items-center justify-center rounded-2xl ${
+                          isLightTheme
+                            ? "border border-slate-400 bg-slate-200"
+                            : "border border-purple-300/35 bg-purple-500/15"
+                        }`}
+                      >
+                        <FiUploadCloud className={`text-3xl ${isLightTheme ? "text-slate-700" : "text-purple-200"}`} />
+                      </span>
+                      <span className={`font-medium ${isLightTheme ? "text-slate-900" : "text-white"}`}>Clique ou arraste a imagem aqui</span>
+                      <span className={`text-xs ${isLightTheme ? "text-slate-600" : "text-gray-300"}`}>JPG, PNG, WEBP (opcional)</span>
                     </>
                   )}
                 </label>
@@ -1935,11 +1949,11 @@ export default function ImageGeneratorScreen() {
                       {bibliotecaImageItems.map((feedItem) => (
                     <article
                       key={`image-${feedItem.item.id}`}
-                      className={`rounded-xl p-3 ${
+                      className={`relative rounded-xl p-3 ${
                         isLightTheme
                           ? "border border-slate-200 bg-white text-slate-900 shadow-sm"
                           : "border border-gray-700 bg-gray-900/70"
-                      }`}
+                      } ${feedActionMenuId === `image:${feedItem.item.id}` ? "z-40" : "z-0"}`}
                     >
                       <button
                         type="button"
@@ -1951,113 +1965,121 @@ export default function ImageGeneratorScreen() {
                             previewUrl: feedItem.item.thumbnailUrl || feedItem.item.imageUrl,
                           })
                         }
-                        className="relative w-full cursor-pointer overflow-hidden rounded-md bg-black"
+                        className="relative aspect-square w-full cursor-pointer overflow-hidden rounded-md bg-black"
                       >
                         <img
                           src={feedItem.item.thumbnailUrl || feedItem.item.imageUrl}
                           alt={feedItem.item.prompt || "Imagem gerada"}
-                          className="h-auto w-full object-cover"
+                          className="absolute inset-0 h-full w-full object-cover"
                           loading="lazy"
                           decoding="async"
                         />
                       </button>
 
                       <p className={`mt-2 line-clamp-2 text-[11px] ${isLightTheme ? "text-slate-800" : "text-gray-300"}`}>{feedItem.caption}</p>
-                      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
-                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${
-                          isLightTheme
-                            ? "border border-slate-300 bg-slate-100 text-slate-800"
-                            : "border border-cyan-400/35 bg-cyan-500/10 text-cyan-200"
-                        }`}>
-                          {feedItem.item.model}
-                        </span>
-                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${
-                          isLightTheme
-                            ? "border border-slate-300 bg-slate-100 text-slate-700"
-                            : "border border-gray-600 bg-gray-800/70 text-gray-300"
-                        }`}>
-                          {formatDatePtBr(feedItem.item.createdAt)}
-                        </span>
-                      </div>
-
-                      <div className="relative mt-2 flex justify-end">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setFeedActionMenuId((current) =>
-                              current === `image:${feedItem.item.id}` ? null : `image:${feedItem.item.id}`,
-                            )
-                          }
-                          className={`inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md transition ${
+                      <div className="mt-1 flex items-start justify-between gap-2">
+                        <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[10px]">
+                          <span className={`inline-flex items-center rounded-xl px-2.5 py-1 font-semibold tracking-[0.02em] ${
                             isLightTheme
-                              ? "border border-slate-300 bg-slate-100 text-slate-800 hover:bg-slate-200"
-                              : "border border-gray-600 bg-gray-800 text-gray-200 hover:bg-gray-700"
-                          }`}
-                          aria-label="Abrir ações da imagem"
-                        >
-                          <MdMoreVert />
-                        </button>
-                        {feedActionMenuId === `image:${feedItem.item.id}` ? (
-                          <div
-                            className={`absolute top-9 right-0 z-20 w-44 rounded-md p-1.5 shadow-xl ${
+                              ? "border border-violet-200 bg-violet-50 text-violet-700"
+                              : "border border-cyan-400/35 bg-cyan-500/12 text-cyan-100"
+                          }`}>
+                            {feedItem.item.model}
+                          </span>
+                          <span className={`inline-flex items-center rounded-xl px-2.5 py-1 font-medium ${
+                            isLightTheme
+                              ? "border border-slate-200 bg-white text-slate-600 shadow-sm"
+                              : "border border-gray-600/80 bg-gray-800/80 text-gray-300"
+                          }`}>
+                            {formatDatePtBr(feedItem.item.createdAt)}
+                          </span>
+                        </div>
+
+                        <div className="relative shrink-0">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setFeedActionMenuId((current) =>
+                                current === `image:${feedItem.item.id}` ? null : `image:${feedItem.item.id}`,
+                              )
+                            }
+                            className={`group inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-xl border shadow-sm transition ${
                               isLightTheme
-                                ? "border border-slate-300 bg-white"
-                                : "border border-gray-600 bg-gray-900/98"
+                                ? "border-slate-200 bg-white text-slate-600 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-700"
+                                : "border-gray-600/80 bg-gray-800/90 text-gray-200 hover:border-cyan-400/45 hover:bg-cyan-500/15 hover:text-cyan-100"
+                            } ${
+                              feedActionMenuId === `image:${feedItem.item.id}`
+                                ? isLightTheme
+                                  ? "border-sky-300 bg-sky-50 text-sky-700"
+                                  : "border-cyan-400/60 bg-cyan-500/20 text-cyan-100"
+                                : ""
                             }`}
+                            aria-label="Abrir ações da imagem"
                           >
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setFeedActionMenuId(null);
-                                downloadBibliotecaImage(feedItem.item);
-                              }}
-                              disabled={deletingMediaIds.includes(`image:${feedItem.item.id}`)}
-                              className={`flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-xs transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                            <MdMoreVert className="h-4 w-4 shrink-0 transition group-hover:scale-105" />
+                          </button>
+                          {feedActionMenuId === `image:${feedItem.item.id}` ? (
+                            <div
+                              className={`absolute top-10 right-0 z-[90] w-52 rounded-2xl border p-2 shadow-2xl backdrop-blur-md ${
                                 isLightTheme
-                                  ? "text-slate-800 hover:bg-slate-100"
-                                  : "text-gray-200 hover:bg-gray-800"
+                                  ? "border-slate-200 bg-white/95 shadow-slate-300/40"
+                                  : "border-gray-600/80 bg-gray-900/95 shadow-black/60"
                               }`}
                             >
-                              <FaDownload className="text-[11px]" />
-                              Baixar
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setFeedActionMenuId(null);
-                                openVideoModal(
-                                  feedItem.item.imageUrl,
-                                  resolveAspectRatioFromImageSize(feedItem.item.size),
-                                );
-                              }}
-                              disabled={deletingMediaIds.includes(`image:${feedItem.item.id}`)}
-                              className={`flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-xs transition disabled:cursor-not-allowed disabled:opacity-60 ${
-                                isLightTheme
-                                  ? "text-slate-800 hover:bg-slate-100"
-                                  : "text-cyan-100 hover:bg-cyan-500/20"
-                              }`}
-                            >
-                              <FaVideo className="text-[11px]" />
-                              Gerar vídeo
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setFeedActionMenuId(null);
-                                openDeleteModalForImage(feedItem.item);
-                              }}
-                              disabled={deletingMediaIds.includes(`image:${feedItem.item.id}`)}
-                              className={`flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-xs transition disabled:cursor-not-allowed disabled:opacity-60 ${
-                                isLightTheme
-                                  ? "text-red-700 hover:bg-red-50"
-                                  : "text-red-100 hover:bg-red-500/20"
-                              }`}
-                            >
-                              <FaTimes className="text-[11px]" />
-                              {deletingMediaIds.includes(`image:${feedItem.item.id}`) ? "Excluindo..." : "Excluir"}
-                            </button>
-                          </div>
-                        ) : null}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setFeedActionMenuId(null);
+                                  downloadBibliotecaImage(feedItem.item);
+                                }}
+                                disabled={deletingMediaIds.includes(`image:${feedItem.item.id}`)}
+                                className={`flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-xl px-3 text-left text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                                  isLightTheme
+                                    ? "text-slate-700 hover:bg-slate-100"
+                                    : "text-gray-100 hover:bg-gray-800"
+                                }`}
+                              >
+                                <FaDownload className="text-[11px]" />
+                                Baixar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setFeedActionMenuId(null);
+                                  openVideoModal(
+                                    feedItem.item.imageUrl,
+                                    resolveAspectRatioFromImageSize(feedItem.item.size),
+                                  );
+                                }}
+                                disabled={deletingMediaIds.includes(`image:${feedItem.item.id}`)}
+                                className={`flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-xl px-3 text-left text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                                  isLightTheme
+                                    ? "text-sky-700 hover:bg-sky-50"
+                                    : "text-cyan-100 hover:bg-cyan-500/20"
+                                }`}
+                              >
+                                <FaVideo className="text-[11px]" />
+                                Gerar vídeo
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setFeedActionMenuId(null);
+                                  openDeleteModalForImage(feedItem.item);
+                                }}
+                                disabled={deletingMediaIds.includes(`image:${feedItem.item.id}`)}
+                                className={`flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-xl px-3 text-left text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                                  isLightTheme
+                                    ? "text-red-700 hover:bg-red-50"
+                                    : "text-red-100 hover:bg-red-500/20"
+                                }`}
+                              >
+                                <FaTimes className="text-[11px]" />
+                                {deletingMediaIds.includes(`image:${feedItem.item.id}`) ? "Excluindo..." : "Excluir"}
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
                       </div>
                     </article>
                       ))}
@@ -2095,16 +2117,16 @@ export default function ImageGeneratorScreen() {
                       {bibliotecaVideoItems.map((feedItem) => (
                       <article
                         key={`video-${feedItem.item.id}`}
-                        className={`rounded-xl p-3 ${
+                        className={`relative rounded-xl p-3 ${
                           isLightTheme
                             ? "border border-slate-200 bg-white text-slate-900 shadow-sm"
                             : "border border-gray-700 bg-gray-900/70"
-                        }`}
+                        } ${feedActionMenuId === `video:${feedItem.item.id}` ? "z-40" : "z-0"}`}
                       >
-                      <div className="mb-2 flex items-center justify-between gap-2">
-                        <label className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${
+                      <div className="mb-2 flex items-center justify-start gap-2">
+                        <label className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1 text-[10px] font-semibold tracking-[0.04em] ${
                           isLightTheme
-                            ? "border border-slate-300 bg-slate-100 text-slate-800"
+                            ? "border border-slate-200 bg-white text-slate-700 shadow-sm"
                             : "border border-white/20 bg-black/35 text-gray-100"
                         }`}>
                           <input
@@ -2116,7 +2138,58 @@ export default function ImageGeneratorScreen() {
                           />
                           Selecionar
                         </label>
-                        <div className="relative">
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setBibliotecaLightboxItem({
+                            type: "video",
+                            url: feedItem.item.videoUrl,
+                            title: `Vídeo ${feedItem.item.id}`,
+                          })
+                        }
+                        className="relative aspect-square w-full cursor-pointer overflow-hidden rounded-md bg-black"
+                      >
+                        <video
+                          ref={(node) => setFeedVideoRef(feedItem.item.id, node)}
+                          data-feed-video-id={feedItem.item.id}
+                          src={feedItem.item.videoUrl}
+                          preload="metadata"
+                          poster={feedItem.item.sourceImageThumbnailUrl || undefined}
+                          muted
+                          playsInline
+                          loop
+                          className="absolute inset-0 h-full w-full object-cover"
+                        />
+                      </button>
+
+                      <p className={`mt-2 line-clamp-2 text-[11px] ${isLightTheme ? "text-slate-800" : "text-gray-300"}`}>{feedItem.caption}</p>
+                      <div className="mt-1 flex items-start justify-between gap-2">
+                        <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[10px]">
+                          <span className={`inline-flex items-center rounded-xl px-2.5 py-1 font-semibold tracking-[0.02em] ${
+                            isLightTheme
+                              ? "border border-cyan-200 bg-cyan-50 text-cyan-700"
+                              : "border border-cyan-400/35 bg-cyan-500/12 text-cyan-100"
+                          }`}>
+                            {feedItem.item.model}
+                          </span>
+                          <span className={`inline-flex items-center rounded-xl px-2.5 py-1 font-medium ${
+                            isLightTheme
+                              ? "border border-slate-200 bg-white text-slate-600 shadow-sm"
+                              : "border border-gray-600/80 bg-gray-800/80 text-gray-300"
+                          }`}>
+                            {feedItem.item.resolution} • {feedItem.item.aspectRatio} •{" "}
+                            {feedItem.item.durationSeconds}s
+                          </span>
+                          <span className={`inline-flex items-center rounded-xl px-2.5 py-1 font-medium ${
+                            isLightTheme
+                              ? "border border-slate-200 bg-white text-slate-600 shadow-sm"
+                              : "border border-gray-600/80 bg-gray-800/80 text-gray-300"
+                          }`}>
+                            {formatDatePtBr(feedItem.item.createdAt)}
+                          </span>
+                        </div>
+                        <div className="relative shrink-0">
                           <button
                             type="button"
                             onClick={() =>
@@ -2124,21 +2197,27 @@ export default function ImageGeneratorScreen() {
                                 current === `video:${feedItem.item.id}` ? null : `video:${feedItem.item.id}`,
                               )
                             }
-                            className={`inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md transition ${
+                            className={`group inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-xl border shadow-sm transition ${
                               isLightTheme
-                                ? "border border-slate-300 bg-slate-100 text-slate-800 hover:bg-slate-200"
-                                : "border border-gray-600 bg-gray-800 text-gray-200 hover:bg-gray-700"
+                                ? "border-slate-200 bg-white text-slate-600 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-700"
+                                : "border-gray-600/80 bg-gray-800/90 text-gray-200 hover:border-cyan-400/45 hover:bg-cyan-500/15 hover:text-cyan-100"
+                            } ${
+                              feedActionMenuId === `video:${feedItem.item.id}`
+                                ? isLightTheme
+                                  ? "border-sky-300 bg-sky-50 text-sky-700"
+                                  : "border-cyan-400/60 bg-cyan-500/20 text-cyan-100"
+                                : ""
                             }`}
                             aria-label="Abrir ações do vídeo"
                           >
-                            <MdMoreVert />
+                            <MdMoreVert className="h-4 w-4 shrink-0 transition group-hover:scale-105" />
                           </button>
                           {feedActionMenuId === `video:${feedItem.item.id}` ? (
                             <div
-                              className={`absolute top-9 right-0 z-20 w-40 rounded-md p-1.5 shadow-xl ${
+                              className={`absolute top-10 right-0 z-[90] w-52 rounded-2xl border p-2 shadow-2xl backdrop-blur-md ${
                                 isLightTheme
-                                  ? "border border-slate-300 bg-white"
-                                  : "border border-gray-600 bg-gray-900/98"
+                                  ? "border-slate-200 bg-white/95 shadow-slate-300/40"
+                                  : "border-gray-600/80 bg-gray-900/95 shadow-black/60"
                               }`}
                             >
                               <button
@@ -2148,10 +2227,10 @@ export default function ImageGeneratorScreen() {
                                   downloadBibliotecaVideo(feedItem.item);
                                 }}
                                 disabled={deletingMediaIds.includes(`video:${feedItem.item.id}`)}
-                                className={`flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-xs transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                                className={`flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-xl px-3 text-left text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
                                   isLightTheme
-                                    ? "text-slate-800 hover:bg-slate-100"
-                                    : "text-gray-200 hover:bg-gray-800"
+                                    ? "text-slate-700 hover:bg-slate-100"
+                                    : "text-gray-100 hover:bg-gray-800"
                                 }`}
                               >
                                 <FaDownload className="text-[11px]" />
@@ -2164,7 +2243,7 @@ export default function ImageGeneratorScreen() {
                                   openDeleteModalForVideo(feedItem.item);
                                 }}
                                 disabled={deletingMediaIds.includes(`video:${feedItem.item.id}`)}
-                                className={`flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-xs transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                                className={`flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-xl px-3 text-left text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
                                   isLightTheme
                                     ? "text-red-700 hover:bg-red-50"
                                     : "text-red-100 hover:bg-red-500/20"
@@ -2176,55 +2255,6 @@ export default function ImageGeneratorScreen() {
                             </div>
                           ) : null}
                         </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setBibliotecaLightboxItem({
-                            type: "video",
-                            url: feedItem.item.videoUrl,
-                            title: `Vídeo ${feedItem.item.id}`,
-                          })
-                        }
-                        className="relative w-full cursor-pointer overflow-hidden rounded-md bg-black"
-                      >
-                        <video
-                          ref={(node) => setFeedVideoRef(feedItem.item.id, node)}
-                          data-feed-video-id={feedItem.item.id}
-                          src={feedItem.item.videoUrl}
-                          preload="metadata"
-                          poster={feedItem.item.sourceImageThumbnailUrl || undefined}
-                          muted
-                          playsInline
-                          loop
-                          className="h-auto w-full object-cover"
-                        />
-                      </button>
-
-                      <p className={`mt-2 line-clamp-2 text-[11px] ${isLightTheme ? "text-slate-800" : "text-gray-300"}`}>{feedItem.caption}</p>
-                      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
-                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${
-                          isLightTheme
-                            ? "border border-slate-300 bg-slate-100 text-slate-800"
-                            : "border border-cyan-400/35 bg-cyan-500/10 text-cyan-200"
-                        }`}>
-                          {feedItem.item.model}
-                        </span>
-                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${
-                          isLightTheme
-                            ? "border border-slate-300 bg-slate-100 text-slate-700"
-                            : "border border-gray-600 bg-gray-800/70 text-gray-300"
-                        }`}>
-                          {feedItem.item.resolution} • {feedItem.item.aspectRatio} •{" "}
-                          {feedItem.item.durationSeconds}s
-                        </span>
-                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${
-                          isLightTheme
-                            ? "border border-slate-300 bg-slate-100 text-slate-700"
-                            : "border border-gray-600 bg-gray-800/70 text-gray-300"
-                        }`}>
-                          {formatDatePtBr(feedItem.item.createdAt)}
-                        </span>
                       </div>
 
                       </article>

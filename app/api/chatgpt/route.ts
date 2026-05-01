@@ -17,12 +17,14 @@ const OPENAI_IMAGES_API_URL = "https://api.openai.com/v1/images/generations";
 const OPENAI_IMAGE_EDITS_API_URL = "https://api.openai.com/v1/images/edits";
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_TEXT_MODEL = "gpt-5.2";
-const DEFAULT_IMAGE_MODEL = "chatgpt-image-latest";
+const DEFAULT_IMAGE_MODEL = "gpt-image-1.5";
 const ALLOWED_IMAGE_MODELS = new Set([
+  "gpt-image-1.5",
   "chatgpt-image-latest",
   "gpt-image-1",
   "gpt-image-1-mini",
   "nano_banana",
+  "gpt_image",
 ]);
 const DEFAULT_IMAGE_SIZE = "1024x1024";
 const IMAGE_SIZES = new Set(["1024x1024", "1536x1024", "1024x1536", "1024x1792", "1792x1024"]);
@@ -559,6 +561,9 @@ function normalizeImageModel(value: FormDataEntryValue | string | null | undefin
   }
 
   const normalized = value.trim();
+  if (normalized === "gpt_image") {
+    return "gpt-image-1.5";
+  }
   return ALLOWED_IMAGE_MODELS.has(normalized) ? normalized : DEFAULT_IMAGE_MODEL;
 }
 
