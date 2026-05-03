@@ -28,6 +28,7 @@ type MergeBody = {
 
 type VideoRecord = {
   id: string;
+  deviceId: string | null;
   blobPath: string;
   blobUrl: string;
   mimeType: string;
@@ -38,6 +39,7 @@ type BlobReadResult = {
   bytes: Uint8Array;
   contentType: string;
 };
+type BlobAccessMode = "private" | "public";
 
 function normalizeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -54,6 +56,55 @@ function toUniqueStrings(values: unknown): string[] {
     unique.push(id);
   }
   return unique;
+}
+
+function resolveFetchUrl(input: string, requestOrigin?: string): string {
+  const raw = normalizeString(input);
+  if (!raw) return raw;
+
+  try {
+    return new URL(raw).toString();
+  } catch {
+    // segue para fallback relativo
+  }
+
+  const envOriginCandidate =
+    normalizeString(process.env.NEXT_PUBLIC_APP_URL) ||
+    normalizeString(process.env.APP_URL) ||
+    normalizeString(process.env.NEXT_PUBLIC_SITE_URL);
+  const envOrigin = (() => {
+    if (!envOriginCandidate) return "";
+    try {
+      return new URL(envOriginCandidate).origin;
+    } catch {
+      return "";
+    }
+  })();
+
+  const vercelHost = normalizeString(process.env.VERCEL_URL).replace(/^https?:\/\//i, "");
+  const fallbackOrigin = requestOrigin || envOrigin || (vercelHost ? `https://${vercelHost}` : "");
+
+  if (!fallbackOrigin) {
+    throw new Error("Nao foi possivel resolver URL relativa do video para uniao.");
+  }
+
+  return new URL(raw, fallbackOrigin).toString();
+}
+
+function getBlobAccessCandidates(): BlobAccessMode[] {
+  const preferred = normalizeString(process.env.BLOB_ACCESS).toLowerCase();
+  if (preferred === "private") return ["private", "public"];
+  if (preferred === "public") return ["public", "private"];
+  return ["private", "public"];
+}
+
+function isBlobAccessCompatibilityError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("cannot use public access on a private store") ||
+    message.includes("cannot use private access on a public store")
+  );
 }
 
 async function ensureFfmpegAvailable() {
@@ -99,7 +150,11 @@ async function readFromBlob(pathname: string, token: string): Promise<BlobReadRe
   return null;
 }
 
-async function fetchVideoBytes(record: VideoRecord, blobToken?: string): Promise<BlobReadResult> {
+async function fetchVideoBytes(
+  record: VideoRecord,
+  blobToken?: string,
+  requestOrigin?: string,
+): Promise<BlobReadResult> {
   if (blobToken) {
     const readResult = await readFromBlob(record.blobPath, blobToken);
     if (readResult && readResult.bytes.byteLength > 0) {
@@ -107,7 +162,9 @@ async function fetchVideoBytes(record: VideoRecord, blobToken?: string): Promise
     }
   }
 
-  const response = await fetch(record.blobUrl, { cache: "no-store" });
+  const response = await fetch(resolveFetchUrl(record.blobUrl, requestOrigin), {
+    cache: "no-store",
+  });
   if (!response.ok) {
     throw new Error(`Nao foi possivel baixar o video ${record.id}.`);
   }
@@ -186,6 +243,7 @@ export async function POST(request: Request) {
       where: { id: { in: videoIds } },
       select: {
         id: true,
+        deviceId: true,
         blobPath: true,
         blobUrl: true,
         mimeType: true,
@@ -201,6 +259,8 @@ export async function POST(request: Request) {
     const orderedRecords = videoIds
       .map((id) => recordsById.get(id))
       .filter((record): record is VideoRecord => !!record);
+    const mergedDeviceId =
+      orderedRecords.map((record) => normalizeString(record.deviceId)).find((id) => id.length > 0) || "public";
 
     const sourceTotalBytes = orderedRecords.reduce((sum, record) => sum + Number(record.bytes || 0), 0);
     if (estimateOnly) {
@@ -216,6 +276,13 @@ export async function POST(request: Request) {
     await mkdir(tempDir, { recursive: true });
 
     const blobToken = process.env.BLOB_READ_WRITE_TOKEN?.trim();
+    const requestOrigin = (() => {
+      try {
+        return new URL(request.url).origin;
+      } catch {
+        return "";
+      }
+    })();
     const inputPaths: string[] = [];
     const audioPresence: boolean[] = [];
     let durationTotalSeconds = 0;
@@ -224,7 +291,7 @@ export async function POST(request: Request) {
       const record = orderedRecords[index];
       if (!record) continue;
 
-      const fetched = await fetchVideoBytes(record, blobToken);
+      const fetched = await fetchVideoBytes(record, blobToken, requestOrigin);
       const inputPath = path.join(tempDir, `input-${index}.mp4`);
       await writeFile(inputPath, Buffer.from(fetched.bytes));
       inputPaths.push(inputPath);
@@ -294,15 +361,35 @@ export async function POST(request: Request) {
     }
 
     const blobPath = buildBlobPath("mp4");
-    const uploaded = await put(blobPath, mergedBuffer, {
-      access: "public",
-      contentType: "video/mp4",
-      token: blobTokenRequired,
-      addRandomSuffix: false,
-    });
+    const accessCandidates = getBlobAccessCandidates();
+    let uploaded: Awaited<ReturnType<typeof put>> | null = null;
+    let lastUploadError: unknown = null;
+    for (const accessMode of accessCandidates) {
+      try {
+        uploaded = await put(blobPath, mergedBuffer, {
+          access: accessMode,
+          contentType: "video/mp4",
+          token: blobTokenRequired,
+          addRandomSuffix: false,
+        });
+        break;
+      } catch (uploadError) {
+        lastUploadError = uploadError;
+        if (!isBlobAccessCompatibilityError(uploadError)) {
+          throw uploadError;
+        }
+      }
+    }
+    if (!uploaded) {
+      if (lastUploadError instanceof Error) {
+        throw lastUploadError;
+      }
+      throw new Error("Falha ao salvar video final no Blob.");
+    }
 
     const persisted = await prisma.generatedVideo.create({
       data: {
+        deviceId: mergedDeviceId || null,
         sourceImageId: null,
         operationName: `merge-${crypto.randomUUID()}`,
         model: "video-merge",
@@ -319,7 +406,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       video_id: persisted.id,
-      video_url: `/api/chatgpt/generated-video/${persisted.id}`,
+      video_url: `/api/chatgpt/generated-video/${persisted.id}?deviceId=${encodeURIComponent(
+        mergedDeviceId || "public",
+      )}`,
       merged_size_bytes: mergedBuffer.byteLength,
       estimated_size_bytes: sourceTotalBytes,
       source_total_bytes: sourceTotalBytes,

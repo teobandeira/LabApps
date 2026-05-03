@@ -105,9 +105,26 @@ type PendingVideoResponse = {
   operationName: string;
   warning?: string;
 };
+type BlobAccessMode = "private" | "public";
 
 function normalizeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function getBlobAccessCandidates(): BlobAccessMode[] {
+  const preferred = normalizeString(process.env.BLOB_ACCESS).toLowerCase();
+  if (preferred === "private") return ["private", "public"];
+  if (preferred === "public") return ["public", "private"];
+  return ["private", "public"];
+}
+
+function isBlobAccessCompatibilityError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("cannot use public access on a private store") ||
+    message.includes("cannot use private access on a public store")
+  );
 }
 
 function normalizeSourceImageId(value: unknown): string | null {
@@ -1062,21 +1079,34 @@ async function persistVideoToBlob(params: {
       type: fetchedVideo.mimeType,
     });
 
-    try {
-      const blob = await put(blobPath, blobBody, {
-        access: "public",
-        addRandomSuffix: false,
-        cacheControlMaxAge: 31536000,
-        contentType: fetchedVideo.mimeType,
-        token: blobToken,
-      });
+    const accessCandidates = getBlobAccessCandidates();
+    let uploadedBlob: Awaited<ReturnType<typeof put>> | null = null;
+    let lastUploadError: unknown = null;
+    for (const accessMode of accessCandidates) {
+      try {
+        uploadedBlob = await put(blobPath, blobBody, {
+          access: accessMode,
+          addRandomSuffix: false,
+          cacheControlMaxAge: 31536000,
+          contentType: fetchedVideo.mimeType,
+          token: blobToken,
+        });
+        break;
+      } catch (uploadError) {
+        lastUploadError = uploadError;
+        if (!isBlobAccessCompatibilityError(uploadError)) {
+          throw uploadError;
+        }
+      }
+    }
 
-      blobPath = blob.pathname;
-      blobUrl = blob.url;
-    } catch (error) {
+    if (uploadedBlob) {
+      blobPath = uploadedBlob.pathname;
+      blobUrl = uploadedBlob.url;
+    } else {
       persistenceWarning =
-        error instanceof Error
-          ? `Falha ao salvar no Blob, mantendo persistencia por proxy: ${error.message}`
+        lastUploadError instanceof Error
+          ? `Falha ao salvar no Blob, mantendo persistencia por proxy: ${lastUploadError.message}`
           : "Falha ao salvar no Blob, mantendo persistencia por proxy.";
     }
   } else {
@@ -1147,7 +1177,7 @@ async function startVideoOperationForCandidate(params: {
       message: string;
     }
 > {
-  const imageFieldAttempts: ImageFieldType[] = ["bytesBase64Encoded"];
+  const imageFieldAttempts: ImageFieldType[] = ["bytesBase64Encoded", "imageBytes"];
   const endpointAttempts: StartEndpointVariant[] = ["generateVideos", "predictLongRunning"];
   let fallbackStatus = 502;
   let fallbackMessage = "Falha ao iniciar geracao de video no Gemini.";

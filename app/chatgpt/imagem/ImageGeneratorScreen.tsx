@@ -113,6 +113,15 @@ type ImageSizeOption = {
   videoAspectRatio: "16:9" | "9:16" | "1:1" | null;
 };
 type VideoMergeFormatValue = "16:9" | "9:16";
+type VideoMergeEstimatePayload = {
+  error?: string;
+  estimated_size_bytes?: unknown;
+  source_total_bytes?: unknown;
+};
+type VideoMergeRunPayload = VideoMergeEstimatePayload & {
+  video_url?: unknown;
+  merged_size_bytes?: unknown;
+};
 
 const SOCIAL_FORMAT_OPTIONS = [
   {
@@ -139,6 +148,12 @@ const SOCIAL_FORMAT_OPTIONS = [
 ] as const satisfies readonly SocialFormatOption[];
 
 const DEFAULT_IMAGE_SIZE_OPTIONS: readonly ImageSizeOption[] = [
+  {
+    value: "1792x1024",
+    label: "Paisagem (horizontal)",
+    details: "1792x1024 (16:9)",
+    videoAspectRatio: "16:9",
+  },
   {
     value: "1024x1792",
     label: "Story (vertical)",
@@ -251,6 +266,21 @@ const IMAGE_PROMPT_GUARDRAIL =
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function readJsonObject(response: Response): Promise<Record<string, unknown> | null> {
+  const raw = await response.text();
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
 }
 
 function createClientId(): string {
@@ -588,11 +618,15 @@ export default function ImageGeneratorScreen() {
   const [chatDeviceId, setChatDeviceId] = useState<string>("");
   const [creditsBalance, setCreditsBalance] = useState<number | null>(null);
   const [creditsLoading, setCreditsLoading] = useState(false);
+  const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
+  const [isImageSizeDropdownOpen, setIsImageSizeDropdownOpen] = useState(false);
   const toastTimerRef = useRef<number | null>(null);
   const mergeRequestAbortRef = useRef<AbortController | null>(null);
   const videoPreviewAnchorRef = useRef<HTMLDivElement | null>(null);
   const processingVideoThumbIdsRef = useRef<Set<string>>(new Set());
   const failedVideoThumbIdsRef = useRef<Set<string>>(new Set());
+  const modelDropdownRef = useRef<HTMLDivElement | null>(null);
+  const imageSizeDropdownRef = useRef<HTMLDivElement | null>(null);
 
   const selectedVideoModelOption = useMemo(
     () => VIDEO_MODEL_OPTIONS.find((option) => option.value === videoModel) || VIDEO_MODEL_OPTIONS[0],
@@ -606,6 +640,10 @@ export default function ImageGeneratorScreen() {
   const imageSizeOptions = useMemo(
     () => (isSoraImageModel ? SORA_IMAGE_SIZE_OPTIONS : DEFAULT_IMAGE_SIZE_OPTIONS),
     [isSoraImageModel],
+  );
+  const selectedImageSizeOption = useMemo(
+    () => imageSizeOptions.find((option) => option.value === imageSize) || imageSizeOptions[0],
+    [imageSize, imageSizeOptions],
   );
   const selectedVideoFormat = useMemo(
     () =>
@@ -664,6 +702,32 @@ export default function ImageGeneratorScreen() {
     }
     setImageSize(imageSizeOptions[0]?.value || DEFAULT_IMAGE_SIZE_OPTIONS[0].value);
   }, [imageSize, imageSizeOptions]);
+
+  useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (modelDropdownRef.current && !modelDropdownRef.current.contains(target)) {
+        setIsModelDropdownOpen(false);
+      }
+      if (imageSizeDropdownRef.current && !imageSizeDropdownRef.current.contains(target)) {
+        setIsImageSizeDropdownOpen(false);
+      }
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsModelDropdownOpen(false);
+        setIsImageSizeDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, []);
 
   const sectionCardClass = isLightTheme
     ? "rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5"
@@ -1083,9 +1147,13 @@ export default function ImageGeneratorScreen() {
         });
 
         const rawBody = await response.text();
-        let data: any = null;
+        let data: VideoMergeEstimatePayload | null = null;
         if (rawBody) {
-          data = JSON.parse(rawBody);
+          try {
+            data = JSON.parse(rawBody) as VideoMergeEstimatePayload;
+          } catch {
+            throw new Error("Resposta inválida ao estimar tamanho do vídeo.");
+          }
         }
 
         if (!response.ok || data?.error) {
@@ -1094,19 +1162,20 @@ export default function ImageGeneratorScreen() {
 
         setMergeEstimatedSizeBytes(
           Number.isFinite(Number(data?.estimated_size_bytes))
-            ? Number(data.estimated_size_bytes)
+            ? Number(data?.estimated_size_bytes)
             : null,
         );
         setMergeSourceTotalBytes(
           Number.isFinite(Number(data?.source_total_bytes))
-            ? Number(data.source_total_bytes)
+            ? Number(data?.source_total_bytes)
             : null,
         );
-      } catch (error: any) {
-        if (error?.name === "AbortError") {
+      } catch (error: unknown) {
+        if (error instanceof Error && error.name === "AbortError") {
           return;
         }
-        const message = error?.message || "Não foi possível calcular o tamanho previsto.";
+        const message =
+          error instanceof Error ? error.message : "Não foi possível calcular o tamanho previsto.";
         setMergeError(message);
       } finally {
         if (mergeRequestAbortRef.current === controller) {
@@ -1501,12 +1570,14 @@ export default function ImageGeneratorScreen() {
         body: JSON.stringify(body),
       });
 
-      const startData = await res.json();
-      if (!res.ok || startData?.error) {
+      const startData = await readJsonObject(res);
+      const startError =
+        typeof startData?.error === "string" ? startData.error.trim() : "";
+      if (!res.ok || startError) {
         if (res.status === 402) {
           void loadCredits(chatDeviceId);
         }
-        throw new Error(startData?.error || "Falha ao iniciar geração de vídeo.");
+        throw new Error(startError || `Falha ao iniciar geração de vídeo (HTTP ${res.status}).`);
       }
 
       if (typeof startData?.creditsBalance === "number") {
@@ -1515,22 +1586,30 @@ export default function ImageGeneratorScreen() {
         void loadCredits(chatDeviceId);
       }
 
-      if (startData?.done && startData?.videoUrl) {
-        setVideoResult(String(startData.videoUrl));
+      if (startData?.done === true && typeof startData.videoUrl === "string" && startData.videoUrl) {
+        setVideoResult(startData.videoUrl);
         setVideoErrorMessage(null);
         notify("success", "Vídeo gerado com sucesso!");
         void loadBiblioteca(chatDeviceId, { tab: "videos" });
         return;
       }
 
-      const operationName = String(startData?.operationName || "");
+      const operationName =
+        typeof startData?.operationName === "string"
+          ? startData.operationName.trim()
+          : "";
       if (!operationName) {
         throw new Error("A API não retornou o identificador da operação de vídeo.");
       }
 
-      const maxPollCycles = 80;
-      for (let i = 0; i < maxPollCycles; i += 1) {
-        await sleep(3000);
+      const isSoraModel = selectedVideoModelOption.provider === "sora";
+      const providerLabel = isSoraModel ? "Sora" : "Veo";
+      const pollIntervalMs = isSoraModel ? 8000 : 6000;
+      const timeoutMs = isSoraModel ? 20 * 60 * 1000 : 12 * 60 * 1000;
+      const startedAt = Date.now();
+
+      while (Date.now() - startedAt < timeoutMs) {
+        await sleep(pollIntervalMs);
         const params = new URLSearchParams();
         params.set("operationName", operationName);
         params.set("model", videoModel);
@@ -1543,18 +1622,22 @@ export default function ImageGeneratorScreen() {
           method: "GET",
           cache: "no-store",
         });
-        const statusData = await statusRes.json();
+        const statusData = await readJsonObject(statusRes);
+        const statusError =
+          typeof statusData?.error === "string" ? statusData.error.trim() : "";
 
         if (!statusRes.ok) {
-          throw new Error(statusData?.error || "Falha ao consultar status do vídeo.");
+          throw new Error(
+            statusError || `Falha ao consultar status do vídeo (HTTP ${statusRes.status}).`,
+          );
         }
 
-        if (statusData?.error) {
-          throw new Error(String(statusData.error));
+        if (statusError) {
+          throw new Error(statusError);
         }
 
-        if (statusData?.done && statusData?.videoUrl) {
-          setVideoResult(String(statusData.videoUrl));
+        if (statusData?.done === true && typeof statusData.videoUrl === "string" && statusData.videoUrl) {
+          setVideoResult(statusData.videoUrl);
           setVideoErrorMessage(null);
           notify("success", "Vídeo gerado com sucesso!");
           void loadBiblioteca(chatDeviceId, { tab: "videos" });
@@ -1562,7 +1645,7 @@ export default function ImageGeneratorScreen() {
         }
       }
 
-      throw new Error("Tempo limite excedido ao aguardar geração do vídeo.");
+      throw new Error(`Tempo limite excedido ao aguardar geração do vídeo no ${providerLabel}.`);
     } catch (err: unknown) {
       const friendlyMessage =
         err instanceof Error ? err.message : "Erro ao gerar vídeo.";
@@ -1885,9 +1968,13 @@ export default function ImageGeneratorScreen() {
       });
 
       const rawBody = await response.text();
-      let data: any = null;
+      let data: VideoMergeRunPayload | null = null;
       if (rawBody) {
-        data = JSON.parse(rawBody);
+        try {
+          data = JSON.parse(rawBody) as VideoMergeRunPayload;
+        } catch {
+          throw new Error("Resposta inválida ao juntar vídeos.");
+        }
       }
 
       if (!response.ok || data?.error) {
@@ -1901,17 +1988,17 @@ export default function ImageGeneratorScreen() {
       setMergeResultUrl(resultUrl);
       setMergeResultSizeBytes(
         Number.isFinite(Number(data?.merged_size_bytes))
-          ? Number(data.merged_size_bytes)
+          ? Number(data?.merged_size_bytes)
           : null,
       );
       setMergeEstimatedSizeBytes(
         Number.isFinite(Number(data?.estimated_size_bytes))
-          ? Number(data.estimated_size_bytes)
+          ? Number(data?.estimated_size_bytes)
           : mergeEstimatedSizeBytes,
       );
       setMergeSourceTotalBytes(
         Number.isFinite(Number(data?.source_total_bytes))
-          ? Number(data.source_total_bytes)
+          ? Number(data?.source_total_bytes)
           : mergeSourceTotalBytes,
       );
 
@@ -1919,11 +2006,11 @@ export default function ImageGeneratorScreen() {
       if (chatDeviceId) {
         void loadBiblioteca(chatDeviceId, { tab: "videos" });
       }
-    } catch (error: any) {
-      if (error?.name === "AbortError") {
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === "AbortError") {
         return;
       }
-      const message = error?.message || "Não foi possível juntar os vídeos.";
+      const message = error instanceof Error ? error.message : "Não foi possível juntar os vídeos.";
       setMergeError(message);
       notify("error", message);
     } finally {
@@ -2230,7 +2317,7 @@ export default function ImageGeneratorScreen() {
                 />
                 <label
                   htmlFor="produtoPrincipalUpload"
-                  className={`relative flex min-h-[224px] w-full flex-col items-center justify-center gap-2 overflow-hidden ${
+                  className={`relative flex min-h-56 w-full flex-col items-center justify-center gap-2 overflow-hidden ${
                     loading ? "cursor-not-allowed" : "cursor-pointer"
                   }`}
                 >
@@ -2334,48 +2421,148 @@ export default function ImageGeneratorScreen() {
               <div className="flex flex-col gap-4 md:flex-row">
                 <div className="w-full md:w-[46%] md:min-w-65">
                   <label className={fieldLabelClass}>Modelo IA</label>
-                  <div className={selectWrapperClass}>
-                    <select
-                      value={model}
-                      onChange={(e) => setModel(e.target.value)}
-                      className={selectClass}
+                  <div ref={modelDropdownRef} className="relative">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (loading) return;
+                        setIsModelDropdownOpen((current) => !current);
+                        setIsImageSizeDropdownOpen(false);
+                      }}
                       disabled={loading}
+                      className={`flex w-full cursor-pointer items-center justify-between gap-2 rounded-xl border px-3 py-2.5 text-left text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-70 ${
+                        isLightTheme
+                          ? "border-slate-300 bg-white text-slate-900 hover:border-sky-400"
+                          : "border-gray-600/90 bg-linear-to-b from-gray-800/95 to-gray-900/95 text-gray-100 hover:border-cyan-400/60"
+                      }`}
                     >
-                      {IMAGE_MODEL_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                    <FaChevronDown className={selectIconClass} />
+                      <span className="truncate">{selectedImageModelLabel}</span>
+                      <FaChevronDown
+                        className={`text-xs transition-transform ${
+                          isModelDropdownOpen ? "rotate-180" : ""
+                        } ${isLightTheme ? "text-slate-500" : "text-gray-400"}`}
+                      />
+                    </button>
+
+                    {isModelDropdownOpen ? (
+                      <div
+                        className={`absolute z-40 mt-2 w-full overflow-hidden rounded-xl border shadow-xl ${
+                          isLightTheme
+                            ? "border-slate-300 bg-white"
+                            : "border-gray-700 bg-gray-900/98"
+                        }`}
+                      >
+                        {IMAGE_MODEL_OPTIONS.map((option) => {
+                          const isSelected = model === option.value;
+                          return (
+                            <button
+                              key={`image-model-option-${option.value}`}
+                              type="button"
+                              onClick={() => {
+                                setModel(option.value);
+                                setIsModelDropdownOpen(false);
+                              }}
+                              className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm transition ${
+                                isSelected
+                                  ? isLightTheme
+                                    ? "bg-sky-100/85 text-slate-900"
+                                    : "bg-cyan-500/18 text-cyan-100"
+                                  : isLightTheme
+                                    ? "text-slate-700 hover:bg-slate-100"
+                                    : "text-gray-200 hover:bg-gray-800"
+                              }`}
+                            >
+                              <span className="truncate">{option.label}</span>
+                              {isSelected ? (
+                                <span
+                                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] ${
+                                    isLightTheme
+                                      ? "bg-sky-600 text-white"
+                                      : "bg-cyan-300 text-gray-900"
+                                  }`}
+                                >
+                                  Ativo
+                                </span>
+                              ) : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
                 <div className="w-full md:w-[46%] md:min-w-65">
                   <label className={fieldLabelClass}>Tamanho da imagem</label>
-                  <div className={selectWrapperClass}>
-                    <select
-                      value={imageSize}
-                      onChange={(e) => {
-                        const nextSize = e.target.value;
-                        setImageSize(nextSize);
-                        const selectedOption = imageSizeOptions.find(
-                          (option) => option.value === nextSize,
-                        );
-                        if (selectedOption?.videoAspectRatio) {
-                          setVideoAspectRatio(selectedOption.videoAspectRatio);
-                        }
+                  <div ref={imageSizeDropdownRef} className="relative">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (loading) return;
+                        setIsImageSizeDropdownOpen((current) => !current);
+                        setIsModelDropdownOpen(false);
                       }}
-                      className={selectClass}
                       disabled={loading}
+                      className={`flex w-full cursor-pointer items-center justify-between gap-2 rounded-xl border px-3 py-2.5 text-left text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-70 ${
+                        isLightTheme
+                          ? "border-sky-300 bg-linear-to-br from-white to-sky-50/70 text-slate-900 hover:border-sky-500"
+                          : "border-cyan-500/35 bg-linear-to-b from-slate-800/95 to-slate-900/95 text-gray-100 hover:border-cyan-400/60"
+                      }`}
                     >
-                      {imageSizeOptions.map((option) => (
-                        <option key={`image-size-${option.value}`} value={option.value}>
-                          {option.label} - {option.details}
-                        </option>
-                      ))}
-                    </select>
-                    <FaChevronDown className={selectIconClass} />
+                      <span className="inline-flex min-w-0 items-center gap-2">
+                        <MdImage className={`${isLightTheme ? "text-sky-600" : "text-cyan-300"}`} />
+                        <span className="truncate">{selectedImageSizeOption?.label || "Selecionar tamanho"}</span>
+                      </span>
+                      <FaChevronDown
+                        className={`text-xs transition-transform ${
+                          isImageSizeDropdownOpen ? "rotate-180" : ""
+                        } ${isLightTheme ? "text-slate-500" : "text-gray-400"}`}
+                      />
+                    </button>
+
+                    {isImageSizeDropdownOpen ? (
+                      <div
+                        className={`absolute z-40 mt-2 w-full overflow-hidden rounded-xl border shadow-xl ${
+                          isLightTheme
+                            ? "border-slate-300 bg-white"
+                            : "border-gray-700 bg-gray-900/98"
+                        }`}
+                      >
+                        {imageSizeOptions.map((option) => {
+                          const isSelected = imageSize === option.value;
+                          return (
+                            <button
+                              key={`image-size-option-${option.value}`}
+                              type="button"
+                              onClick={() => {
+                                setImageSize(option.value);
+                                if (option.videoAspectRatio) {
+                                  setVideoAspectRatio(option.videoAspectRatio);
+                                }
+                                setIsImageSizeDropdownOpen(false);
+                              }}
+                              className={`w-full px-3 py-2 text-left transition ${
+                                isSelected
+                                  ? isLightTheme
+                                    ? "bg-sky-100/85 text-slate-900"
+                                    : "bg-cyan-500/18 text-cyan-100"
+                                  : isLightTheme
+                                    ? "text-slate-700 hover:bg-slate-100"
+                                    : "text-gray-200 hover:bg-gray-800"
+                              }`}
+                            >
+                              <p className="truncate text-sm font-semibold">{option.label}</p>
+                              <p className={`truncate text-[11px] ${isSelected ? "" : isLightTheme ? "text-slate-500" : "text-gray-400"}`}>
+                                {option.details}
+                              </p>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
                   </div>
+                  <p className={`mt-1.5 text-[11px] ${isLightTheme ? "text-slate-600" : "text-gray-400"}`}>
+                    {selectedImageSizeOption?.details || "Escolha a proporção da imagem para geração."}
+                  </p>
                 </div>
               </div>
 
@@ -2554,7 +2741,7 @@ export default function ImageGeneratorScreen() {
                   {bibliotecaActiveTab === "images" ? (
                   <section>
                     <div className="mb-2 flex items-center justify-between">
-                      <p className={`text-xs font-semibold uppercase tracking-[0.1em] ${isLightTheme ? "text-violet-700" : "text-violet-200"}`}>
+                      <p className={`text-xs font-semibold uppercase tracking-widest ${isLightTheme ? "text-violet-700" : "text-violet-200"}`}>
                         Imagens
                       </p>
                       <span className={`text-[11px] ${isLightTheme ? "text-slate-600" : "text-gray-400"}`}>
@@ -2666,7 +2853,7 @@ export default function ImageGeneratorScreen() {
                           </button>
                           {feedActionMenuId === `image:${feedItem.item.id}` ? (
                             <div
-                              className={`absolute top-10 right-0 z-[90] w-52 rounded-2xl border p-2 shadow-2xl backdrop-blur-md ${
+                              className={`absolute top-10 right-0 z-90 w-52 rounded-2xl border p-2 shadow-2xl backdrop-blur-md ${
                                 isLightTheme
                                   ? "border-slate-200 bg-white/95 shadow-slate-300/40"
                                   : "border-gray-600/80 bg-gray-900/95 shadow-black/60"
@@ -2776,7 +2963,7 @@ export default function ImageGeneratorScreen() {
                   ) : bibliotecaActiveTab === "videos" ? (
                   <section>
                     <div className="mb-2 flex items-center justify-between">
-                      <p className={`text-xs font-semibold uppercase tracking-[0.1em] ${isLightTheme ? "text-cyan-700" : "text-cyan-200"}`}>
+                      <p className={`text-xs font-semibold uppercase tracking-widest ${isLightTheme ? "text-cyan-700" : "text-cyan-200"}`}>
                         Vídeos
                       </p>
                       <span className={`text-[11px] ${isLightTheme ? "text-slate-600" : "text-gray-400"}`}>
@@ -2819,45 +3006,26 @@ export default function ImageGeneratorScreen() {
                           Selecionar
                         </label>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setBibliotecaLightboxItem({
-                            type: "video",
-                            itemId: feedItem.item.id,
-                            url: feedItem.item.videoUrl,
-                            title: `Vídeo ${feedItem.item.id}`,
-                          })
-                        }
-                        className="relative aspect-square w-full cursor-pointer overflow-hidden rounded-md bg-black"
-                      >
-                        {videoThumbUrl ? (
-                          <img
-                            src={videoThumbUrl}
-                            alt={`Thumbnail do vídeo ${feedItem.item.id}`}
-                            onError={() => {
-                              if (!feedItem.item.sourceImageThumbnailUrl) return;
-                              setBrokenSourceVideoThumbIds((current) => {
-                                if (current[feedItem.item.id]) return current;
-                                return {
-                                  ...current,
-                                  [feedItem.item.id]: true,
-                                };
-                              });
-                            }}
-                            className="absolute inset-0 h-full w-full object-cover"
-                            loading="lazy"
-                            decoding="async"
-                          />
-                        ) : (
-                          <div className="absolute inset-0 bg-gray-900/80" />
-                        )}
-                        <div className="absolute inset-0 flex items-center justify-center">
-                          <span className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-black/60 text-white ring-1 ring-white/35">
-                            <FaPlay className="ml-0.5 text-sm" />
-                          </span>
-                        </div>
-                      </button>
+                      <div className="relative aspect-square w-full overflow-hidden rounded-md bg-black">
+                        <video
+                          src={feedItem.item.videoUrl}
+                          poster={videoThumbUrl || undefined}
+                          controls
+                          preload="metadata"
+                          playsInline
+                          className="absolute inset-0 h-full w-full object-cover"
+                          onError={() => {
+                            if (!feedItem.item.sourceImageThumbnailUrl) return;
+                            setBrokenSourceVideoThumbIds((current) => {
+                              if (current[feedItem.item.id]) return current;
+                              return {
+                                ...current,
+                                [feedItem.item.id]: true,
+                              };
+                            });
+                          }}
+                        />
+                      </div>
 
                       <p className={`mt-2 line-clamp-2 text-[11px] ${isLightTheme ? "text-slate-800" : "text-gray-300"}`}>{feedItem.caption}</p>
                       {(videoProjectsByVideoId.get(feedItem.item.id) || []).length > 0 ? (
@@ -2939,7 +3107,7 @@ export default function ImageGeneratorScreen() {
                           </button>
                           {feedActionMenuId === `video:${feedItem.item.id}` ? (
                             <div
-                              className={`absolute top-10 right-0 z-[90] w-52 rounded-2xl border p-2 shadow-2xl backdrop-blur-md ${
+                              className={`absolute top-10 right-0 z-90 w-52 rounded-2xl border p-2 shadow-2xl backdrop-blur-md ${
                                 isLightTheme
                                   ? "border-slate-200 bg-white/95 shadow-slate-300/40"
                                   : "border-gray-600/80 bg-gray-900/95 shadow-black/60"
@@ -3028,7 +3196,7 @@ export default function ImageGeneratorScreen() {
                   ) : (
                   <section>
                     <div className="mb-2 flex items-center justify-between">
-                      <p className={`text-xs font-semibold uppercase tracking-[0.1em] ${isLightTheme ? "text-emerald-700" : "text-emerald-200"}`}>
+                      <p className={`text-xs font-semibold uppercase tracking-widest ${isLightTheme ? "text-emerald-700" : "text-emerald-200"}`}>
                         Projetos
                       </p>
                       <span className={`text-[11px] ${isLightTheme ? "text-slate-600" : "text-gray-400"}`}>
@@ -3153,7 +3321,7 @@ export default function ImageGeneratorScreen() {
                   <section>
                     <div className="mb-2 flex items-center justify-between">
                       <p
-                        className={`text-xs font-semibold uppercase tracking-[0.1em] ${
+                        className={`text-xs font-semibold uppercase tracking-widest ${
                           isLightTheme ? "text-violet-700" : "text-violet-200"
                         }`}
                       >
@@ -3205,7 +3373,7 @@ export default function ImageGeneratorScreen() {
                   <section>
                     <div className="mb-2 flex items-center justify-between">
                       <p
-                        className={`text-xs font-semibold uppercase tracking-[0.1em] ${
+                        className={`text-xs font-semibold uppercase tracking-widest ${
                           isLightTheme ? "text-cyan-700" : "text-cyan-200"
                         }`}
                       >
@@ -3217,18 +3385,9 @@ export default function ImageGeneratorScreen() {
                     </div>
                     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
                       {selectedProjectMedia.videos.map((item) => (
-                        <button
+                        <article
                           key={`project-video-${item.id}`}
-                          type="button"
-                          onClick={() =>
-                            setBibliotecaLightboxItem({
-                              type: "video",
-                              itemId: item.id,
-                              url: item.videoUrl,
-                              title: `Vídeo ${item.id}`,
-                            })
-                          }
-                          className={`cursor-pointer rounded-lg border p-2 text-left transition ${
+                          className={`rounded-lg border p-2 text-left transition ${
                             isLightTheme
                               ? "border-slate-200 bg-white hover:border-cyan-300 hover:bg-cyan-50/30"
                               : "border-gray-700 bg-gray-900/70 hover:border-cyan-400/35"
@@ -3239,17 +3398,33 @@ export default function ImageGeneratorScreen() {
                               src={item.videoUrl}
                               poster={item.sourceImageThumbnailUrl || undefined}
                               preload="metadata"
-                              autoPlay
-                              muted
+                              controls
                               playsInline
-                              loop
                               className="absolute inset-0 h-full w-full object-cover"
                             />
                           </div>
                           <p className={`mt-1 truncate text-[11px] ${isLightTheme ? "text-slate-700" : "text-gray-300"}`}>
                             {item.resolution} • {item.aspectRatio}
                           </p>
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setBibliotecaLightboxItem({
+                                type: "video",
+                                itemId: item.id,
+                                url: item.videoUrl,
+                                title: `Vídeo ${item.id}`,
+                              })
+                            }
+                            className={`mt-2 inline-flex h-7 w-full items-center justify-center rounded-md border text-[10px] font-semibold transition ${
+                              isLightTheme
+                                ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                                : "border-gray-600 bg-gray-800 text-gray-200 hover:bg-gray-700"
+                            }`}
+                          >
+                            Abrir
+                          </button>
+                        </article>
                       ))}
                     </div>
                   </section>
@@ -3320,7 +3495,7 @@ export default function ImageGeneratorScreen() {
                 <div className="rounded-xl border border-gray-700/80 bg-gray-800/55 px-3 py-2.5 text-xs text-gray-200">
                   <p className="font-semibold uppercase tracking-[0.08em] text-gray-300">Formato final</p>
                   <div className="mt-2 grid grid-cols-2 gap-2">
-                    {SOCIAL_FORMAT_OPTIONS.map((option) => (
+                    {VIDEO_MERGE_FORMAT_OPTIONS.map((option) => (
                       <button
                         key={`merge-format-${option.value}`}
                         type="button"
@@ -3892,7 +4067,7 @@ export default function ImageGeneratorScreen() {
               </button>
             </div>
 
-            <label className="block text-xs font-semibold uppercase tracking-[0.1em] text-gray-300">
+            <label className="block text-xs font-semibold uppercase tracking-widest text-gray-300">
               Nome do projeto
             </label>
             <input
