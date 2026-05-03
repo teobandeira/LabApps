@@ -125,3 +125,40 @@ model ChatSessionMessage {
 
   @@index([sessionId, createdAt])
 }
+
+model MediaProject {
+  id            String              @id @default(cuid()) @db.VarChar(191)
+  name          String              @db.VarChar(191)
+  coverImageUrl String?             @map("cover_image_url") @db.VarChar(2048)
+  createdAt     DateTime            @default(now()) @map("created_at")
+  updatedAt     DateTime            @updatedAt @map("updated_at")
+  images        MediaProjectImage[]
+  videos        MediaProjectVideo[]
+
+  @@index([createdAt], map: "idx_created_at")
+  @@map("chatgpt_media_projects")
+}
+
+model MediaProjectImage {
+  id        String       @id @default(cuid()) @db.VarChar(191)
+  projectId String       @map("project_id") @db.VarChar(191)
+  imageId   String       @map("image_id") @db.VarChar(191)
+  createdAt DateTime     @default(now()) @map("created_at")
+  project   MediaProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, imageId], map: "uq_project_image")
+  @@index([imageId], map: "idx_image_id")
+  @@map("chatgpt_media_project_images")
+}
+
+model MediaProjectVideo {
+  id        String       @id @default(cuid()) @db.VarChar(191)
+  projectId String       @map("project_id") @db.VarChar(191)
+  videoId   String       @map("video_id") @db.VarChar(191)
+  createdAt DateTime     @default(now()) @map("created_at")
+  project   MediaProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, videoId], map: "uq_project_video")
+  @@index([videoId], map: "idx_video_id")
+  @@map("chatgpt_media_project_videos")
+}

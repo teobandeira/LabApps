@@ -249,7 +249,6 @@ const IMAGE_MODEL_OPTIONS: ImageModelOption[] = [
 
 const CHAT_DEVICE_ID_STORAGE_KEY = "chatgpt-device-id-v1";
 const IMAGE_STUDIO_THEME_STORAGE_KEY = "chatgpt-image-studio-theme-v1";
-const MEDIA_PROJECTS_STORAGE_PREFIX = "chatgpt-media-projects-v1";
 const IMAGE_GENERATION_CREDIT_COST = 1;
 const VIDEO_GENERATION_CREDIT_COST = 2;
 const BIBLIOTECA_PAGE_LIMIT = 8;
@@ -522,6 +521,56 @@ function resolveAspectRatioFromImageSize(size: string): "16:9" | "9:16" | "1:1" 
   return null;
 }
 
+function normalizeMediaProjects(value: unknown): MediaProject[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const normalized: MediaProject[] = [];
+
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+
+    const candidate = entry as {
+      id?: unknown;
+      name?: unknown;
+      createdAt?: unknown;
+      coverImageUrl?: unknown;
+      imageIds?: unknown;
+      videoIds?: unknown;
+    };
+
+    const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
+    const name = typeof candidate.name === "string" ? candidate.name.trim() : "";
+    if (!name) {
+      continue;
+    }
+
+    normalized.push({
+      id: id || createRequestId(),
+      name,
+      createdAt:
+        typeof candidate.createdAt === "string" && candidate.createdAt.trim()
+          ? candidate.createdAt
+          : new Date().toISOString(),
+      coverImageUrl:
+        typeof candidate.coverImageUrl === "string" && candidate.coverImageUrl.trim()
+          ? candidate.coverImageUrl
+          : null,
+      imageIds: Array.isArray(candidate.imageIds)
+        ? candidate.imageIds.filter((item): item is string => typeof item === "string")
+        : [],
+      videoIds: Array.isArray(candidate.videoIds)
+        ? candidate.videoIds.filter((item): item is string => typeof item === "string")
+        : [],
+    });
+  }
+
+  return normalized;
+}
+
 export default function ImageGeneratorScreen() {
   const [produtoPrincipal, setProdutoPrincipal] = useState<AmbientadorItem>({
     file: null,
@@ -628,6 +677,10 @@ export default function ImageGeneratorScreen() {
   const failedVideoThumbIdsRef = useRef<Set<string>>(new Set());
   const modelDropdownRef = useRef<HTMLDivElement | null>(null);
   const imageSizeDropdownRef = useRef<HTMLDivElement | null>(null);
+  const hasLoadedMediaProjectsRef = useRef(false);
+  const skipNextMediaProjectsSyncRef = useRef(false);
+  const mediaProjectsSyncTimerRef = useRef<number | null>(null);
+  const mediaProjectsSyncErrorShownRef = useRef(false);
 
   const selectedVideoModelOption = useMemo(
     () => VIDEO_MODEL_OPTIONS.find((option) => option.value === videoModel) || VIDEO_MODEL_OPTIONS[0],
@@ -882,7 +935,7 @@ export default function ImageGeneratorScreen() {
   const hasAnyBibliotecaContent =
     bibliotecaImageItems.length > 0 || bibliotecaVideoItems.length > 0 || mediaProjects.length > 0;
 
-  const notify = (type: "success" | "error", message: string) => {
+  const notify = useCallback((type: "success" | "error", message: string) => {
     setToastState({ type, message });
     if (toastTimerRef.current) {
       window.clearTimeout(toastTimerRef.current);
@@ -891,7 +944,7 @@ export default function ImageGeneratorScreen() {
       setToastState(null);
       toastTimerRef.current = null;
     }, 3500);
-  };
+  }, []);
 
   const loadBiblioteca = async (
     deviceIdParam: string,
@@ -983,6 +1036,42 @@ export default function ImageGeneratorScreen() {
     }
   };
 
+  const loadMediaProjects = useCallback(async () => {
+    try {
+      const response = await fetch("/api/chatgpt/media-projects", {
+        method: "GET",
+        cache: "no-store",
+      });
+
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            projects?: unknown;
+            error?: string;
+          }
+        | null;
+
+      if (!response.ok || payload?.error) {
+        throw new Error(payload?.error || "Nao foi possivel carregar projetos.");
+      }
+
+      const normalized = normalizeMediaProjects(payload?.projects);
+      skipNextMediaProjectsSyncRef.current = true;
+      hasLoadedMediaProjectsRef.current = true;
+      mediaProjectsSyncErrorShownRef.current = false;
+      setMediaProjects(normalized);
+    } catch (error: unknown) {
+      hasLoadedMediaProjectsRef.current = true;
+      if (!mediaProjectsSyncErrorShownRef.current) {
+        const message =
+          error instanceof Error ? error.message : "Nao foi possivel carregar projetos.";
+        notify("error", message);
+        mediaProjectsSyncErrorShownRef.current = true;
+      }
+      skipNextMediaProjectsSyncRef.current = true;
+      setMediaProjects([]);
+    }
+  }, [notify]);
+
   useEffect(() => {
     const deviceId = getOrCreateChatDeviceId();
     setChatDeviceId(deviceId);
@@ -1001,68 +1090,62 @@ export default function ImageGeneratorScreen() {
   }, []);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !chatDeviceId) return;
-    const storageKey = `${MEDIA_PROJECTS_STORAGE_PREFIX}:${chatDeviceId}`;
-    try {
-      const raw = window.localStorage.getItem(storageKey);
-      if (!raw) {
-        setMediaProjects([]);
-        return;
-      }
-
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) {
-        setMediaProjects([]);
-        return;
-      }
-
-      const normalized = parsed
-        .filter((entry) => entry && typeof entry === "object")
-        .map((entry) => {
-          const candidate = entry as {
-            id?: unknown;
-            name?: unknown;
-            createdAt?: unknown;
-            coverImageUrl?: unknown;
-            imageIds?: unknown;
-            videoIds?: unknown;
-          };
-          return {
-            id: typeof candidate.id === "string" ? candidate.id : createRequestId(),
-            name: typeof candidate.name === "string" ? candidate.name.trim() : "",
-            createdAt:
-              typeof candidate.createdAt === "string"
-                ? candidate.createdAt
-                : new Date().toISOString(),
-            coverImageUrl:
-              typeof candidate.coverImageUrl === "string"
-                ? candidate.coverImageUrl
-                : null,
-            imageIds: Array.isArray(candidate.imageIds)
-              ? candidate.imageIds.filter((id): id is string => typeof id === "string")
-              : [],
-            videoIds: Array.isArray(candidate.videoIds)
-              ? candidate.videoIds.filter((id): id is string => typeof id === "string")
-              : [],
-          };
-        })
-        .filter((entry) => entry.name.length > 0);
-
-      setMediaProjects(normalized);
-    } catch {
-      setMediaProjects([]);
-    }
-  }, [chatDeviceId]);
+    void loadMediaProjects();
+  }, [loadMediaProjects]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !chatDeviceId) return;
-    const storageKey = `${MEDIA_PROJECTS_STORAGE_PREFIX}:${chatDeviceId}`;
-    try {
-      window.localStorage.setItem(storageKey, JSON.stringify(mediaProjects));
-    } catch {
-      // ignore storage issues
+    if (typeof window === "undefined") return;
+    if (!hasLoadedMediaProjectsRef.current) return;
+
+    if (skipNextMediaProjectsSyncRef.current) {
+      skipNextMediaProjectsSyncRef.current = false;
+      return;
     }
-  }, [chatDeviceId, mediaProjects]);
+
+    if (mediaProjectsSyncTimerRef.current) {
+      window.clearTimeout(mediaProjectsSyncTimerRef.current);
+      mediaProjectsSyncTimerRef.current = null;
+    }
+
+    mediaProjectsSyncTimerRef.current = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const response = await fetch("/api/chatgpt/media-projects", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ projects: mediaProjects }),
+          });
+
+          const payload = (await response.json().catch(() => null)) as
+            | {
+                ok?: boolean;
+                error?: string;
+              }
+            | null;
+
+          if (!response.ok || payload?.error) {
+            throw new Error(payload?.error || "Nao foi possivel salvar projetos.");
+          }
+
+          mediaProjectsSyncErrorShownRef.current = false;
+        } catch (error: unknown) {
+          if (!mediaProjectsSyncErrorShownRef.current) {
+            const message =
+              error instanceof Error ? error.message : "Nao foi possivel salvar projetos.";
+            notify("error", message);
+            mediaProjectsSyncErrorShownRef.current = true;
+          }
+        }
+      })();
+    }, 350);
+
+    return () => {
+      if (mediaProjectsSyncTimerRef.current) {
+        window.clearTimeout(mediaProjectsSyncTimerRef.current);
+        mediaProjectsSyncTimerRef.current = null;
+      }
+    };
+  }, [mediaProjects, notify]);
 
   const toggleTheme = useCallback(() => {
     setIsLightTheme((current) => {
