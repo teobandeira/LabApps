@@ -3499,7 +3499,11 @@ export default function ImageGeneratorScreen() {
                       <button
                         key={`merge-format-${option.value}`}
                         type="button"
-                        onClick={() => setMergeAspectRatio(option.value)}
+                        onClick={() =>
+                          setMergeAspectRatio(
+                            option.value === "9:16" ? "9:16" : "16:9",
+                          )
+                        }
                         disabled={mergeLoading}
                         className={`rounded-xl border px-3 py-2 text-left text-xs font-medium transition ${
                           mergeAspectRatio === option.value
