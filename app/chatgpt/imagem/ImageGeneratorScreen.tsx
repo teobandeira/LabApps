@@ -622,6 +622,7 @@ export default function ImageGeneratorScreen() {
   const [isImageSizeDropdownOpen, setIsImageSizeDropdownOpen] = useState(false);
   const toastTimerRef = useRef<number | null>(null);
   const mergeRequestAbortRef = useRef<AbortController | null>(null);
+  const mergePreviewVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   const videoPreviewAnchorRef = useRef<HTMLDivElement | null>(null);
   const processingVideoThumbIdsRef = useRef<Set<string>>(new Set());
   const failedVideoThumbIdsRef = useRef<Set<string>>(new Set());
@@ -1917,6 +1918,20 @@ export default function ImageGeneratorScreen() {
       next.splice(toIndex, 0, draggedId);
       return next;
     });
+  };
+
+  const toggleMergePreviewPlay = (videoId: string) => {
+    const player = mergePreviewVideoRefs.current[videoId];
+    if (!player) return;
+
+    if (player.paused) {
+      void player.play().catch(() => {
+        // ignore preview play errors
+      });
+      return;
+    }
+
+    player.pause();
   };
 
   const openMergeModal = () => {
@@ -3524,25 +3539,106 @@ export default function ImageGeneratorScreen() {
                 </p>
               ) : null}
 
-              <p className="text-xs text-gray-400">A ordem da junção seguirá a ordem de seleção.</p>
+              <p className="text-xs text-gray-400">
+                Arraste os itens para ordenar. A ordem da lista será usada na junção final.
+              </p>
 
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                {selectedVideosForMerge.map((item, index) => (
-                  <article
-                    key={item.id}
-                    className="rounded-xl border border-gray-700 bg-gray-900/70 p-3"
-                  >
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-cyan-200">
-                      Ordem {index + 1}
-                    </p>
-                    <video
-                      src={item.videoUrl}
-                      controls
-                      preload="metadata"
-                      className="h-44 w-full rounded-md bg-black object-cover"
-                    />
-                  </article>
-                ))}
+              <div className="max-h-95 space-y-2 overflow-y-auto pr-1">
+                {selectedVideosForMerge.map((item, index) => {
+                  const isDragging = mergeDraggingId === item.id;
+                  const isDragOver = mergeDragOverId === item.id && mergeDraggingId !== item.id;
+
+                  return (
+                    <article
+                      key={item.id}
+                      draggable={!mergeLoading}
+                      onDragStart={(event) => {
+                        if (mergeLoading) return;
+                        setMergeDraggingId(item.id);
+                        setMergeDragOverId(item.id);
+                        event.dataTransfer.effectAllowed = "move";
+                        event.dataTransfer.setData("text/plain", item.id);
+                      }}
+                      onDragOver={(event) => {
+                        if (!mergeDraggingId) return;
+                        event.preventDefault();
+                        event.dataTransfer.dropEffect = "move";
+                        if (mergeDragOverId !== item.id) {
+                          setMergeDragOverId(item.id);
+                        }
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        const draggedId =
+                          mergeDraggingId || event.dataTransfer.getData("text/plain");
+                        if (draggedId) {
+                          reorderSelectedVideosForMerge(draggedId, item.id);
+                        }
+                        setMergeDraggingId(null);
+                        setMergeDragOverId(null);
+                      }}
+                      onDragEnd={() => {
+                        setMergeDraggingId(null);
+                        setMergeDragOverId(null);
+                      }}
+                      className={`flex items-center gap-3 rounded-xl border p-2.5 transition ${
+                        isDragging
+                          ? "border-cyan-400/70 bg-cyan-500/12 opacity-70"
+                          : isDragOver
+                            ? "border-cyan-300 bg-cyan-500/18"
+                            : "border-gray-700 bg-gray-900/70 hover:border-gray-500"
+                      } ${mergeLoading ? "cursor-not-allowed" : "cursor-grab active:cursor-grabbing"}`}
+                    >
+                      <div className="inline-flex h-7 min-w-7 items-center justify-center rounded-full border border-cyan-400/45 bg-cyan-500/15 text-[11px] font-semibold text-cyan-100">
+                        {index + 1}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          toggleMergePreviewPlay(item.id);
+                        }}
+                        className="relative h-14 w-24 shrink-0 cursor-pointer overflow-hidden rounded-md border border-gray-700 bg-black"
+                      >
+                        <video
+                          src={item.videoUrl}
+                          poster={item.sourceImageThumbnailUrl || undefined}
+                          preload="metadata"
+                          muted
+                          playsInline
+                          ref={(node) => {
+                            mergePreviewVideoRefs.current[item.id] = node;
+                          }}
+                          className="h-full w-full object-cover"
+                        />
+                        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                          <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/55 text-white">
+                            <FaPlay className="ml-0.5 text-[8px]" />
+                          </span>
+                        </div>
+                      </button>
+
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-xs font-semibold text-gray-100">
+                          Vídeo {index + 1}
+                        </p>
+                        <p className="truncate text-[11px] text-gray-400">
+                          {item.resolution} • {item.aspectRatio} • {item.durationSeconds}s
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => toggleVideoSelectionForMerge(item.id)}
+                        disabled={mergeLoading}
+                        className="inline-flex h-8 items-center justify-center rounded-lg border border-gray-600 bg-gray-800 px-2.5 text-[11px] font-semibold text-gray-200 transition hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        Remover
+                      </button>
+                    </article>
+                  );
+                })}
               </div>
 
               {mergeResultUrl ? (
