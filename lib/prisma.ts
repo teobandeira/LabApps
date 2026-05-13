@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { PrismaMariaDb } from "@prisma/adapter-mariadb";
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
@@ -34,7 +34,7 @@ const adapter = new PrismaMariaDb({
 });
 const shouldLogQueries =
   process.env.PRISMA_LOG_QUERIES === "1" || process.env.PRISMA_LOG_QUERIES === "true";
-const prismaLogs = shouldLogQueries
+const prismaLogs: Prisma.PrismaClientOptions["log"] = shouldLogQueries
   ? ["query", "error", "warn"]
   : process.env.NODE_ENV === "development"
     ? ["error", "warn"]
