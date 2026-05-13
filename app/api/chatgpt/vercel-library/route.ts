@@ -1,4 +1,4 @@
-import { list, type ListBlobResultBlob } from "@vercel/blob";
+import { del, list, type ListBlobResultBlob } from "@vercel/blob";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -46,6 +46,10 @@ const MAX_LIST_PAGES = 200;
 
 function normalizePathname(value: string): string {
   return value.trim().replace(/^\/+/, "");
+}
+
+function normalizeOptionalString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function extractExtension(pathname: string): string {
@@ -139,6 +143,45 @@ export async function GET() {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Nao foi possivel listar as midias da Vercel Library.";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const blobToken = process.env.BLOB_READ_WRITE_TOKEN?.trim();
+    if (!blobToken) {
+      return NextResponse.json(
+        { error: "BLOB_READ_WRITE_TOKEN nao configurado no ambiente." },
+        { status: 500 },
+      );
+    }
+
+    const payload = (await request.json().catch(() => null)) as
+      | {
+          pathname?: unknown;
+          url?: unknown;
+        }
+      | null;
+
+    const pathname = normalizePathname(normalizeOptionalString(payload?.pathname));
+    const url = normalizeOptionalString(payload?.url);
+    const deleteTarget = url || pathname;
+
+    if (!deleteTarget) {
+      return NextResponse.json({ error: "pathname ou url obrigatorio." }, { status: 400 });
+    }
+
+    await del(deleteTarget, { token: blobToken });
+
+    return NextResponse.json({
+      ok: true,
+      pathname: pathname || null,
+      url: url || null,
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Nao foi possivel excluir a midia da Vercel Library.";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

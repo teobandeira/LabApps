@@ -10,6 +10,7 @@ import {
   FaImage,
   FaPlay,
   FaRobot,
+  FaTrash,
   FaTimes,
   FaVideo,
 } from "react-icons/fa";
@@ -730,6 +731,7 @@ export default function ImageGeneratorScreen() {
   const [vercelLibraryLoading, setVercelLibraryLoading] = useState(false);
   const [vercelLibraryError, setVercelLibraryError] = useState<string | null>(null);
   const [vercelLibraryHasLoaded, setVercelLibraryHasLoaded] = useState(false);
+  const [deletingVercelPathnames, setDeletingVercelPathnames] = useState<string[]>([]);
   const [createProjectModalOpen, setCreateProjectModalOpen] = useState(false);
   const [createProjectName, setCreateProjectName] = useState("");
   const [createProjectError, setCreateProjectError] = useState<string | null>(null);
@@ -1050,6 +1052,10 @@ export default function ImageGeneratorScreen() {
       null
     );
   }, [bibliotecaLightboxItem, vercelLibraryItems]);
+  const isDeletingVercelLightboxItem = useMemo(() => {
+    if (!selectedVercelLibraryLightboxItem) return false;
+    return deletingVercelPathnames.includes(selectedVercelLibraryLightboxItem.pathname);
+  }, [deletingVercelPathnames, selectedVercelLibraryLightboxItem]);
   const hasMoreBibliotecaImageItems = bibliotecaHasMoreByTab.images;
   const hasMoreBibliotecaVideoItems = bibliotecaHasMoreByTab.videos;
   const hasAnyBibliotecaContent =
@@ -1236,6 +1242,54 @@ export default function ImageGeneratorScreen() {
     },
     [vercelLibraryHasLoaded, vercelLibraryLoading],
   );
+
+  const handleDeleteVercelLibraryItem = async (item: VercelLibraryMediaItem) => {
+    const pathname = item.pathname.trim();
+    if (!pathname || deletingVercelPathnames.includes(pathname)) return;
+
+    const filename = pathname.split("/").pop() || pathname;
+    const confirmed = window.confirm(`Excluir "${filename}" da Vercel Library?`);
+    if (!confirmed) return;
+
+    setDeletingVercelPathnames((current) => [...current, pathname]);
+    try {
+      const response = await fetch("/api/chatgpt/vercel-library", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pathname,
+          url: item.url,
+        }),
+      });
+
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            error?: string;
+          }
+        | null;
+
+      if (!response.ok || payload?.error) {
+        throw new Error(payload?.error || "Nao foi possivel excluir a midia da Vercel Library.");
+      }
+
+      setVercelLibraryItems((current) => current.filter((entry) => entry.pathname !== pathname));
+      if (
+        bibliotecaLightboxItem?.source === "vercelLibrary" &&
+        (bibliotecaLightboxItem.pathname === pathname || bibliotecaLightboxItem.url === item.proxyUrl)
+      ) {
+        setBibliotecaLightboxItem(null);
+      }
+      notify("success", "Midia excluida da Vercel Library.");
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Nao foi possivel excluir a midia da Vercel Library.";
+      notify("error", message);
+    } finally {
+      setDeletingVercelPathnames((current) => current.filter((entry) => entry !== pathname));
+    }
+  };
 
   useEffect(() => {
     const deviceId = getOrCreateChatDeviceId();
@@ -3559,7 +3613,8 @@ export default function ImageGeneratorScreen() {
                             <Skeleton className="aspect-square w-full rounded-md bg-gray-700/60" />
                             <Skeleton className="mt-2 h-3 w-5/6 bg-gray-700/60" />
                             <Skeleton className="mt-1 h-3 w-3/5 bg-gray-700/60" />
-                            <div className="mt-2 grid grid-cols-2 gap-2">
+                            <div className="mt-2 grid grid-cols-3 gap-2">
+                              <Skeleton className="h-8 w-full bg-gray-700/60" />
                               <Skeleton className="h-8 w-full bg-gray-700/60" />
                               <Skeleton className="h-8 w-full bg-gray-700/60" />
                             </div>
@@ -3603,6 +3658,7 @@ export default function ImageGeneratorScreen() {
                           const mediaDate = formatDatePtBr(item.uploadedAt);
                           const mediaSize = formatBytes(item.size);
                           const downloadHref = `${item.proxyUrl}${item.proxyUrl.includes("?") ? "&" : "?"}download=1`;
+                          const isDeletingItem = deletingVercelPathnames.includes(item.pathname);
 
                           return (
                             <article
@@ -3686,7 +3742,7 @@ export default function ImageGeneratorScreen() {
                                 </span>
                               </div>
 
-                              <div className="mt-2 grid grid-cols-2 gap-2">
+                              <div className="mt-2 grid grid-cols-3 gap-2">
                                 <button
                                   type="button"
                                   onClick={() =>
@@ -3701,24 +3757,43 @@ export default function ImageGeneratorScreen() {
                                       downloadUrl: downloadHref,
                                     })
                                   }
+                                  disabled={isDeletingItem}
                                   className={`inline-flex h-8 items-center justify-center rounded-lg border text-[11px] font-semibold transition ${
                                     isLightTheme
                                       ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
                                       : "border-gray-600 bg-gray-800 text-gray-100 hover:bg-gray-700"
-                                  }`}
+                                  } disabled:cursor-not-allowed disabled:opacity-60`}
                                 >
                                   Abrir
                                 </button>
                                 <a
                                   href={downloadHref}
+                                  onClick={(event) => {
+                                    if (isDeletingItem) {
+                                      event.preventDefault();
+                                    }
+                                  }}
                                   className={`inline-flex h-8 items-center justify-center rounded-lg border text-[11px] font-semibold transition ${
                                     isLightTheme
                                       ? "border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100"
                                       : "border-sky-400/45 bg-sky-500/15 text-sky-100 hover:bg-sky-500/25"
-                                  }`}
+                                  } ${isDeletingItem ? "pointer-events-none opacity-60" : ""}`}
                                 >
                                   Baixar
                                 </a>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleDeleteVercelLibraryItem(item)}
+                                  disabled={isDeletingItem}
+                                  className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border text-[11px] font-semibold transition ${
+                                    isLightTheme
+                                      ? "border-red-300 bg-red-50 text-red-700 hover:bg-red-100"
+                                      : "border-red-400/45 bg-red-500/15 text-red-100 hover:bg-red-500/25"
+                                  } disabled:cursor-not-allowed disabled:opacity-60`}
+                                >
+                                  <FaTrash className="text-[10px]" />
+                                  {isDeletingItem ? "Excluindo..." : "Excluir"}
+                                </button>
                               </div>
                             </article>
                           );
@@ -4283,7 +4358,9 @@ export default function ImageGeneratorScreen() {
                     href={selectedVercelLibraryLightboxItem.proxyUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="inline-flex h-10 min-w-36.25 cursor-pointer items-center justify-center gap-2 rounded-lg border border-gray-600 bg-gray-800 px-4 text-sm font-medium text-gray-100 transition hover:bg-gray-700"
+                    className={`inline-flex h-10 min-w-36.25 cursor-pointer items-center justify-center gap-2 rounded-lg border border-gray-600 bg-gray-800 px-4 text-sm font-medium text-gray-100 transition hover:bg-gray-700 ${
+                      isDeletingVercelLightboxItem ? "pointer-events-none opacity-60" : ""
+                    }`}
                   >
                     Abrir em nova aba
                   </a>
@@ -4291,11 +4368,27 @@ export default function ImageGeneratorScreen() {
                     href={`${selectedVercelLibraryLightboxItem.proxyUrl}${
                       selectedVercelLibraryLightboxItem.proxyUrl.includes("?") ? "&" : "?"
                     }download=1`}
-                    className="inline-flex h-10 min-w-30 cursor-pointer items-center justify-center gap-2 rounded-lg border border-cyan-400/45 bg-cyan-500/20 px-4 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/30"
+                    onClick={(event) => {
+                      if (isDeletingVercelLightboxItem) {
+                        event.preventDefault();
+                      }
+                    }}
+                    className={`inline-flex h-10 min-w-30 cursor-pointer items-center justify-center gap-2 rounded-lg border border-cyan-400/45 bg-cyan-500/20 px-4 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/30 ${
+                      isDeletingVercelLightboxItem ? "pointer-events-none opacity-60" : ""
+                    }`}
                   >
                     <FaDownload />
                     Baixar
                   </a>
+                  <button
+                    type="button"
+                    onClick={() => void handleDeleteVercelLibraryItem(selectedVercelLibraryLightboxItem)}
+                    disabled={isDeletingVercelLightboxItem}
+                    className="inline-flex h-10 min-w-30 cursor-pointer items-center justify-center gap-2 rounded-lg border border-red-400/45 bg-red-500/15 px-4 text-sm font-semibold text-red-100 transition hover:bg-red-500/25 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <FaTrash />
+                    {isDeletingVercelLightboxItem ? "Excluindo..." : "Excluir"}
+                  </button>
                 </>
               ) : null}
 
