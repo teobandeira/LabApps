@@ -32,12 +32,19 @@ const adapter = new PrismaMariaDb({
   database: decodeURIComponent(parsedDatabaseUrl.pathname.replace(/^\//, "")),
   connectionLimit: Math.max(1, Math.floor(resolvedConnectionLimit)),
 });
+const shouldLogQueries =
+  process.env.PRISMA_LOG_QUERIES === "1" || process.env.PRISMA_LOG_QUERIES === "true";
+const prismaLogs = shouldLogQueries
+  ? ["query", "error", "warn"]
+  : process.env.NODE_ENV === "development"
+    ? ["error", "warn"]
+    : ["error"];
 
 export const prisma =
   globalForPrisma.prisma ??
   new PrismaClient({
     adapter,
-    log: process.env.NODE_ENV === "development" ? ["query", "error", "warn"] : ["error"],
+    log: prismaLogs,
   });
 
 if (process.env.NODE_ENV !== "production") {

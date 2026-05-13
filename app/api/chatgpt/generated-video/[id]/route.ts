@@ -1,4 +1,4 @@
-import { del, get } from "@vercel/blob";
+import { del } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
 
 import { normalizeDeviceId } from "@/lib/chatgpt-credits";
@@ -21,6 +21,18 @@ function extensionFromContentType(contentType: string): string {
 type BlobReadResult = {
   stream: ReadableStream<Uint8Array>;
   contentType: string;
+  contentLength: string | null;
+  contentRange: string | null;
+  acceptRanges: string | null;
+  status: number;
+};
+
+type BlobHeadResult = {
+  contentType: string;
+  contentLength: string | null;
+  contentRange: string | null;
+  acceptRanges: string | null;
+  status: number;
 };
 
 async function deleteFromBlob(pathname: string, token: string): Promise<void> {
@@ -31,39 +43,105 @@ async function deleteFromBlob(pathname: string, token: string): Promise<void> {
   }
 }
 
-async function readFromBlob(pathname: string, token: string): Promise<BlobReadResult | null> {
-  try {
-    const privateRead = await get(pathname, {
-      access: "private",
-      token,
-      useCache: false,
-    });
+function getStoreIdFromToken(token: string): string {
+  const parts = token.split("_");
+  return parts[3] || "";
+}
 
-    if (privateRead && privateRead.statusCode === 200) {
+function encodeBlobPathname(pathname: string): string {
+  return pathname
+    .split("/")
+    .filter((segment) => segment.length > 0)
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+}
+
+function buildBlobFetchUrls(pathname: string, token: string): string[] {
+  const storeId = getStoreIdFromToken(token);
+  if (!storeId) return [];
+
+  const encodedPathname = encodeBlobPathname(pathname);
+  if (!encodedPathname) return [];
+
+  return [
+    `https://${storeId}.private.blob.vercel-storage.com/${encodedPathname}`,
+    `https://${storeId}.public.blob.vercel-storage.com/${encodedPathname}`,
+  ];
+}
+
+async function readFromBlob(
+  pathname: string,
+  token: string,
+  rangeHeader?: string | null
+): Promise<BlobReadResult | null> {
+  const fetchUrls = buildBlobFetchUrls(pathname, token);
+  if (fetchUrls.length === 0) return null;
+
+  for (const url of fetchUrls) {
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          authorization: `Bearer ${token}`,
+          ...(rangeHeader ? { range: rangeHeader } : {}),
+        },
+        cache: "no-store",
+      });
+
+      if (response.status !== 200 && response.status !== 206) {
+        continue;
+      }
+
+      const stream = response.body as ReadableStream<Uint8Array> | null;
+      if (!stream) continue;
+
+      const contentType =
+        response.headers.get("content-type")?.split(";")[0]?.trim() || "video/mp4";
+
       return {
-        stream: privateRead.stream,
-        contentType: privateRead.blob.contentType,
+        stream,
+        contentType,
+        contentLength: response.headers.get("content-length"),
+        contentRange: response.headers.get("content-range"),
+        acceptRanges: response.headers.get("accept-ranges"),
+        status: response.status,
       };
+    } catch {
+      // tenta próxima url
     }
-  } catch {
-    // fallback below
   }
 
-  try {
-    const publicRead = await get(pathname, {
-      access: "public",
-      token,
-      useCache: true,
-    });
+  return null;
+}
 
-    if (publicRead && publicRead.statusCode === 200) {
+async function headFromBlob(pathname: string, token: string): Promise<BlobHeadResult | null> {
+  const fetchUrls = buildBlobFetchUrls(pathname, token);
+  if (fetchUrls.length === 0) return null;
+
+  for (const url of fetchUrls) {
+    try {
+      const response = await fetch(url, {
+        method: "HEAD",
+        headers: {
+          authorization: `Bearer ${token}`,
+        },
+        cache: "no-store",
+      });
+
+      if (response.status !== 200 && response.status !== 206) {
+        continue;
+      }
+
       return {
-        stream: publicRead.stream,
-        contentType: publicRead.blob.contentType,
+        contentType: response.headers.get("content-type")?.split(";")[0]?.trim() || "video/mp4",
+        contentLength: response.headers.get("content-length"),
+        contentRange: response.headers.get("content-range"),
+        acceptRanges: response.headers.get("accept-ranges"),
+        status: response.status,
       };
+    } catch {
+      // tenta próxima url
     }
-  } catch {
-    // fallback below
   }
 
   return null;
@@ -102,15 +180,24 @@ export async function GET(
     }
 
     const blobToken = process.env.BLOB_READ_WRITE_TOKEN;
+    const rangeHeader = request.headers.get("range");
     const blobReadResult = blobToken
-      ? await readFromBlob(videoRecord.blobPath, blobToken)
+      ? await readFromBlob(videoRecord.blobPath, blobToken, rangeHeader)
       : null;
     let contentType = videoRecord.mimeType || "video/mp4";
     let stream: ReadableStream<Uint8Array> | null = null;
+    let contentLength: string | null = null;
+    let contentRange: string | null = null;
+    let acceptRanges: string | null = null;
+    let responseStatus = 200;
 
     if (blobReadResult) {
       contentType = blobReadResult.contentType || contentType;
       stream = blobReadResult.stream;
+      contentLength = blobReadResult.contentLength;
+      contentRange = blobReadResult.contentRange;
+      acceptRanges = blobReadResult.acceptRanges;
+      responseStatus = blobReadResult.status;
     } else {
       let fallbackUrl: string;
       try {
@@ -122,7 +209,10 @@ export async function GET(
         );
       }
 
-      const upstreamResponse = await fetch(fallbackUrl, { cache: "no-store" });
+      const upstreamResponse = await fetch(fallbackUrl, {
+        cache: "no-store",
+        headers: rangeHeader ? { range: rangeHeader } : undefined,
+      });
 
       if (!upstreamResponse.ok) {
         return NextResponse.json(
@@ -134,6 +224,10 @@ export async function GET(
       const contentTypeHeader = upstreamResponse.headers.get("content-type");
       contentType = contentTypeHeader?.split(";")[0]?.trim() || contentType;
       stream = upstreamResponse.body as ReadableStream<Uint8Array> | null;
+      contentLength = upstreamResponse.headers.get("content-length");
+      contentRange = upstreamResponse.headers.get("content-range");
+      acceptRanges = upstreamResponse.headers.get("accept-ranges");
+      responseStatus = upstreamResponse.status === 206 ? 206 : 200;
     }
 
     if (!stream) {
@@ -152,13 +246,16 @@ export async function GET(
     const filename = `video-${videoRecord.id}.${extension}`;
 
     return new NextResponse(stream, {
-      status: 200,
+      status: responseStatus,
       headers: {
         "Content-Type": contentType,
         "Content-Disposition": download
           ? `attachment; filename="${filename}"`
           : `inline; filename="${filename}"`,
         "Cache-Control": "private, no-store, max-age=0",
+        "Accept-Ranges": acceptRanges || "bytes",
+        ...(contentLength ? { "Content-Length": contentLength } : {}),
+        ...(contentRange ? { "Content-Range": contentRange } : {}),
       },
     });
   } catch {
@@ -214,5 +311,93 @@ export async function DELETE(
       { error: "Erro inesperado ao excluir video." },
       { status: 500 }
     );
+  }
+}
+
+export async function HEAD(
+  request: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await context.params;
+    if (!id) {
+      return new NextResponse(null, { status: 400 });
+    }
+
+    const deviceId = normalizeDeviceId(request.nextUrl.searchParams.get("deviceId"));
+    if (!deviceId) {
+      return new NextResponse(null, { status: 400 });
+    }
+
+    const videoRecord = await prisma.generatedVideo.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        deviceId: true,
+        blobPath: true,
+        blobUrl: true,
+        mimeType: true,
+      },
+    });
+
+    if (!videoRecord) {
+      return new NextResponse(null, { status: 404 });
+    }
+    if (videoRecord.deviceId && videoRecord.deviceId !== deviceId) {
+      return new NextResponse(null, { status: 404 });
+    }
+
+    const blobToken = process.env.BLOB_READ_WRITE_TOKEN;
+    const blobHead = blobToken ? await headFromBlob(videoRecord.blobPath, blobToken) : null;
+
+    if (blobHead) {
+      return new NextResponse(null, {
+        status: blobHead.status,
+        headers: {
+          "Content-Type": blobHead.contentType,
+          "Accept-Ranges": blobHead.acceptRanges || "bytes",
+          ...(blobHead.contentLength ? { "Content-Length": blobHead.contentLength } : {}),
+          ...(blobHead.contentRange ? { "Content-Range": blobHead.contentRange } : {}),
+          "Cache-Control": "private, no-store, max-age=0",
+        },
+      });
+    }
+
+    let fallbackUrl: string;
+    try {
+      fallbackUrl = new URL(videoRecord.blobUrl, request.nextUrl.origin).toString();
+    } catch {
+      return new NextResponse(null, { status: 500 });
+    }
+
+    const upstreamResponse = await fetch(fallbackUrl, {
+      method: "HEAD",
+      cache: "no-store",
+    });
+
+    if (!upstreamResponse.ok) {
+      return new NextResponse(null, { status: 502 });
+    }
+
+    const contentType =
+      upstreamResponse.headers.get("content-type")?.split(";")[0]?.trim() ||
+      videoRecord.mimeType ||
+      "video/mp4";
+    const contentLength = upstreamResponse.headers.get("content-length");
+    const contentRange = upstreamResponse.headers.get("content-range");
+    const acceptRanges = upstreamResponse.headers.get("accept-ranges");
+
+    return new NextResponse(null, {
+      status: upstreamResponse.status === 206 ? 206 : 200,
+      headers: {
+        "Content-Type": contentType,
+        "Accept-Ranges": acceptRanges || "bytes",
+        ...(contentLength ? { "Content-Length": contentLength } : {}),
+        ...(contentRange ? { "Content-Range": contentRange } : {}),
+        "Cache-Control": "private, no-store, max-age=0",
+      },
+    });
+  } catch {
+    return new NextResponse(null, { status: 500 });
   }
 }

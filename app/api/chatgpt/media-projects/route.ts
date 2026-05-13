@@ -35,6 +35,7 @@ type ProjectVideoRow = {
 const PROJECTS_TABLE = "chatgpt_media_projects";
 const PROJECT_IMAGES_TABLE = "chatgpt_media_project_images";
 const PROJECT_VIDEOS_TABLE = "chatgpt_media_project_videos";
+let ensureProjectTablesPromise: Promise<void> | null = null;
 
 function normalizeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -180,8 +181,18 @@ async function ensureProjectTables() {
   `);
 }
 
+async function ensureProjectTablesOnce() {
+  if (!ensureProjectTablesPromise) {
+    ensureProjectTablesPromise = ensureProjectTables().catch((error) => {
+      ensureProjectTablesPromise = null;
+      throw error;
+    });
+  }
+  await ensureProjectTablesPromise;
+}
+
 async function readAllProjects(): Promise<ProjectPayload[]> {
-  await ensureProjectTables();
+  await ensureProjectTablesOnce();
 
   const [projectRowsRaw, imageRowsRaw, videoRowsRaw] = await prisma.$transaction([
     prisma.$queryRawUnsafe(`
@@ -217,7 +228,7 @@ async function readAllProjects(): Promise<ProjectPayload[]> {
 }
 
 async function replaceAllProjects(projects: ProjectPayload[]) {
-  await ensureProjectTables();
+  await ensureProjectTablesOnce();
 
   await prisma.$transaction(async (tx) => {
     await tx.$executeRawUnsafe(`DELETE FROM ${PROJECT_IMAGES_TABLE}`);

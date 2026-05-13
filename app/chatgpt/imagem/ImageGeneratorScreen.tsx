@@ -74,6 +74,9 @@ type BibliotecaLightboxItem = {
   url: string;
   title: string;
   previewUrl?: string | null;
+  source?: "biblioteca" | "vercelLibrary";
+  pathname?: string;
+  downloadUrl?: string;
 } | null;
 
 type DeleteModalState =
@@ -88,6 +91,18 @@ type MediaProject = {
   coverImageUrl?: string | null;
   imageIds: string[];
   videoIds: string[];
+};
+
+type VercelLibraryMediaKind = "image" | "video";
+
+type VercelLibraryMediaItem = {
+  kind: VercelLibraryMediaKind;
+  pathname: string;
+  url: string;
+  downloadUrl: string;
+  proxyUrl: string;
+  size: number;
+  uploadedAt: string;
 };
 
 type AssignProjectTarget =
@@ -479,6 +494,17 @@ function formatBytes(value?: number | null) {
   return `${size.toFixed(decimals)} ${units[exponent]}`;
 }
 
+function formatDurationClock(value?: number | null) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return "--:--";
+  }
+
+  const totalSeconds = Math.floor(value);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
 function normalizeResultUrl(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -571,6 +597,70 @@ function normalizeMediaProjects(value: unknown): MediaProject[] {
   return normalized;
 }
 
+function normalizeVercelLibraryItems(value: unknown): VercelLibraryMediaItem[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const unique = new Map<string, VercelLibraryMediaItem>();
+
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+
+    const candidate = entry as {
+      kind?: unknown;
+      pathname?: unknown;
+      url?: unknown;
+      downloadUrl?: unknown;
+      proxyUrl?: unknown;
+      size?: unknown;
+      uploadedAt?: unknown;
+    };
+
+    const kind = candidate.kind === "image" || candidate.kind === "video" ? candidate.kind : null;
+    const pathname = typeof candidate.pathname === "string" ? candidate.pathname.trim() : "";
+    const url = typeof candidate.url === "string" ? candidate.url.trim() : "";
+    const proxyUrl =
+      typeof candidate.proxyUrl === "string" && candidate.proxyUrl.trim()
+        ? candidate.proxyUrl.trim()
+        : url;
+    const downloadUrl =
+      typeof candidate.downloadUrl === "string" && candidate.downloadUrl.trim()
+        ? candidate.downloadUrl.trim()
+        : proxyUrl;
+    const uploadedAtRaw =
+      typeof candidate.uploadedAt === "string" && candidate.uploadedAt.trim()
+        ? candidate.uploadedAt.trim()
+        : "";
+    const uploadedAt = Number.isNaN(new Date(uploadedAtRaw).getTime())
+      ? new Date().toISOString()
+      : new Date(uploadedAtRaw).toISOString();
+    const size = Number.isFinite(Number(candidate.size))
+      ? Math.max(0, Number(candidate.size))
+      : 0;
+
+    if (!kind || !pathname || !proxyUrl) {
+      continue;
+    }
+
+    unique.set(pathname, {
+      kind,
+      pathname,
+      url: url || proxyUrl,
+      downloadUrl,
+      proxyUrl,
+      size,
+      uploadedAt,
+    });
+  }
+
+  return Array.from(unique.values()).sort(
+    (a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime(),
+  );
+}
+
 export default function ImageGeneratorScreen() {
   const [produtoPrincipal, setProdutoPrincipal] = useState<AmbientadorItem>({
     file: null,
@@ -627,13 +717,19 @@ export default function ImageGeneratorScreen() {
   >(null);
   const [bibliotecaLoading, setBibliotecaLoading] = useState(false);
   const [bibliotecaError, setBibliotecaError] = useState<string | null>(null);
-  const [bibliotecaActiveTab, setBibliotecaActiveTab] = useState<"images" | "videos" | "projects">("images");
+  const [bibliotecaActiveTab, setBibliotecaActiveTab] = useState<
+    "images" | "videos" | "projects" | "vercelLibrary"
+  >("images");
   const [deletingMediaIds, setDeletingMediaIds] = useState<string[]>([]);
   const [deleteModalState, setDeleteModalState] = useState<DeleteModalState>(null);
   const [bibliotecaLightboxItem, setBibliotecaLightboxItem] =
     useState<BibliotecaLightboxItem>(null);
   const [bibliotecaLightboxImageLoaded, setBibliotecaLightboxImageLoaded] = useState(false);
   const [mediaProjects, setMediaProjects] = useState<MediaProject[]>([]);
+  const [vercelLibraryItems, setVercelLibraryItems] = useState<VercelLibraryMediaItem[]>([]);
+  const [vercelLibraryLoading, setVercelLibraryLoading] = useState(false);
+  const [vercelLibraryError, setVercelLibraryError] = useState<string | null>(null);
+  const [vercelLibraryHasLoaded, setVercelLibraryHasLoaded] = useState(false);
   const [createProjectModalOpen, setCreateProjectModalOpen] = useState(false);
   const [createProjectName, setCreateProjectName] = useState("");
   const [createProjectError, setCreateProjectError] = useState<string | null>(null);
@@ -805,6 +901,14 @@ export default function ImageGeneratorScreen() {
 
   const bibliotecaImageCount = generatedImages.length;
   const bibliotecaVideoCount = generatedVideos.length;
+  const vercelLibraryImageCount = useMemo(
+    () => vercelLibraryItems.filter((item) => item.kind === "image").length,
+    [vercelLibraryItems],
+  );
+  const vercelLibraryVideoCount = useMemo(
+    () => vercelLibraryItems.filter((item) => item.kind === "video").length,
+    [vercelLibraryItems],
+  );
   const bibliotecaImageItems = useMemo(
     () =>
       [...generatedImages]
@@ -930,10 +1034,31 @@ export default function ImageGeneratorScreen() {
       null
     );
   }, [bibliotecaLightboxItem, generatedVideos]);
+  const selectedVercelLibraryLightboxItem = useMemo(() => {
+    if (!bibliotecaLightboxItem || bibliotecaLightboxItem.source !== "vercelLibrary") {
+      return null;
+    }
+    if (bibliotecaLightboxItem.pathname) {
+      const byPathname = vercelLibraryItems.find(
+        (item) => item.pathname === bibliotecaLightboxItem.pathname,
+      );
+      if (byPathname) return byPathname;
+    }
+    return (
+      vercelLibraryItems.find((item) => item.proxyUrl === bibliotecaLightboxItem.url) ||
+      vercelLibraryItems.find((item) => item.url === bibliotecaLightboxItem.url) ||
+      null
+    );
+  }, [bibliotecaLightboxItem, vercelLibraryItems]);
   const hasMoreBibliotecaImageItems = bibliotecaHasMoreByTab.images;
   const hasMoreBibliotecaVideoItems = bibliotecaHasMoreByTab.videos;
   const hasAnyBibliotecaContent =
-    bibliotecaImageItems.length > 0 || bibliotecaVideoItems.length > 0 || mediaProjects.length > 0;
+    bibliotecaImageItems.length > 0 ||
+    bibliotecaVideoItems.length > 0 ||
+    mediaProjects.length > 0 ||
+    vercelLibraryItems.length > 0 ||
+    vercelLibraryLoading ||
+    !vercelLibraryHasLoaded;
 
   const notify = useCallback((type: "success" | "error", message: string) => {
     setToastState({ type, message });
@@ -1072,6 +1197,46 @@ export default function ImageGeneratorScreen() {
     }
   }, [notify]);
 
+  const loadVercelLibrary = useCallback(
+    async (options?: { force?: boolean }) => {
+      const force = Boolean(options?.force);
+      if (vercelLibraryLoading) return;
+      if (vercelLibraryHasLoaded && !force) return;
+
+      setVercelLibraryLoading(true);
+      setVercelLibraryError(null);
+
+      try {
+        const response = await fetch("/api/chatgpt/vercel-library", {
+          method: "GET",
+          cache: "no-store",
+        });
+
+        const payload = (await response.json().catch(() => null)) as
+          | {
+              items?: unknown;
+              error?: string;
+            }
+          | null;
+
+        if (!response.ok || payload?.error) {
+          throw new Error(payload?.error || "Nao foi possivel carregar a Vercel Library.");
+        }
+
+        const normalizedItems = normalizeVercelLibraryItems(payload?.items);
+        setVercelLibraryItems(normalizedItems);
+      } catch (error: unknown) {
+        const message =
+          error instanceof Error ? error.message : "Nao foi possivel carregar a Vercel Library.";
+        setVercelLibraryError(message);
+      } finally {
+        setVercelLibraryHasLoaded(true);
+        setVercelLibraryLoading(false);
+      }
+    },
+    [vercelLibraryHasLoaded, vercelLibraryLoading],
+  );
+
   useEffect(() => {
     const deviceId = getOrCreateChatDeviceId();
     setChatDeviceId(deviceId);
@@ -1092,6 +1257,12 @@ export default function ImageGeneratorScreen() {
   useEffect(() => {
     void loadMediaProjects();
   }, [loadMediaProjects]);
+
+  useEffect(() => {
+    if (bibliotecaActiveTab !== "vercelLibrary") return;
+    if (vercelLibraryHasLoaded || vercelLibraryLoading) return;
+    void loadVercelLibrary();
+  }, [bibliotecaActiveTab, loadVercelLibrary, vercelLibraryHasLoaded, vercelLibraryLoading]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1287,7 +1458,7 @@ export default function ImageGeneratorScreen() {
   }, [generatedImages, generatedVideos]);
 
   useEffect(() => {
-    if (bibliotecaActiveTab === "projects") return;
+    if (bibliotecaActiveTab === "projects" || bibliotecaActiveTab === "vercelLibrary") return;
     if (bibliotecaActiveTab === "images" && bibliotecaImageCount === 0 && bibliotecaVideoCount > 0) {
       setBibliotecaActiveTab("videos");
     }
@@ -2822,6 +2993,21 @@ export default function ImageGeneratorScreen() {
                       >
                         Ver projetos ({mediaProjects.length})
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => setBibliotecaActiveTab("vercelLibrary")}
+                        className={`inline-flex h-9 items-center rounded-lg border px-3 text-xs font-semibold uppercase tracking-[0.08em] transition ${
+                          bibliotecaActiveTab === "vercelLibrary"
+                            ? isLightTheme
+                              ? "border-sky-500 bg-sky-100 text-sky-800"
+                              : "border-sky-400/55 bg-sky-500/20 text-sky-100"
+                            : isLightTheme
+                              ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                              : "border-gray-600 bg-gray-900/70 text-gray-300 hover:bg-gray-800"
+                        }`}
+                      >
+                        Vercel Library ({vercelLibraryItems.length})
+                      </button>
                     </div>
                     <button
                       type="button"
@@ -3109,7 +3295,7 @@ export default function ImageGeneratorScreen() {
                           src={feedItem.item.videoUrl}
                           poster={videoThumbUrl || undefined}
                           controls
-                          preload="metadata"
+                          preload="auto"
                           playsInline
                           className="absolute inset-0 h-full w-full object-cover"
                           onError={() => {
@@ -3170,7 +3356,7 @@ export default function ImageGeneratorScreen() {
                               : "border border-gray-600/80 bg-gray-800/80 text-gray-300"
                           }`}>
                             {feedItem.item.resolution} • {feedItem.item.aspectRatio} •{" "}
-                            {feedItem.item.durationSeconds}s
+                            {formatDurationClock(feedItem.item.durationSeconds)}
                           </span>
                           <span className={`inline-flex items-center rounded-xl px-2.5 py-1 font-medium ${
                             isLightTheme
@@ -3291,7 +3477,7 @@ export default function ImageGeneratorScreen() {
                       </div>
                     ) : null}
                   </section>
-                  ) : (
+                  ) : bibliotecaActiveTab === "projects" ? (
                   <section>
                     <div className="mb-2 flex items-center justify-between">
                       <p className={`text-xs font-semibold uppercase tracking-widest ${isLightTheme ? "text-emerald-700" : "text-emerald-200"}`}>
@@ -3345,6 +3531,198 @@ export default function ImageGeneratorScreen() {
                     ) : (
                       <div className="rounded-xl border border-gray-700 bg-gray-900/60 px-4 py-6 text-center text-sm text-gray-300">
                         Nenhum projeto criado ainda.
+                      </div>
+                    )}
+                  </section>
+                  ) : (
+                  <section>
+                    <div className="mb-2 flex items-center justify-between">
+                      <p className={`text-xs font-semibold uppercase tracking-widest ${isLightTheme ? "text-sky-700" : "text-sky-200"}`}>
+                        Vercel Library
+                      </p>
+                      <span className={`text-[11px] ${isLightTheme ? "text-slate-600" : "text-gray-400"}`}>
+                        {vercelLibraryItems.length} itens ({vercelLibraryImageCount} imagens • {vercelLibraryVideoCount} vídeos)
+                      </span>
+                    </div>
+
+                    {vercelLibraryLoading ? (
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                        {Array.from({ length: 8 }).map((_, index) => (
+                          <article
+                            key={`vercel-library-skeleton-${index}`}
+                            className={`rounded-xl p-3 ${
+                              isLightTheme
+                                ? "border border-slate-200 bg-white shadow-sm"
+                                : "border border-gray-700 bg-gray-900/70"
+                            }`}
+                          >
+                            <Skeleton className="aspect-square w-full rounded-md bg-gray-700/60" />
+                            <Skeleton className="mt-2 h-3 w-5/6 bg-gray-700/60" />
+                            <Skeleton className="mt-1 h-3 w-3/5 bg-gray-700/60" />
+                            <div className="mt-2 grid grid-cols-2 gap-2">
+                              <Skeleton className="h-8 w-full bg-gray-700/60" />
+                              <Skeleton className="h-8 w-full bg-gray-700/60" />
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    ) : vercelLibraryError ? (
+                      <div className={`rounded-xl border px-4 py-6 text-sm ${
+                        isLightTheme
+                          ? "border-red-200 bg-red-50 text-red-700"
+                          : "border-red-500/35 bg-red-500/10 text-red-100"
+                      }`}>
+                        <p>{vercelLibraryError}</p>
+                        <button
+                          type="button"
+                          onClick={() => void loadVercelLibrary({ force: true })}
+                          className={`mt-3 inline-flex h-8 items-center rounded-lg border px-3 text-xs font-semibold transition ${
+                            isLightTheme
+                              ? "border-red-300 bg-white text-red-700 hover:bg-red-100"
+                              : "border-red-400/40 bg-red-500/15 text-red-100 hover:bg-red-500/25"
+                          }`}
+                        >
+                          Tentar novamente
+                        </button>
+                      </div>
+                    ) : vercelLibraryItems.length === 0 ? (
+                      <div className={`rounded-xl border px-4 py-6 text-center text-sm ${
+                        isLightTheme
+                          ? "border-slate-200 bg-slate-50 text-slate-600"
+                          : "border-gray-700 bg-gray-900/60 text-gray-300"
+                      }`}>
+                        Nenhuma mídia encontrada no Blob da Vercel.
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                        {vercelLibraryItems.map((item) => {
+                          const filename = item.pathname.split("/").pop() || item.pathname;
+                          const folderIndex = item.pathname.lastIndexOf("/");
+                          const folderLabel =
+                            folderIndex > 0 ? item.pathname.slice(0, folderIndex) : "raiz";
+                          const mediaDate = formatDatePtBr(item.uploadedAt);
+                          const mediaSize = formatBytes(item.size);
+                          const downloadHref = `${item.proxyUrl}${item.proxyUrl.includes("?") ? "&" : "?"}download=1`;
+
+                          return (
+                            <article
+                              key={`vercel-library-${item.pathname}`}
+                              className={`rounded-xl p-3 ${
+                                isLightTheme
+                                  ? "border border-slate-200 bg-white text-slate-900 shadow-sm"
+                                  : "border border-gray-700 bg-gray-900/70"
+                              }`}
+                            >
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setBibliotecaLightboxItem({
+                                    type: item.kind,
+                                    itemId: `vercel:${item.pathname}`,
+                                    url: item.proxyUrl,
+                                    title: filename,
+                                    previewUrl: item.kind === "image" ? item.proxyUrl : undefined,
+                                    source: "vercelLibrary",
+                                    pathname: item.pathname,
+                                    downloadUrl: downloadHref,
+                                  })
+                                }
+                                className="relative block aspect-square w-full cursor-pointer overflow-hidden rounded-md bg-black"
+                              >
+                                {item.kind === "image" ? (
+                                  <img
+                                    src={item.proxyUrl}
+                                    alt={filename}
+                                    className="absolute inset-0 h-full w-full object-cover"
+                                    loading="lazy"
+                                    decoding="async"
+                                  />
+                                ) : (
+                                  <video
+                                    src={item.proxyUrl}
+                                    preload="auto"
+                                    playsInline
+                                    controls
+                                    className="absolute inset-0 h-full w-full object-cover"
+                                  />
+                                )}
+                              </button>
+
+                              <p className={`mt-2 truncate text-[11px] font-semibold ${isLightTheme ? "text-slate-800" : "text-gray-100"}`}>
+                                {filename}
+                              </p>
+                              <p className={`mt-1 truncate text-[10px] ${isLightTheme ? "text-slate-600" : "text-gray-300"}`}>
+                                Pasta: {folderLabel}
+                              </p>
+                              <p className={`mt-1 line-clamp-2 break-all text-[10px] ${isLightTheme ? "text-slate-500" : "text-gray-400"}`}>
+                                {item.pathname}
+                              </p>
+
+                              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px]">
+                                <span className={`inline-flex items-center rounded-xl px-2 py-1 font-semibold uppercase ${
+                                  item.kind === "image"
+                                    ? isLightTheme
+                                      ? "border border-violet-200 bg-violet-50 text-violet-700"
+                                      : "border border-violet-400/35 bg-violet-500/15 text-violet-100"
+                                    : isLightTheme
+                                      ? "border border-cyan-200 bg-cyan-50 text-cyan-700"
+                                      : "border border-cyan-400/35 bg-cyan-500/15 text-cyan-100"
+                                }`}>
+                                  {item.kind === "image" ? "imagem" : "vídeo"}
+                                </span>
+                                <span className={`inline-flex items-center rounded-xl px-2 py-1 ${
+                                  isLightTheme
+                                    ? "border border-slate-200 bg-white text-slate-600"
+                                    : "border border-gray-600 bg-gray-800/80 text-gray-300"
+                                }`}>
+                                  {mediaDate}
+                                </span>
+                                <span className={`inline-flex items-center rounded-xl px-2 py-1 ${
+                                  isLightTheme
+                                    ? "border border-slate-200 bg-white text-slate-600"
+                                    : "border border-gray-600 bg-gray-800/80 text-gray-300"
+                                }`}>
+                                  {mediaSize}
+                                </span>
+                              </div>
+
+                              <div className="mt-2 grid grid-cols-2 gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setBibliotecaLightboxItem({
+                                      type: item.kind,
+                                      itemId: `vercel:${item.pathname}`,
+                                      url: item.proxyUrl,
+                                      title: filename,
+                                      previewUrl: item.kind === "image" ? item.proxyUrl : undefined,
+                                      source: "vercelLibrary",
+                                      pathname: item.pathname,
+                                      downloadUrl: downloadHref,
+                                    })
+                                  }
+                                  className={`inline-flex h-8 items-center justify-center rounded-lg border text-[11px] font-semibold transition ${
+                                    isLightTheme
+                                      ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                                      : "border-gray-600 bg-gray-800 text-gray-100 hover:bg-gray-700"
+                                  }`}
+                                >
+                                  Abrir
+                                </button>
+                                <a
+                                  href={downloadHref}
+                                  className={`inline-flex h-8 items-center justify-center rounded-lg border text-[11px] font-semibold transition ${
+                                    isLightTheme
+                                      ? "border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100"
+                                      : "border-sky-400/45 bg-sky-500/15 text-sky-100 hover:bg-sky-500/25"
+                                  }`}
+                                >
+                                  Baixar
+                                </a>
+                              </div>
+                            </article>
+                          );
+                        })}
                       </div>
                     )}
                   </section>
@@ -3495,7 +3873,7 @@ export default function ImageGeneratorScreen() {
                             <video
                               src={item.videoUrl}
                               poster={item.sourceImageThumbnailUrl || undefined}
-                              preload="metadata"
+                              preload="auto"
                               controls
                               playsInline
                               className="absolute inset-0 h-full w-full object-cover"
@@ -3687,7 +4065,7 @@ export default function ImageGeneratorScreen() {
                         <video
                           src={item.videoUrl}
                           poster={item.sourceImageThumbnailUrl || undefined}
-                          preload="metadata"
+                          preload="auto"
                           muted
                           playsInline
                           ref={(node) => {
@@ -3707,7 +4085,7 @@ export default function ImageGeneratorScreen() {
                           Vídeo {index + 1}
                         </p>
                         <p className="truncate text-[11px] text-gray-400">
-                          {item.resolution} • {item.aspectRatio} • {item.durationSeconds}s
+                          {item.resolution} • {item.aspectRatio} • {formatDurationClock(item.durationSeconds)}
                         </p>
                       </div>
 
@@ -3844,12 +4222,14 @@ export default function ImageGeneratorScreen() {
           onClick={() => setBibliotecaLightboxItem(null)}
         >
           <div
-            className="w-full max-w-6xl max-h-[calc(100vh-3rem)] overflow-y-auto rounded-2xl border border-gray-700 bg-gray-900 p-4 sm:p-6"
+            className="mx-0 my-0 h-dvh w-full max-w-none overflow-y-auto rounded-none border-0 bg-gray-900 p-4 sm:mx-auto sm:my-0 sm:h-auto sm:max-h-[calc(100vh-3rem)] sm:max-w-6xl sm:rounded-2xl sm:border sm:border-gray-700 sm:p-6"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="mb-4 flex items-center justify-between">
               <h3 className="text-lg font-semibold text-white">
-                {bibliotecaLightboxItem.type === "video"
+                {bibliotecaLightboxItem.source === "vercelLibrary"
+                  ? "Visualizar mídia da Vercel Library"
+                  : bibliotecaLightboxItem.type === "video"
                   ? "Visualizar vídeo da biblioteca"
                   : "Visualizar imagem da biblioteca"}
               </h3>
@@ -3869,10 +4249,10 @@ export default function ImageGeneratorScreen() {
                   src={bibliotecaLightboxItem.url}
                   controls
                   autoPlay
-                  className="mx-auto h-[75vh] w-full object-contain"
+                  className="mx-auto h-[55vh] w-full object-contain sm:h-[75vh]"
                 />
               ) : (
-                <div className="relative mx-auto h-[75vh] w-full overflow-hidden">
+                <div className="relative mx-auto h-[55vh] w-full overflow-hidden sm:h-[75vh]">
                   {bibliotecaLightboxItem.previewUrl ? (
                     <img
                       src={bibliotecaLightboxItem.previewUrl}
@@ -3897,6 +4277,28 @@ export default function ImageGeneratorScreen() {
             </div>
 
             <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+              {selectedVercelLibraryLightboxItem ? (
+                <>
+                  <a
+                    href={selectedVercelLibraryLightboxItem.proxyUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex h-10 min-w-36.25 cursor-pointer items-center justify-center gap-2 rounded-lg border border-gray-600 bg-gray-800 px-4 text-sm font-medium text-gray-100 transition hover:bg-gray-700"
+                  >
+                    Abrir em nova aba
+                  </a>
+                  <a
+                    href={`${selectedVercelLibraryLightboxItem.proxyUrl}${
+                      selectedVercelLibraryLightboxItem.proxyUrl.includes("?") ? "&" : "?"
+                    }download=1`}
+                    className="inline-flex h-10 min-w-30 cursor-pointer items-center justify-center gap-2 rounded-lg border border-cyan-400/45 bg-cyan-500/20 px-4 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/30"
+                  >
+                    <FaDownload />
+                    Baixar
+                  </a>
+                </>
+              ) : null}
+
               {bibliotecaLightboxItem.type === "image" && selectedLightboxImage ? (
                 <>
                   <button
