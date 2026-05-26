@@ -18,6 +18,12 @@
   --font-mono: var(--font-montserrat);
 }
 
+@layer base {
+  a {
+    @apply cursor-pointer;
+  }
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     --background: #0a0a0a;
