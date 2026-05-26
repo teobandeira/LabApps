@@ -1,13 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { MdSmokeFree, MdStars } from "react-icons/md";
+import { MdSmokeFree, MdSmokingRooms, MdStars } from "react-icons/md";
 
 const PRECO_MACO = 15;
 const CIGARROS_POR_MACO = 20;
 const CUSTO_POR_CIGARRO = PRECO_MACO / CIGARROS_POR_MACO;
 const BONUS_ATRASO_MINUTOS = 10;
 const BONUS_ATRASO_MS = BONUS_ATRASO_MINUTOS * 60 * 1000;
+const BONUS_ESTRELAS_ATRASO = 5;
+const PERDA_ESTRELAS_ANTES_HORARIO = 5;
 const DEFAULT_HORARIO_INICIO = "05:00";
 const DEFAULT_HORARIO_FIM = "22:00";
 const THEME_STORAGE_KEY = "fumar-theme";
@@ -40,6 +42,14 @@ function formatHorarioCurto(timestamp: number) {
   return new Intl.DateTimeFormat("pt-BR", {
     hour: "2-digit",
     minute: "2-digit",
+  }).format(timestamp);
+}
+
+function formatDia(timestamp: number) {
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
   }).format(timestamp);
 }
 
@@ -99,7 +109,7 @@ function getHorariosDaMeta(
 type HistoricoFumada = {
   timestamp: number;
   horarioMeta: number | null;
-  impactoEstrelas: -1 | 0 | 1;
+  impactoEstrelas: -5 | 0 | 5;
 };
 
 type PersistedAppState = {
@@ -124,7 +134,8 @@ function isHistoricoFumada(value: unknown): value is HistoricoFumada {
   const horarioMetaValido =
     horarioMeta === null ||
     (typeof horarioMeta === "number" && Number.isFinite(horarioMeta) && horarioMeta > 0);
-  const impactoValido = impactoEstrelas === -1 || impactoEstrelas === 0 || impactoEstrelas === 1;
+  const impactoValido =
+    impactoEstrelas === -5 || impactoEstrelas === 0 || impactoEstrelas === 5;
 
   return timestampValido && horarioMetaValido && impactoValido;
 }
@@ -185,7 +196,7 @@ function getInitialPersistedState(): PersistedAppState {
         : horarioFimBruto;
     const estrelas =
       typeof data.estrelas === "number" && Number.isFinite(data.estrelas)
-        ? Math.max(0, Math.floor(data.estrelas))
+        ? Math.floor(data.estrelas)
         : defaultState.estrelas;
     const cigarrosHoje =
       typeof data.cigarrosHoje === "number" && Number.isFinite(data.cigarrosHoje)
@@ -239,6 +250,7 @@ export default function StopSmokingScreen() {
   const [ultimoCigarroEm, setUltimoCigarroEm] = useState(initialAppState.ultimoCigarroEm);
   const [agora, setAgora] = useState(() => Date.now());
   const [modalAberto, setModalAberto] = useState(false);
+  const [modalConfirmacaoAntesAberto, setModalConfirmacaoAntesAberto] = useState(false);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -293,54 +305,98 @@ export default function StopSmokingScreen() {
     [creditoUsado],
   );
 
+  const historicoMetasPorDia = useMemo(() => {
+    const contadorPorDia = new Map<
+      string,
+      { dia: string; cigarros: number; timestamp: number; meta: number }
+    >();
+
+    historicoFumadas.forEach((registro) => {
+      const dia = new Date(registro.timestamp);
+      const diaKey = `${dia.getFullYear()}-${String(dia.getMonth() + 1).padStart(2, "0")}-${String(
+        dia.getDate(),
+      ).padStart(2, "0")}`;
+      const atual = contadorPorDia.get(diaKey);
+
+      if (atual) {
+        atual.cigarros += 1;
+        return;
+      }
+
+      contadorPorDia.set(diaKey, {
+        dia: formatDia(registro.timestamp),
+        cigarros: 1,
+        timestamp: registro.timestamp,
+        meta: metaDia,
+      });
+    });
+
+    return Array.from(contadorPorDia.values()).sort((a, b) => b.timestamp - a.timestamp);
+  }, [historicoFumadas, metaDia]);
+
   const controleHorario = useMemo(() => {
-    const { inicio, fim } = getJanelaDoDia(agora, horarioInicio, horarioFim);
     const horarios = getHorariosDaMeta(metaDia, agora, horarioInicio, horarioFim);
-    const estaNaJanela = agora >= inicio && agora <= fim;
     const dentroDaMeta = cigarrosHoje < metaDia;
-    const podeFumarAgora = metaDia > 0 && estaNaJanela && dentroDaMeta;
+    const podeFumarAgora = metaDia > 0 && dentroDaMeta;
     const proximoHorario = cigarrosHoje < horarios.length ? horarios[cigarrosHoje] : null;
+    const estaNaJanelaIdeal =
+      proximoHorario !== null &&
+      agora >= proximoHorario &&
+      agora <= proximoHorario + BONUS_ATRASO_MS;
+    const antesDoHorario = proximoHorario !== null && agora < proximoHorario;
 
     let mensagemControle = "";
     if (metaDia <= 0) {
       mensagemControle = "Defina uma meta do dia maior que zero.";
-    } else if (!estaNaJanela) {
-      mensagemControle = `Botao liberado apenas entre ${horarioInicio} e ${horarioFim}.`;
     } else if (!dentroDaMeta) {
       mensagemControle = "Meta do dia atingida.";
-    } else if (proximoHorario && agora < proximoHorario) {
-      mensagemControle = `Se fumar antes de ${formatHorarioCurto(proximoHorario)}, perde 1 estrela.`;
+    } else if (antesDoHorario && proximoHorario) {
+      mensagemControle = `Fora da janela ideal. Se confirmar antes de ${formatHorarioCurto(
+        proximoHorario,
+      )}, perde ${PERDA_ESTRELAS_ANTES_HORARIO} estrelas.`;
     } else if (proximoHorario && agora - proximoHorario > BONUS_ATRASO_MS) {
-      mensagemControle = `Se fumar agora, ganha 1 estrela (mais de ${BONUS_ATRASO_MINUTOS} min apos o horario).`;
+      mensagemControle = `Se fumar agora, ganha ${BONUS_ESTRELAS_ATRASO} estrelas (mais de ${BONUS_ATRASO_MINUTOS} min apos o horario).`;
+    } else if (estaNaJanelaIdeal) {
+      mensagemControle = "Janela ideal ativa: botao verde para fumar.";
     } else {
-      mensagemControle = "No horario planejado nao ganha nem perde estrela.";
+      mensagemControle = "Botao vermelho fora da janela ideal.";
     }
 
     return {
       horarios,
       proximoHorario,
+      estaNaJanelaIdeal,
+      antesDoHorario,
       podeFumarAgora,
       mensagemControle,
     };
   }, [agora, cigarrosHoje, horarioFim, horarioInicio, metaDia]);
 
-  const registrarCigarro = () => {
+  const registrarCigarro = (confirmadoAntesDoHorario = false) => {
     if (!controleHorario.podeFumarAgora) return;
 
     const agoraAtual = Date.now();
     const horarioMeta = controleHorario.horarios[cigarrosHoje] ?? null;
-    let impactoEstrelas: -1 | 0 | 1 = 0;
+    const estaAntesDoHorario = horarioMeta !== null && agoraAtual < horarioMeta;
+    const confirmouAntesDoHorario = confirmadoAntesDoHorario === true;
+
+    if (estaAntesDoHorario && !confirmouAntesDoHorario) {
+      setModalConfirmacaoAntesAberto(true);
+      return;
+    }
+
+    let impactoEstrelas: -5 | 0 | 5 = 0;
 
     if (horarioMeta !== null) {
-      if (agoraAtual < horarioMeta) {
-        impactoEstrelas = -1;
+      if (estaAntesDoHorario) {
+        impactoEstrelas = -5;
       } else if (agoraAtual - horarioMeta > BONUS_ATRASO_MS) {
-        impactoEstrelas = 1;
+        impactoEstrelas = 5;
       }
     }
 
     setCigarrosHoje((valorAtual) => valorAtual + 1);
-    setEstrelas((valorAtual) => Math.max(0, valorAtual + impactoEstrelas));
+    setEstrelas((valorAtual) => valorAtual + impactoEstrelas);
     setHistoricoFumadas((valorAtual) => [
       ...valorAtual,
       {
@@ -351,6 +407,7 @@ export default function StopSmokingScreen() {
     ]);
     setUltimoCigarroEm(agoraAtual);
     setAgora(agoraAtual);
+    setModalConfirmacaoAntesAberto(false);
   };
 
   const abrirModalMeta = () => {
@@ -358,6 +415,20 @@ export default function StopSmokingScreen() {
     setHorarioInicioInput(horarioInicio);
     setHorarioFimInput(horarioFim);
     setModalAberto(true);
+  };
+
+  const confirmarFumarAntesDoHorario = () => {
+    registrarCigarro(true);
+  };
+
+  const zerarCigarros = () => {
+    const agoraAtual = Date.now();
+    setCigarrosHoje(0);
+    setHistoricoFumadas([]);
+    setUltimoCigarroEm(agoraAtual);
+    setAgora(agoraAtual);
+    setModalConfirmacaoAntesAberto(false);
+    setModalAberto(false);
   };
 
   const salvarMeta = () => {
@@ -501,7 +572,7 @@ export default function StopSmokingScreen() {
 
             <div className={cardClassName}>
               <p className={`text-xs uppercase tracking-[0.14em] ${isDark ? "text-violet-300" : "text-[#7141c9]"}`}>
-                Creditos usados
+                Dinheiro gasto
               </p>
               <p className={`mt-2 text-3xl font-semibold ${isDark ? "text-rose-300" : "text-[#b91c1c]"}`}>
                 {creditoUsadoLabel}
@@ -516,13 +587,17 @@ export default function StopSmokingScreen() {
           <div className="mt-7 flex flex-col gap-3 sm:flex-row">
             <button
               type="button"
-              onClick={registrarCigarro}
+              onClick={() => registrarCigarro(false)}
               disabled={!controleHorario.podeFumarAgora}
               className={`inline-flex flex-1 items-center justify-center rounded-2xl px-6 py-4 text-lg font-semibold transition ${
                 controleHorario.podeFumarAgora
-                  ? isDark
-                    ? "bg-[linear-gradient(135deg,#ef4444_0%,#b91c1c_100%)] text-white shadow-[0_16px_30px_rgba(239,68,68,0.3)] hover:brightness-110 active:translate-y-px"
-                    : "bg-[linear-gradient(135deg,#ef4444_0%,#b91c1c_100%)] text-[#fff9f3] shadow-[0_16px_30px_rgba(185,28,28,0.35)] hover:brightness-105 active:translate-y-px"
+                  ? controleHorario.estaNaJanelaIdeal
+                    ? isDark
+                      ? "bg-[linear-gradient(135deg,#22c55e_0%,#15803d_100%)] text-white shadow-[0_16px_30px_rgba(34,197,94,0.3)] hover:brightness-110 active:translate-y-px"
+                      : "bg-[linear-gradient(135deg,#22c55e_0%,#15803d_100%)] text-white shadow-[0_16px_30px_rgba(21,128,61,0.35)] hover:brightness-105 active:translate-y-px"
+                    : isDark
+                      ? "bg-[linear-gradient(135deg,#ef4444_0%,#b91c1c_100%)] text-white shadow-[0_16px_30px_rgba(239,68,68,0.3)] hover:brightness-110 active:translate-y-px"
+                      : "bg-[linear-gradient(135deg,#ef4444_0%,#b91c1c_100%)] text-[#fff9f3] shadow-[0_16px_30px_rgba(185,28,28,0.35)] hover:brightness-105 active:translate-y-px"
                   : isDark
                     ? "cursor-not-allowed bg-zinc-800 text-zinc-500 opacity-70"
                     : "cursor-not-allowed bg-[#c6a88f] text-[#fff9f3] opacity-70"
@@ -560,7 +635,7 @@ export default function StopSmokingScreen() {
                   return (
                     <li
                       key={`${horario}-${index}`}
-                      className={`rounded-xl border px-3 py-2 text-sm ${
+                      className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm ${
                         jaConsumido
                           ? isDark
                             ? "border-violet-700/60 bg-violet-900/30 text-violet-200"
@@ -574,14 +649,47 @@ export default function StopSmokingScreen() {
                               : "border-[#e2d5ff] bg-white text-[#5d4389]"
                       }`}
                     >
-                      <p className="font-semibold">{formatHorarioCurto(horario)}</p>
-                      <p className="mt-0.5 text-[11px]">
-                        {jaConsumido
-                          ? "Consumido"
-                          : proximoDaFila
-                            ? "Proximo"
-                            : "Futuro"}
-                      </p>
+                      <span
+                        className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border ${
+                          jaConsumido
+                            ? isDark
+                              ? "border-violet-300/40 bg-violet-300/15"
+                              : "border-[#8b5cf6]/35 bg-[#ede2ff]"
+                            : proximoDaFila
+                              ? isDark
+                                ? "border-violet-200/60 bg-violet-300/20"
+                                : "border-[#7c3aed]/45 bg-[#e8ddff]"
+                              : isDark
+                                ? "border-violet-400/25 bg-violet-500/10"
+                                : "border-[#a78bfa]/35 bg-[#f3eeff]"
+                        }`}
+                      >
+                        <MdSmokingRooms
+                          className={`h-4 w-4 ${
+                            jaConsumido
+                              ? isDark
+                                ? "text-violet-200"
+                                : "text-[#6a3fb5]"
+                              : proximoDaFila
+                                ? isDark
+                                  ? "text-violet-100"
+                                  : "text-[#4c2f84]"
+                                : isDark
+                                  ? "text-violet-300/80"
+                                  : "text-[#7b5bb6]"
+                          }`}
+                        />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="font-semibold">{formatHorarioCurto(horario)}</p>
+                        <p className="mt-0.5 text-[11px]">
+                          {jaConsumido
+                            ? "Consumido"
+                            : proximoDaFila
+                              ? "Proximo"
+                              : "Futuro"}
+                        </p>
+                      </div>
                     </li>
                   );
                 })}
@@ -600,12 +708,14 @@ export default function StopSmokingScreen() {
             {historicoFumadas.length > 0 ? (
               <ul className="mt-3 max-h-40 space-y-2 overflow-auto pr-1">
                 {[...historicoFumadas].reverse().map((registro, index) => {
+                  const quantidadeEstrelas = Math.abs(registro.impactoEstrelas);
+                  const sufixoEstrela = quantidadeEstrelas === 1 ? "estrela" : "estrelas";
                   const impactoLabel =
                     registro.impactoEstrelas > 0
-                      ? "+1 estrela"
+                      ? `+${quantidadeEstrelas} ${sufixoEstrela}`
                       : registro.impactoEstrelas < 0
-                        ? "-1 estrela"
-                        : "0 estrela";
+                        ? `-${quantidadeEstrelas} ${sufixoEstrela}`
+                        : `0 ${sufixoEstrela}`;
 
                   const impactoClassName =
                     registro.impactoEstrelas > 0
@@ -651,6 +761,35 @@ export default function StopSmokingScreen() {
               </p>
             )}
           </div>
+
+          <div className={`${cardClassName} mt-6`}>
+            <p className={`text-xs uppercase tracking-[0.14em] ${isDark ? "text-violet-300" : "text-[#7141c9]"}`}>
+              Historico de metas
+            </p>
+            {historicoMetasPorDia.length > 0 ? (
+              <ul className="mt-3 max-h-40 space-y-2 overflow-auto pr-1">
+                {historicoMetasPorDia.map((dia) => (
+                  <li
+                    key={dia.dia}
+                    className={`flex items-center justify-between rounded-xl border px-3 py-2 text-sm ${
+                      isDark
+                        ? "border-violet-900/60 bg-violet-950/25 text-violet-100"
+                        : "border-[#e2d5ff] bg-white text-[#5d4389]"
+                    }`}
+                  >
+                    <span>{dia.dia}</span>
+                    <span className={`font-semibold ${isDark ? "text-zinc-100" : "text-[#2f1a53]"}`}>
+                      {dia.cigarros} de {dia.meta}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className={`mt-2 text-sm ${isDark ? "text-violet-200/70" : "text-[#7458a2]"}`}>
+                Ainda nao ha dias registrados.
+              </p>
+            )}
+          </div>
         </article>
       </section>
 
@@ -680,19 +819,32 @@ export default function StopSmokingScreen() {
             >
               Numero de cigarros
             </label>
-            <input
-              id="meta-dia-input"
-              type="number"
-              min={0}
-              step={1}
-              value={metaInput}
-              onChange={(event) => setMetaInput(event.target.value)}
-              className={`mt-2 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 ${
-                isDark
-                  ? "border-violet-700/70 bg-violet-950/40 text-zinc-100 focus:border-violet-400 focus:ring-violet-400/25"
-                  : "border-[#d8c7ff] bg-white text-[#2f1a53] focus:border-[#7c3aed] focus:ring-[#8b5cf6]/35"
-              }`}
-            />
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                id="meta-dia-input"
+                type="number"
+                min={0}
+                step={1}
+                value={metaInput}
+                onChange={(event) => setMetaInput(event.target.value)}
+                className={`w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 ${
+                  isDark
+                    ? "border-violet-700/70 bg-violet-950/40 text-zinc-100 focus:border-violet-400 focus:ring-violet-400/25"
+                    : "border-[#d8c7ff] bg-white text-[#2f1a53] focus:border-[#7c3aed] focus:ring-[#8b5cf6]/35"
+                }`}
+              />
+              <button
+                type="button"
+                onClick={zerarCigarros}
+                className={`inline-flex shrink-0 items-center justify-center rounded-xl px-4 py-2 font-semibold transition ${
+                  isDark
+                    ? "bg-rose-600 text-white hover:bg-rose-500"
+                    : "bg-[#ef4444] text-white hover:bg-[#dc2626]"
+                }`}
+              >
+                Zerar
+              </button>
+            </div>
 
             <div className="mt-4 grid grid-cols-2 gap-3">
               <div>
@@ -751,6 +903,52 @@ export default function StopSmokingScreen() {
               <button
                 type="button"
                 onClick={() => setModalAberto(false)}
+                className={`inline-flex flex-1 items-center justify-center rounded-xl border px-4 py-2.5 font-semibold transition ${
+                  isDark
+                    ? "border-violet-700/60 bg-violet-950/30 text-violet-100 hover:bg-violet-900/45"
+                    : "border-[#ccb8ff] bg-[#f4eeff] text-[#5a3696] hover:bg-[#ece3ff]"
+                }`}
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {modalConfirmacaoAntesAberto ? (
+        <div
+          className={`fixed inset-0 z-50 flex items-center justify-center px-4 ${
+            isDark ? "bg-black/70" : "bg-violet-900/30"
+          }`}
+        >
+          <div
+            className={`w-full max-w-sm rounded-2xl border p-5 shadow-[0_20px_50px_rgba(0,0,0,0.2)] sm:p-6 ${
+              isDark ? "border-violet-700/60 bg-[#120a1f]" : "border-[#ddccff] bg-white"
+            }`}
+          >
+            <h2 className={`text-xl font-bold ${isDark ? "text-zinc-100" : "text-[#2b164a]"}`}>
+              Fumar antes do horario?
+            </h2>
+            <p className={`mt-2 text-sm ${isDark ? "text-violet-200/85" : "text-[#5f428f]"}`}>
+              Deseja mesmo fumar antes do horario? Voce perdera {PERDA_ESTRELAS_ANTES_HORARIO} estrelas
+            </p>
+
+            <div className="mt-5 flex gap-3">
+              <button
+                type="button"
+                onClick={confirmarFumarAntesDoHorario}
+                className={`inline-flex flex-1 items-center justify-center rounded-xl px-4 py-2.5 font-semibold transition ${
+                  isDark
+                    ? "bg-[#ef4444] text-white hover:bg-[#dc2626]"
+                    : "bg-[#ef4444] text-white hover:bg-[#dc2626]"
+                }`}
+              >
+                Confirmar
+              </button>
+              <button
+                type="button"
+                onClick={() => setModalConfirmacaoAntesAberto(false)}
                 className={`inline-flex flex-1 items-center justify-center rounded-xl border px-4 py-2.5 font-semibold transition ${
                   isDark
                     ? "border-violet-700/60 bg-violet-950/30 text-violet-100 hover:bg-violet-900/45"
