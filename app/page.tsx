@@ -12,6 +12,7 @@ import {
   MdLocalMall,
   MdRocketLaunch,
   MdSchedule,
+  MdSmokeFree,
   MdSmartToy,
   MdSportsEsports,
   MdStackedLineChart,
@@ -78,6 +79,17 @@ const APPS: PortfolioApp[] = [
     icon: MdSmartToy,
     stack: ["OpenAI API", "Prompt UI", "Full Screen"],
     image: "/technology-venture-workspace-using-machine-learning-streamline-coding-process.jpg",
+  },
+  {
+    name: "Smoke Control",
+    subtitle: "Producao",
+    description:
+      "App de apoio para reduzir o tabagismo com cronometro persistente, metas de horario e sistema de estrelas.",
+    status: "live",
+    href: "/fumar",
+    icon: MdSmokeFree,
+    stack: ["Habit Tracker", "Meta Diaria", "Cronometro"],
+    image: "/fome.jpg",
   },
   {
     name: "Mini RPG",
@@ -222,6 +234,13 @@ export default function PortfolioPage() {
               Abrir ChatGPT
               <MdArrowOutward className="h-4 w-4" />
             </Link>
+            <Link
+              href="/fumar"
+              className="inline-flex items-center gap-2 rounded-xl border border-rose-200/45 bg-rose-500/18 px-5 py-3 text-sm font-semibold text-rose-100 transition hover:bg-rose-500/30 hover:text-white"
+            >
+              Abrir Smoke Control
+              <MdArrowOutward className="h-4 w-4" />
+            </Link>
           </div>
 
           </div>
@@ -347,6 +366,9 @@ export default function PortfolioPage() {
               </Link>
               <Link href="/chatgpt" className="transition hover:text-white">
                 ChatGPT
+              </Link>
+              <Link href="/fumar" className="transition hover:text-white">
+                Smoke Control
               </Link>
             </nav>
           </div>
