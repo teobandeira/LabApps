@@ -9,6 +9,7 @@ import {
   MdDeliveryDining,
   MdForest,
   MdGridView,
+  MdHealthAndSafety,
   MdLocalMall,
   MdRocketLaunch,
   MdSchedule,
@@ -123,6 +124,17 @@ const APPS: PortfolioApp[] = [
     icon: MdForest,
     stack: ["Turismo", "Mapa Brasil", "Roteiros"],
     image: "/camping1.jpg",
+  },
+  {
+    name: "SurvivalNotes",
+    subtitle: "Producao",
+    description:
+      "Manual de sobrevivencia em formato de chat com capitulos praticos, checklists e tema claro/escuro.",
+    status: "live",
+    href: "/survival-notes",
+    icon: MdHealthAndSafety,
+    stack: ["Manual Offline", "Checklist", "Light/Dark Theme"],
+    image: "/war.jpg",
   },
 ];
 
@@ -239,6 +251,13 @@ export default function PortfolioPage() {
               className="inline-flex items-center gap-2 rounded-xl border border-rose-200/45 bg-rose-500/18 px-5 py-3 text-sm font-semibold text-rose-100 transition hover:bg-rose-500/30 hover:text-white"
             >
               Abrir Smoke Control
+              <MdArrowOutward className="h-4 w-4" />
+            </Link>
+            <Link
+              href="/survival-notes"
+              className="inline-flex items-center gap-2 rounded-xl border border-emerald-200/45 bg-emerald-500/18 px-5 py-3 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-500/30 hover:text-white"
+            >
+              Abrir SurvivalNotes
               <MdArrowOutward className="h-4 w-4" />
             </Link>
           </div>
