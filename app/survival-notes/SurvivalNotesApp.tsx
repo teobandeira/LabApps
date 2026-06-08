@@ -1,16 +1,29 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { IconType } from "react-icons";
 import {
+  MdBolt,
+  MdCampaign,
+  MdChevronRight,
   MdChecklist,
   MdDarkMode,
-  MdInsights,
+  MdEmergency,
+  MdFoodBank,
+  MdHealthAndSafety,
+  MdHomeWork,
+  MdInventory2,
   MdLightMode,
+  MdMedicalServices,
   MdMenuBook,
   MdOutlineHealthAndSafety,
+  MdPictureAsPdf,
+  MdReport,
+  MdRoute,
   MdSearch,
-  MdShield,
+  MdSanitizer,
+  MdScience,
+  MdWaterDrop,
 } from "react-icons/md";
 import {
   DEFAULT_CONTACTS,
@@ -30,6 +43,25 @@ type SurvivalNotesAppProps = {
 
 const THEME_STORAGE_KEY = "survival-notes-theme";
 
+const CHAPTER_ICON_BY_ID: Record<string, IconType> = {
+  "principios-prioridades": MdEmergency,
+  "preparacao-planejamento": MdRoute,
+  "kit-sobrevivencia": MdInventory2,
+  "primeiros-socorros-saude": MdMedicalServices,
+  agua: MdWaterDrop,
+  "abrigo-termorregulacao": MdHomeWork,
+  alimentacao: MdFoodBank,
+  "navegacao-evacuacao": MdRoute,
+  "comunicacao-sinalizacao": MdCampaign,
+  "seguranca-autoprotecao": MdHealthAndSafety,
+  "saneamento-higiene": MdSanitizer,
+  "cenarios-especificos": MdEmergency,
+  "checklists-prontos": MdChecklist,
+  "farmacia-vs-natural": MdScience,
+  "evasao-floresta-parana": MdRoute,
+  "apendices-uteis": MdMenuBook,
+};
+
 function getInitialTheme(): ThemeMode {
   if (typeof window === "undefined") {
     return "dark";
@@ -47,32 +79,244 @@ function chapterLabel(chapter: ManualChapter) {
   return `${chapter.number}. ${chapter.title}`;
 }
 
-const metrics: Array<{ label: string; value: string; hint: string; icon: IconType }> = [
-  {
-    label: "Capitulos",
-    value: String(MANUAL_CHAPTERS.length),
-    hint: "Manual completo e offline",
-    icon: MdMenuBook,
-  },
-  {
-    label: "Checklist",
-    value: "40+",
-    hint: "Acoes acionaveis",
-    icon: MdChecklist,
-  },
-  {
-    label: "Prioridade",
-    value: "Vida",
-    hint: "Seguranca antes de tudo",
-    icon: MdShield,
-  },
-  {
-    label: "Formato",
-    value: "Texto",
-    hint: "Sem banco de dados",
-    icon: MdInsights,
-  },
-];
+const PDF_PAGE_WIDTH = 595.28;
+const PDF_PAGE_HEIGHT = 841.89;
+const PDF_MARGIN_X = 42;
+const PDF_MARGIN_TOP = 46;
+const PDF_MARGIN_BOTTOM = 46;
+const PDF_BODY_FONT_SIZE = 10.6;
+const PDF_LINE_HEIGHT = 14.2;
+
+function normalizePdfText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\x20-\x7E]/g, " ");
+}
+
+function escapePdfText(value: string) {
+  return normalizePdfText(value).replaceAll("\\", "\\\\").replaceAll("(", "\\(").replaceAll(")", "\\)");
+}
+
+function approxCharsPerLine(fontSize: number, indent = 0) {
+  const usableWidth = PDF_PAGE_WIDTH - PDF_MARGIN_X * 2 - indent;
+  const averageCharWidth = fontSize * 0.52;
+  return Math.max(24, Math.floor(usableWidth / averageCharWidth));
+}
+
+function wrapText(value: string, maxChars: number) {
+  const text = normalizePdfText(value).replace(/\s+/g, " ").trim();
+  if (!text) {
+    return [];
+  }
+
+  const words = text.split(" ");
+  const lines: string[] = [];
+  let current = "";
+
+  for (const word of words) {
+    if (!current) {
+      if (word.length <= maxChars) {
+        current = word;
+      } else {
+        lines.push(word.slice(0, maxChars));
+        current = word.slice(maxChars);
+      }
+      continue;
+    }
+
+    const candidate = `${current} ${word}`;
+    if (candidate.length <= maxChars) {
+      current = candidate;
+      continue;
+    }
+
+    lines.push(current);
+    if (word.length <= maxChars) {
+      current = word;
+      continue;
+    }
+
+    let remaining = word;
+    while (remaining.length > maxChars) {
+      lines.push(remaining.slice(0, maxChars));
+      remaining = remaining.slice(maxChars);
+    }
+    current = remaining;
+  }
+
+  if (current) {
+    lines.push(current);
+  }
+
+  return lines;
+}
+
+function buildPdfPages(generatedAt: string) {
+  const pages: string[] = [];
+  let pageOps: string[] = [];
+  let cursorY = PDF_PAGE_HEIGHT - PDF_MARGIN_TOP;
+
+  const startNewPage = () => {
+    if (pageOps.length) {
+      pages.push(pageOps.join("\n"));
+    }
+    pageOps = [];
+    cursorY = PDF_PAGE_HEIGHT - PDF_MARGIN_TOP;
+  };
+
+  const ensureSpace = (requiredLines = 1) => {
+    if (cursorY - requiredLines * PDF_LINE_HEIGHT < PDF_MARGIN_BOTTOM) {
+      startNewPage();
+    }
+  };
+
+  const drawLine = (text: string, font: "F1" | "F2", size: number, indent = 0) => {
+    const x = PDF_MARGIN_X + indent;
+    pageOps.push(
+      `BT /${font} ${size.toFixed(2)} Tf 1 0 0 1 ${x.toFixed(2)} ${cursorY.toFixed(2)} Tm (${escapePdfText(
+        text,
+      )}) Tj ET`,
+    );
+    cursorY -= PDF_LINE_HEIGHT;
+  };
+
+  const addParagraph = (text: string, options?: { font?: "F1" | "F2"; size?: number; indent?: number }) => {
+    const font = options?.font ?? "F1";
+    const size = options?.size ?? PDF_BODY_FONT_SIZE;
+    const indent = options?.indent ?? 0;
+    const maxChars = approxCharsPerLine(size, indent);
+    const lines = wrapText(text, maxChars);
+    if (!lines.length) {
+      return;
+    }
+    ensureSpace(lines.length);
+    for (const line of lines) {
+      drawLine(line, font, size, indent);
+    }
+  };
+
+  const addSpacing = (lines = 0.5) => {
+    cursorY -= PDF_LINE_HEIGHT * lines;
+  };
+
+  addParagraph("SurvivalNotes - Manual Completo", { font: "F2", size: 18 });
+  addParagraph("Manual em texto para preparacao e resposta em emergencia.", { font: "F1", size: 11.5 });
+  addParagraph(`Gerado em: ${generatedAt}`, { font: "F1", size: 10.5 });
+  addSpacing(0.4);
+  addParagraph("Ordem de prioridades", { font: "F2", size: 12 });
+  addParagraph("1. Seguranca", { indent: 10 });
+  addParagraph("2. Primeiros socorros", { indent: 10 });
+  addParagraph("3. Abrigo e termorregulacao", { indent: 10 });
+  addParagraph("4. Agua", { indent: 10 });
+  addParagraph("5. Sinalizacao e comunicacao", { indent: 10 });
+  addParagraph("6. Comida", { indent: 10 });
+  addSpacing(0.7);
+
+  for (const chapter of MANUAL_CHAPTERS) {
+    ensureSpace(3);
+    addParagraph(chapterLabel(chapter).toUpperCase(), { font: "F2", size: 13 });
+    addParagraph(chapter.objective, { font: "F1", size: 10.8 });
+    addSpacing(0.2);
+
+    addParagraph("Acoes imediatas", { font: "F2", size: 11.2 });
+    for (const action of chapter.quickActions) {
+      addParagraph(`- ${action}`, { indent: 10 });
+    }
+
+    addSpacing(0.1);
+    addParagraph("Conteudo do capitulo", { font: "F2", size: 11.2 });
+    for (const block of chapter.blocks) {
+      addParagraph(block.title, { font: "F2", size: 10.8, indent: 6 });
+      for (const point of block.points) {
+        addParagraph(`- ${point}`, { indent: 14 });
+      }
+    }
+
+    addSpacing(0.1);
+    addParagraph("Erros comuns", { font: "F2", size: 11.2 });
+    for (const mistake of chapter.commonMistakes) {
+      addParagraph(`- ${mistake}`, { indent: 10 });
+    }
+
+    addSpacing(0.8);
+  }
+
+  ensureSpace(4);
+  addParagraph("Apendice de referencias rapidas", { font: "F2", size: 13 });
+  addParagraph("Consumo de agua", { font: "F2", size: 11.2 });
+  for (const row of WATER_REFERENCE) {
+    addParagraph(`- ${row.scenario}: ${row.liters}`, { indent: 10 });
+  }
+  addSpacing(0.1);
+  addParagraph("Sinais vitais (referencia)", { font: "F2", size: 11.2 });
+  for (const row of VITAL_SIGNS_REFERENCE) {
+    addParagraph(`- ${row.signal}: ${row.value}`, { indent: 10 });
+  }
+  addSpacing(0.1);
+  addParagraph("Camadas de roupa", { font: "F2", size: 11.2 });
+  for (const row of LAYER_REFERENCE) {
+    addParagraph(`- ${row.range}: ${row.strategy}`, { indent: 10 });
+  }
+  addSpacing(0.1);
+  addParagraph("Contatos essenciais", { font: "F2", size: 11.2 });
+  for (const contact of DEFAULT_CONTACTS) {
+    addParagraph(`- ${contact}`, { indent: 10 });
+  }
+
+  if (pageOps.length) {
+    pages.push(pageOps.join("\n"));
+  }
+  return pages;
+}
+
+function buildPdfBlob(generatedAt: string) {
+  const pageContents = buildPdfPages(generatedAt);
+  const objects: string[] = [""];
+  const addObject = (content: string) => {
+    objects.push(content);
+    return objects.length - 1;
+  };
+
+  const catalogRef = addObject("");
+  const pagesRef = addObject("");
+  const regularFontRef = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+  const boldFontRef = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>");
+  const pageRefs: number[] = [];
+
+  for (const content of pageContents) {
+    const contentRef = addObject(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
+    const pageRef = addObject(
+      `<< /Type /Page /Parent ${pagesRef} 0 R /MediaBox [0 0 ${PDF_PAGE_WIDTH.toFixed(2)} ${PDF_PAGE_HEIGHT.toFixed(
+        2,
+      )}] /Resources << /Font << /F1 ${regularFontRef} 0 R /F2 ${boldFontRef} 0 R >> >> /Contents ${contentRef} 0 R >>`,
+    );
+    pageRefs.push(pageRef);
+  }
+
+  objects[pagesRef] = `<< /Type /Pages /Kids [${pageRefs.map((ref) => `${ref} 0 R`).join(" ")}] /Count ${
+    pageRefs.length
+  } >>`;
+  objects[catalogRef] = `<< /Type /Catalog /Pages ${pagesRef} 0 R >>`;
+
+  let pdf = "%PDF-1.4\n";
+  const offsets: number[] = [0];
+
+  for (let index = 1; index < objects.length; index += 1) {
+    offsets[index] = pdf.length;
+    pdf += `${index} 0 obj\n${objects[index]}\nendobj\n`;
+  }
+
+  const xrefOffset = pdf.length;
+  pdf += `xref\n0 ${objects.length}\n`;
+  pdf += "0000000000 65535 f \n";
+  for (let index = 1; index < objects.length; index += 1) {
+    pdf += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
+  }
+  pdf += `trailer\n<< /Size ${objects.length} /Root ${catalogRef} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+
+  return new Blob([pdf], { type: "application/pdf" });
+}
 
 export default function SurvivalNotesApp({
   displayFontClass,
@@ -81,503 +325,312 @@ export default function SurvivalNotesApp({
   const [theme, setTheme] = useState<ThemeMode>(getInitialTheme);
   const [query, setQuery] = useState("");
   const [selectedChapterId, setSelectedChapterId] = useState(MANUAL_CHAPTERS[0]?.id ?? "");
-  const [visitedChapters, setVisitedChapters] = useState<string[]>(
-    MANUAL_CHAPTERS[0] ? [MANUAL_CHAPTERS[0].id] : [],
-  );
-  const [checkedItems, setCheckedItems] = useState<Record<string, boolean>>({});
+  const contentRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     window.localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
 
-  const isDark = theme === "dark";
+  const selectedChapter =
+    MANUAL_CHAPTERS.find((chapter) => chapter.id === selectedChapterId) ?? MANUAL_CHAPTERS[0];
 
   const filteredChapters = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    if (!normalizedQuery) {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) {
       return MANUAL_CHAPTERS;
     }
 
     return MANUAL_CHAPTERS.filter((chapter) => {
-      if (chapter.title.toLowerCase().includes(normalizedQuery)) {
+      if (chapter.title.toLowerCase().includes(normalized)) {
         return true;
       }
-      if (chapter.objective.toLowerCase().includes(normalizedQuery)) {
+      if (chapter.objective.toLowerCase().includes(normalized)) {
         return true;
       }
-      if (chapter.quickActions.some((action) => action.toLowerCase().includes(normalizedQuery))) {
-        return true;
-      }
-      return chapter.blocks.some((block) =>
-        block.points.some((point) => point.toLowerCase().includes(normalizedQuery)),
-      );
+      return chapter.quickActions.some((action) => action.toLowerCase().includes(normalized));
     });
   }, [query]);
 
-  const selectedChapter =
-    MANUAL_CHAPTERS.find((chapter) => chapter.id === selectedChapterId) ?? MANUAL_CHAPTERS[0];
+  const categoryCards = useMemo(
+    () =>
+      filteredChapters.map((chapter) => ({
+        chapter,
+        icon: CHAPTER_ICON_BY_ID[chapter.id] ?? MdMenuBook,
+      })),
+    [filteredChapters],
+  );
 
-  const progressPercent = Math.round((visitedChapters.length / MANUAL_CHAPTERS.length) * 100);
+  const isDark = theme === "dark";
+  const vividIconToneClass = isDark ? "text-red-400" : "text-red-600";
 
-  const selectChapter = (chapterId: string) => {
+  const handleSelectChapter = (chapterId: string) => {
     setSelectedChapterId(chapterId);
-    setVisitedChapters((current) =>
-      current.includes(chapterId) ? current : [...current, chapterId],
-    );
+    window.setTimeout(() => {
+      contentRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 30);
   };
 
-  const toggleAction = (actionKey: string) => {
-    setCheckedItems((current) => ({
-      ...current,
-      [actionKey]: !current[actionKey],
-    }));
+  const exportAsPdf = () => {
+    const generatedAt = new Date().toLocaleString("pt-BR", {
+      dateStyle: "full",
+      timeStyle: "short",
+    });
+    const blob = buildPdfBlob(generatedAt);
+    const url = window.URL.createObjectURL(blob);
+    const fileDate = new Date().toISOString().slice(0, 10);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `SurvivalNotes-Manual-${fileDate}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => window.URL.revokeObjectURL(url), 1000);
   };
 
   return (
     <main
       className={`${displayFontClass} min-h-screen transition-colors duration-300 ${
-        isDark ? "bg-[#071120] text-slate-100" : "bg-[#f4f7fb] text-slate-900"
+        isDark ? "bg-[#0e1014] text-zinc-100" : "bg-[#ececf0] text-zinc-900"
       }`}
       suppressHydrationWarning
     >
       <div
         className={`fixed inset-0 -z-10 ${
           isDark
-            ? "bg-[radial-gradient(circle_at_6%_0%,rgba(6,182,212,0.22),transparent_34%),radial-gradient(circle_at_96%_4%,rgba(16,185,129,0.18),transparent_32%),linear-gradient(165deg,#071120,#0d1d37_52%,#081328)]"
-            : "bg-[radial-gradient(circle_at_8%_0%,rgba(14,165,233,0.2),transparent_34%),radial-gradient(circle_at_96%_0%,rgba(20,184,166,0.16),transparent_32%),linear-gradient(165deg,#f4f7fb,#e9f0fb_52%,#f8fbff)]"
+            ? "bg-[repeating-linear-gradient(145deg,rgba(255,255,255,0.04)_0px,rgba(255,255,255,0.04)_22px,transparent_22px,transparent_44px),linear-gradient(160deg,#0e1014,#171b22_50%,#0f1218)]"
+            : "bg-[repeating-linear-gradient(145deg,rgba(0,0,0,0.035)_0px,rgba(0,0,0,0.035)_22px,transparent_22px,transparent_44px),linear-gradient(160deg,#ececf0,#e1e2e7_52%,#ececf1)]"
         }`}
       />
 
-      <div className="mx-auto max-w-[1700px] px-3 pb-8 pt-4 sm:px-5 lg:px-8">
+      <div className="mx-auto max-w-[1300px] px-4 pb-8 pt-5 sm:px-6 lg:px-8">
         <header
-          className={`mb-4 rounded-3xl border p-4 shadow-lg backdrop-blur-xl sm:p-6 ${
-            isDark ? "border-cyan-300/20 bg-[#0c1b33]/86" : "border-cyan-800/15 bg-white/90"
+          className={`rounded-3xl border p-4 sm:p-6 ${
+            isDark ? "border-red-400/30 bg-[#151821]/88" : "border-red-700/20 bg-white/85"
           }`}
         >
-          <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p
                 className={`${monoFontClass} text-[11px] font-semibold uppercase tracking-[0.18em] ${
-                  isDark ? "text-cyan-200/85" : "text-cyan-700/80"
+                  isDark ? "text-red-300" : "text-red-700"
                 }`}
               >
                 SurvivalNotes
               </p>
-              <h1 className="mt-1 text-2xl font-semibold leading-tight sm:text-3xl">
-                Manual Operacional de Sobrevivencia
+              <h1 className="mt-1 text-2xl font-black uppercase tracking-tight sm:text-3xl">
+                Skills & Training
               </h1>
-              <p className={`mt-2 max-w-3xl text-sm leading-relaxed ${isDark ? "text-slate-300" : "text-slate-600"}`}>
-                Guia textual completo para preparacao, resposta inicial e continuidade em cenarios
-                de risco. Foco em decisao clara, prioridades reais e acao pratica.
+              <p
+                className={`text-xl font-black uppercase tracking-tight sm:text-3xl ${
+                  isDark ? "text-red-300" : "text-red-700"
+                }`}
+              >
+                Equipment & Supplies
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
-              className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${
-                isDark
-                  ? "border-cyan-300/35 bg-cyan-400/10 text-cyan-100 hover:bg-cyan-400/18"
-                  : "border-cyan-700/25 bg-cyan-50 text-cyan-800 hover:bg-cyan-100"
-              }`}
-            >
-              {isDark ? <MdLightMode className="h-4 w-4" /> : <MdDarkMode className="h-4 w-4" />}
-              {isDark ? "Tema claro" : "Tema escuro"}
-            </button>
-          </div>
-
-          <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-            {metrics.map((metric) => (
-              <article
-                key={metric.label}
-                className={`rounded-2xl border p-3 ${
-                  isDark ? "border-cyan-300/15 bg-[#0a1730]/78" : "border-cyan-700/15 bg-slate-50"
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={exportAsPdf}
+                className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                  isDark
+                    ? "border-red-300/40 bg-red-500/15 text-red-100 hover:bg-red-500/25"
+                    : "border-red-700/35 bg-red-50 text-red-800 hover:bg-red-100"
                 }`}
               >
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`inline-flex h-8 w-8 items-center justify-center rounded-xl ${
-                      isDark ? "bg-cyan-400/15 text-cyan-100" : "bg-cyan-100 text-cyan-800"
-                    }`}
-                  >
-                    <metric.icon className="h-4 w-4" />
-                  </span>
-                  <p
-                    className={`${monoFontClass} text-[11px] uppercase tracking-[0.14em] ${
-                      isDark ? "text-cyan-100/75" : "text-cyan-700/75"
-                    }`}
-                  >
-                    {metric.label}
-                  </p>
-                </div>
-                <p className="mt-2 text-xl font-semibold">{metric.value}</p>
-                <p className={`text-xs ${isDark ? "text-slate-300/90" : "text-slate-600"}`}>
-                  {metric.hint}
-                </p>
-              </article>
-            ))}
+                <MdPictureAsPdf className="h-4 w-4" />
+                Exportar PDF
+              </button>
+              <button
+                type="button"
+                onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
+                className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                  isDark
+                    ? "border-zinc-500/50 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700"
+                    : "border-zinc-400/70 bg-white text-zinc-800 hover:bg-zinc-100"
+                }`}
+              >
+                {isDark ? <MdLightMode className="h-4 w-4" /> : <MdDarkMode className="h-4 w-4" />}
+                {isDark ? "Tema light" : "Tema black"}
+              </button>
+            </div>
           </div>
         </header>
 
-        <section className="mb-4 lg:hidden">
-          <label
-            className={`flex items-center gap-2 rounded-xl border px-3 py-2 ${
-              isDark ? "border-cyan-300/25 bg-[#0b1932]/80" : "border-slate-300 bg-white"
-            }`}
-          >
-            <MdSearch className={isDark ? "text-cyan-100" : "text-cyan-700"} />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Buscar capitulo, objetivo ou acao"
-              className={`w-full bg-transparent text-sm outline-none placeholder:text-slate-400 ${
-                isDark ? "text-slate-100" : "text-slate-900"
-              }`}
-            />
-          </label>
-
-          <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-            {filteredChapters.map((chapter) => {
-              const active = chapter.id === selectedChapter?.id;
-              return (
-                <button
-                  key={chapter.id}
-                  type="button"
-                  onClick={() => selectChapter(chapter.id)}
-                  className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
-                    active
-                      ? isDark
-                        ? "border-cyan-200/60 bg-cyan-400/18 text-cyan-100"
-                        : "border-cyan-700/50 bg-cyan-100 text-cyan-900"
-                      : isDark
-                        ? "border-slate-700 bg-slate-900/60 text-slate-200"
-                        : "border-slate-300 bg-white text-slate-700"
+        <section
+          className={`mt-4 rounded-3xl border px-4 py-5 sm:px-7 ${
+            isDark ? "border-zinc-500/35 bg-[#161a22]/88" : "border-zinc-300 bg-white/88"
+          }`}
+        >
+          <div className="border-t-4 border-red-600 pt-5">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-sm font-extrabold uppercase tracking-[0.1em]">
+                Categorias de navegacao
+              </h2>
+              <label
+                className={`flex items-center gap-2 rounded-xl border px-3 py-2 ${
+                  isDark ? "border-zinc-600 bg-zinc-900/60" : "border-zinc-300 bg-white"
+                }`}
+              >
+                <MdSearch className={vividIconToneClass} />
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Buscar categoria"
+                  className={`w-[210px] bg-transparent text-sm outline-none placeholder:text-zinc-400 ${
+                    isDark ? "text-zinc-100" : "text-zinc-900"
                   }`}
-                >
-                  {chapter.number}
-                </button>
-              );
-            })}
+                />
+              </label>
+            </div>
+
+            <div className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 lg:grid-cols-4">
+              {categoryCards.map(({ chapter, icon: ChapterIcon }) => {
+                const active = chapter.id === selectedChapter?.id;
+                return (
+                  <button
+                    key={chapter.id}
+                    type="button"
+                    onClick={() => handleSelectChapter(chapter.id)}
+                    className={`rounded-2xl border p-3 text-center transition ${
+                      active
+                        ? isDark
+                          ? "border-red-300/70 bg-red-500/14"
+                          : "border-red-700/50 bg-red-50"
+                        : isDark
+                          ? "border-zinc-600/60 bg-[#10141c]/90 hover:border-red-400/60"
+                          : "border-zinc-300 bg-zinc-50/95 hover:border-red-600/45"
+                    }`}
+                  >
+                    <ChapterIcon className={`mx-auto h-11 w-11 ${vividIconToneClass}`} />
+                    <h3
+                      className={`mt-2 text-[11px] font-semibold uppercase tracking-[0.08em] sm:text-xs ${
+                        isDark ? "text-zinc-400" : "text-zinc-500"
+                      }`}
+                    >
+                      Capitulo {chapter.number}
+                    </h3>
+                    <p
+                      className={`mt-1 text-sm font-semibold leading-snug sm:text-base ${
+                        isDark ? "text-zinc-300" : "text-zinc-700"
+                      }`}
+                    >
+                      {chapter.title}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </section>
 
-        <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)_320px]">
-          <aside
-            className={`hidden lg:block lg:sticky lg:top-4 lg:h-[calc(100vh-48px)] lg:overflow-hidden rounded-3xl border p-4 ${
-              isDark ? "border-cyan-300/20 bg-[#0b1932]/88" : "border-cyan-700/15 bg-white/92"
-            }`}
-          >
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <h2 className="text-sm font-semibold uppercase tracking-[0.08em]">Capitulos</h2>
-              <span className={`${monoFontClass} text-xs ${isDark ? "text-cyan-100/80" : "text-cyan-700/80"}`}>
-                {filteredChapters.length}/{MANUAL_CHAPTERS.length}
-              </span>
-            </div>
-
-            <label
-              className={`mb-3 flex items-center gap-2 rounded-xl border px-3 py-2 ${
-                isDark ? "border-cyan-300/25 bg-slate-900/55" : "border-slate-300 bg-white"
+        <section ref={contentRef} className="mt-4">
+          {selectedChapter ? (
+            <article
+              className={`rounded-3xl border p-4 sm:p-6 ${
+                isDark ? "border-red-400/25 bg-[#151821]/88" : "border-red-700/18 bg-white/90"
               }`}
             >
-              <MdSearch className={isDark ? "text-cyan-100" : "text-cyan-700"} />
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Buscar"
-                className={`w-full bg-transparent text-sm outline-none placeholder:text-slate-400 ${
-                  isDark ? "text-slate-100" : "text-slate-900"
-                }`}
-              />
-            </label>
-
-            <div className="h-[calc(100%-124px)] overflow-y-auto pr-1">
-              <ul className="space-y-2">
-                {filteredChapters.map((chapter) => {
-                  const active = chapter.id === selectedChapter?.id;
-                  const visited = visitedChapters.includes(chapter.id);
-
-                  return (
-                    <li key={chapter.id}>
-                      <button
-                        type="button"
-                        onClick={() => selectChapter(chapter.id)}
-                        className={`w-full rounded-2xl border p-3 text-left transition ${
-                          active
-                            ? isDark
-                              ? "border-cyan-200/55 bg-cyan-400/16"
-                              : "border-cyan-700/45 bg-cyan-100"
-                            : isDark
-                              ? "border-slate-700/90 bg-slate-900/45 hover:border-cyan-300/35"
-                              : "border-slate-300 bg-white hover:border-cyan-700/35"
-                        }`}
-                      >
-                        <p
-                          className={`${monoFontClass} text-[11px] uppercase tracking-[0.14em] ${
-                            isDark ? "text-cyan-100/75" : "text-cyan-800/75"
-                          }`}
-                        >
-                          Capitulo {chapter.number}
-                        </p>
-                        <p className="mt-1 text-sm font-semibold leading-tight">{chapter.title}</p>
-                        <p className={`mt-2 text-xs ${isDark ? "text-slate-300/90" : "text-slate-600"}`}>
-                          {visited ? "Lido" : "Novo"}
-                        </p>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          </aside>
-
-          <section className="min-w-0 space-y-4">
-            {selectedChapter ? (
-              <article
-                className={`rounded-3xl border p-4 shadow-lg sm:p-6 ${
-                  isDark ? "border-cyan-300/20 bg-[#0b1933]/88" : "border-cyan-700/15 bg-white/94"
+              <p
+                className={`${monoFontClass} text-[11px] font-semibold uppercase tracking-[0.15em] ${
+                  isDark ? "text-red-300" : "text-red-700"
                 }`}
               >
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <p
-                      className={`${monoFontClass} text-[11px] uppercase tracking-[0.16em] ${
-                        isDark ? "text-cyan-100/75" : "text-cyan-800/70"
-                      }`}
-                    >
-                      Capitulo selecionado
-                    </p>
-                    <h2 className="mt-1 text-2xl font-semibold leading-tight sm:text-3xl">
-                      {chapterLabel(selectedChapter)}
-                    </h2>
-                  </div>
+                {chapterLabel(selectedChapter)}
+              </p>
+              <h2
+                className={`mt-1 text-3xl font-black uppercase tracking-tight sm:text-4xl ${
+                  isDark ? "text-zinc-100" : "text-zinc-900"
+                }`}
+              >
+                {selectedChapter.title}
+              </h2>
 
-                  <div
-                    className={`rounded-xl border px-3 py-2 text-right ${
-                      isDark ? "border-cyan-300/20 bg-cyan-400/10" : "border-cyan-700/15 bg-cyan-50"
-                    }`}
-                  >
-                    <p className="text-xs font-semibold uppercase tracking-[0.08em]">Progresso</p>
-                    <p className="text-lg font-semibold">{progressPercent}%</p>
-                    <p className={`text-xs ${isDark ? "text-slate-300" : "text-slate-600"}`}>
-                      {visitedChapters.length} / {MANUAL_CHAPTERS.length}
-                    </p>
-                  </div>
-                </div>
+              <p
+                className={`mt-3 rounded-xl border px-3 py-3 text-sm leading-relaxed ${
+                  isDark
+                    ? "border-red-300/20 bg-red-500/10 text-zinc-100"
+                    : "border-red-700/20 bg-red-50 text-zinc-700"
+                }`}
+              >
+                {selectedChapter.objective}
+              </p>
 
-                <p
-                  className={`mt-4 rounded-2xl border px-4 py-3 text-sm leading-relaxed ${
-                    isDark ? "border-cyan-300/20 bg-cyan-400/8 text-slate-100" : "border-cyan-700/15 bg-cyan-50 text-slate-700"
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <section
+                  className={`rounded-2xl border p-3 ${
+                    isDark ? "border-zinc-700 bg-zinc-900/55" : "border-zinc-300 bg-zinc-50"
                   }`}
                 >
-                  {selectedChapter.objective}
-                </p>
-
-                <section className="mt-5">
-                  <h3 className="text-sm font-semibold uppercase tracking-[0.08em]">Acoes imediatas</h3>
-                  <ul className="mt-3 space-y-2">
-                    {selectedChapter.quickActions.map((action, actionIndex) => {
-                      const actionKey = `${selectedChapter.id}-quick-${actionIndex}`;
-                      const checked = Boolean(checkedItems[actionKey]);
-                      return (
-                        <li
-                          key={actionKey}
-                          className={`flex items-start gap-3 rounded-xl border px-3 py-2 ${
-                            checked
-                              ? isDark
-                                ? "border-emerald-300/35 bg-emerald-400/12"
-                                : "border-emerald-700/35 bg-emerald-50"
-                              : isDark
-                                ? "border-slate-700 bg-slate-900/50"
-                                : "border-slate-300 bg-slate-50"
-                          }`}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => toggleAction(actionKey)}
-                            aria-label={`Marcar acao: ${action}`}
-                            className={`mt-0.5 h-4 w-4 shrink-0 rounded border transition ${
-                              checked
-                                ? isDark
-                                  ? "border-emerald-300 bg-emerald-400/80"
-                                  : "border-emerald-700 bg-emerald-600"
-                                : isDark
-                                  ? "border-slate-500 bg-slate-950"
-                                  : "border-slate-400 bg-white"
-                            }`}
-                          />
-                          <span className={`text-sm leading-relaxed ${checked ? "line-through opacity-70" : ""}`}>
-                            {action}
-                          </span>
-                        </li>
-                      );
-                    })}
+                  <div className="flex items-center gap-2">
+                    <MdEmergency className={`h-5 w-5 ${vividIconToneClass}`} />
+                    <h3 className="text-sm font-bold uppercase">Acoes imediatas</h3>
+                  </div>
+                  <ul className="mt-2 space-y-2 text-sm">
+                    {selectedChapter.quickActions.map((action) => (
+                      <li key={action} className="flex items-start gap-2">
+                        <MdBolt className={`mt-0.5 h-4 w-4 shrink-0 ${vividIconToneClass}`} />
+                        <span>{action}</span>
+                      </li>
+                    ))}
                   </ul>
                 </section>
 
-                <section className="mt-6 space-y-4">
-                  {selectedChapter.blocks.map((block) => (
-                    <div
-                      key={block.title}
-                      className={`rounded-2xl border p-4 ${
-                        isDark ? "border-cyan-300/12 bg-slate-900/48" : "border-slate-300 bg-slate-50"
-                      }`}
-                    >
-                      <h4 className="text-base font-semibold">{block.title}</h4>
-                      <ul className="mt-3 space-y-2">
-                        {block.points.map((point) => (
-                          <li key={point} className="flex items-start gap-2 text-sm leading-relaxed">
-                            <span
-                              className={`mt-1.5 inline-block h-1.5 w-1.5 rounded-full ${
-                                isDark ? "bg-emerald-300" : "bg-emerald-700"
-                              }`}
-                            />
-                            <span className={isDark ? "text-slate-200" : "text-slate-700"}>{point}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  ))}
-                </section>
-
                 <section
-                  className={`mt-6 rounded-2xl border p-4 ${
-                    isDark ? "border-rose-300/20 bg-rose-400/10" : "border-rose-700/20 bg-rose-50"
+                  className={`rounded-2xl border p-3 ${
+                    isDark ? "border-zinc-700 bg-zinc-900/55" : "border-zinc-300 bg-zinc-50"
                   }`}
                 >
-                  <h3 className="text-sm font-semibold uppercase tracking-[0.08em]">Erros comuns</h3>
-                  <ul className="mt-3 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <MdOutlineHealthAndSafety className={`h-5 w-5 ${vividIconToneClass}`} />
+                    <h3 className="text-sm font-bold uppercase">Erros comuns</h3>
+                  </div>
+                  <ul className="mt-2 space-y-2 text-sm">
                     {selectedChapter.commonMistakes.map((mistake) => (
-                      <li key={mistake} className="flex items-start gap-2 text-sm leading-relaxed">
-                        <span
-                          className={`mt-1.5 inline-block h-1.5 w-1.5 rounded-full ${
-                            isDark ? "bg-rose-300" : "bg-rose-700"
-                          }`}
-                        />
+                      <li key={mistake} className="flex items-start gap-2">
+                        <MdReport className={`mt-0.5 h-4 w-4 shrink-0 ${vividIconToneClass}`} />
                         <span>{mistake}</span>
                       </li>
                     ))}
                   </ul>
                 </section>
-              </article>
-            ) : null}
+              </div>
 
-            <article
-              className={`rounded-3xl border p-4 sm:p-6 ${
-                isDark ? "border-cyan-300/20 bg-[#0b1933]/88" : "border-cyan-700/15 bg-white/94"
-              }`}
-            >
-              <h3 className="text-lg font-semibold">Referencias rapidas</h3>
-              <div className="mt-4 grid gap-3 lg:grid-cols-3">
-                <div
-                  className={`rounded-xl border p-3 ${
-                    isDark ? "border-cyan-300/12 bg-slate-900/48" : "border-slate-300 bg-slate-50"
-                  }`}
-                >
-                  <p className="text-sm font-semibold">Consumo de agua</p>
-                  <ul className="mt-2 space-y-2 text-sm">
-                    {WATER_REFERENCE.map((item) => (
-                      <li key={item.scenario}>
-                        <p className="font-medium">{item.scenario}</p>
-                        <p className={isDark ? "text-slate-300" : "text-slate-600"}>{item.liters}</p>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-
-                <div
-                  className={`rounded-xl border p-3 ${
-                    isDark ? "border-cyan-300/12 bg-slate-900/48" : "border-slate-300 bg-slate-50"
-                  }`}
-                >
-                  <p className="text-sm font-semibold">Sinais vitais</p>
-                  <ul className="mt-2 space-y-2 text-sm">
-                    {VITAL_SIGNS_REFERENCE.map((item) => (
-                      <li key={item.signal}>
-                        <p className="font-medium">{item.signal}</p>
-                        <p className={isDark ? "text-slate-300" : "text-slate-600"}>{item.value}</p>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-
-                <div
-                  className={`rounded-xl border p-3 ${
-                    isDark ? "border-cyan-300/12 bg-slate-900/48" : "border-slate-300 bg-slate-50"
-                  }`}
-                >
-                  <p className="text-sm font-semibold">Camadas de roupa</p>
-                  <ul className="mt-2 space-y-2 text-sm">
-                    {LAYER_REFERENCE.map((item) => (
-                      <li key={item.range}>
-                        <p className="font-medium">{item.range}</p>
-                        <p className={isDark ? "text-slate-300" : "text-slate-600"}>{item.strategy}</p>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+              <div className="mt-4 space-y-3">
+                {selectedChapter.blocks.map((block) => (
+                  <section
+                    key={block.title}
+                    className={`rounded-2xl border p-3 ${
+                      isDark ? "border-zinc-700 bg-zinc-900/55" : "border-zinc-300 bg-zinc-50"
+                    }`}
+                  >
+                    <h3 className="text-sm font-bold uppercase">{block.title}</h3>
+                    <ul className="mt-2 space-y-2 text-sm">
+                      {block.points.map((point) => (
+                        <li key={point} className="flex items-start gap-2">
+                          <MdChevronRight className={`mt-0.5 h-4 w-4 shrink-0 ${vividIconToneClass}`} />
+                          <span>{point}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                ))}
               </div>
             </article>
-          </section>
+          ) : null}
+        </section>
 
-          <aside
-            className={`hidden xl:block xl:sticky xl:top-4 xl:h-[calc(100vh-48px)] rounded-3xl border p-4 ${
-              isDark ? "border-cyan-300/20 bg-[#0b1932]/88" : "border-cyan-700/15 bg-white/92"
-            }`}
-          >
-            <div
-              className={`rounded-2xl border p-3 ${
-                isDark ? "border-cyan-300/20 bg-cyan-400/8" : "border-cyan-700/15 bg-cyan-50"
-              }`}
-            >
-              <h3 className="text-sm font-semibold uppercase tracking-[0.08em]">Prioridade base</h3>
-              <ol className="mt-3 space-y-2 text-sm">
-                <li>1. Seguranca</li>
-                <li>2. Primeiros socorros</li>
-                <li>3. Abrigo e temperatura</li>
-                <li>4. Agua</li>
-                <li>5. Comunicacao</li>
-                <li>6. Comida</li>
-              </ol>
-            </div>
-
-            <div className="mt-3 rounded-2xl border border-emerald-600/20 bg-emerald-400/10 p-3">
-              <h3 className="text-sm font-semibold">Checklist de saida em 5 min</h3>
-              <ul className="mt-2 space-y-2 text-sm">
-                <li>- Pessoas prioritarias reunidas</li>
-                <li>- Documento + celular + agua</li>
-                <li>- Rota definida e contato avisado</li>
-              </ul>
-            </div>
-
-            <div
-              className={`mt-3 rounded-2xl border p-3 ${
-                isDark ? "border-cyan-300/15 bg-slate-900/50" : "border-slate-300 bg-slate-50"
-              }`}
-            >
-              <h3 className="text-sm font-semibold">Contatos essenciais</h3>
-              <ul className="mt-2 space-y-2 text-sm">
-                {DEFAULT_CONTACTS.map((contact) => (
-                  <li key={contact} className="leading-relaxed">
-                    - {contact}
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            <div className={`mt-3 rounded-2xl border p-3 ${isDark ? "border-cyan-300/15 bg-slate-900/50" : "border-slate-300 bg-slate-50"}`}>
-              <p className="text-sm font-semibold">Uso recomendado</p>
-              <p className={`mt-2 text-sm leading-relaxed ${isDark ? "text-slate-300" : "text-slate-600"}`}>
-                Revise um capitulo por semana, execute simulados mensais e mantenha os checklists
-                impressos em local acessivel.
-              </p>
-            </div>
-          </aside>
-        </div>
-
-        <footer className={`mt-4 rounded-2xl border px-4 py-3 text-xs ${isDark ? "border-cyan-300/20 bg-[#0b1932]/80 text-slate-300" : "border-cyan-700/15 bg-white text-slate-600"}`}>
+        <footer
+          className={`mt-4 rounded-2xl border px-4 py-3 text-xs ${
+            isDark
+              ? "border-red-400/25 bg-[#151821]/85 text-zinc-300"
+              : "border-red-700/20 bg-white/85 text-zinc-600"
+          }`}
+        >
           <div className="flex items-center gap-2">
-            <MdOutlineHealthAndSafety className="h-4 w-4" />
-            <span>Manual textual sem banco de dados, focado em prevencao e acao responsavel.</span>
+            <MdOutlineHealthAndSafety className={`h-4 w-4 ${vividIconToneClass}`} />
+            <span>Tema black/light com destaque vermelho e icones para consulta rapida.</span>
           </div>
         </footer>
       </div>

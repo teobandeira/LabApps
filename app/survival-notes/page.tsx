@@ -1,15 +1,9 @@
 import type { Metadata } from "next";
-import { Chivo, IBM_Plex_Mono } from "next/font/google";
+import { Montserrat } from "next/font/google";
 import SurvivalNotesApp from "./SurvivalNotesApp";
 
-const chivo = Chivo({
+const montserrat = Montserrat({
   subsets: ["latin"],
-  display: "swap",
-});
-
-const ibmPlexMono = IBM_Plex_Mono({
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
   display: "swap",
 });
 
@@ -20,5 +14,10 @@ export const metadata: Metadata = {
 };
 
 export default function SurvivalNotesPage() {
-  return <SurvivalNotesApp displayFontClass={chivo.className} monoFontClass={ibmPlexMono.className} />;
+  return (
+    <SurvivalNotesApp
+      displayFontClass={montserrat.className}
+      monoFontClass={montserrat.className}
+    />
+  );
 }

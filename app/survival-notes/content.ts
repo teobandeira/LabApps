@@ -684,8 +684,117 @@ export const MANUAL_CHAPTERS: ManualChapter[] = [
     ],
   },
   {
-    id: "apendices-uteis",
+    id: "farmacia-vs-natural",
     number: 14,
+    title: "Farmacia comum x medicina natural",
+    objective:
+      "Usar remedios de farmacia e opcoes naturais/caseiras com criterio, seguranca e limite claro.",
+    quickActions: [
+      "Priorize sinais de gravidade: falta de ar, dor no peito, confusao, febre alta persistente, sangramento importante.",
+      "Para sintomas leves, comece com hidratacao, repouso e medidas de suporte antes de combinar varios produtos.",
+      "Nao misture remedios sem verificar interacoes, alergias e condicoes cronicas.",
+      "Se houver piora, duracao prolongada ou duvida de dose, procure atendimento profissional.",
+    ],
+    blocks: [
+      {
+        title: "Quando usar farmacia comum",
+        points: [
+          "Dor, febre leve, desconforto gastrointestinal leve e alergia leve podem responder a itens basicos do kit.",
+          "Siga sempre bula, dose por faixa etaria e intervalo correto; excesso nao acelera melhora.",
+          "Evite automedicacao em gestantes, criancas pequenas, idosos fragilizados e pessoas com doenca cronica sem orientacao.",
+        ],
+      },
+      {
+        title: "Medicina natural e caseira (uso seguro)",
+        points: [
+          "Use medidas de baixo risco para suporte: agua, soro oral, repouso, alimentacao leve, compressa morna/fria conforme sintoma.",
+          "Para garganta irritada e tosse leve, prefira hidratacao e umidificacao do ambiente; evite receitas agressivas.",
+          "Cha e preparos caseiros podem ser apoio, mas nao substituem tratamento de infeccao, crise respiratoria ou dor intensa.",
+        ],
+      },
+      {
+        title: "Como montar protocolo caseiro pratico",
+        points: [
+          "Passo 1: identificar sintoma principal e medir sinais basicos (temperatura, estado geral, hidratacao).",
+          "Passo 2: escolher uma intervencao de suporte por vez e reavaliar em 30-60 minutos.",
+          "Passo 3: registrar horario, melhora/piora e qualquer reacao adversa.",
+          "Passo 4: escalar para atendimento se nao houver melhora clara ou surgir sinal de alerta.",
+        ],
+      },
+      {
+        title: "Limites e sinais de alerta",
+        points: [
+          "Nao use remedio natural/caseiro para substituir atendimento em falta de ar, dor toracica, desmaio, convulsao ou trauma importante.",
+          "Febre alta persistente, vomito repetido, sangue em secrecao/fezes/urina e desidratacao exigem avaliacao medica.",
+          "Nunca ofereca preparos caseiros potencialmente toxicos ou sem procedencia conhecida.",
+        ],
+      },
+    ],
+    commonMistakes: [
+      "Misturar varios remedios (farmacia + caseiro) ao mesmo tempo e perder controle do que causou efeito.",
+      "Usar dose de adulto em crianca ou repetir dose antes do intervalo recomendado.",
+      "Acreditar que remedio natural e sempre seguro em qualquer quantidade.",
+    ],
+  },
+  {
+    id: "evasao-floresta-parana",
+    number: 15,
+    title: "Evasao dentro da floresta (Parana)",
+    objective:
+      "Sair de area de risco em ambiente de floresta no Parana com orientacao, conservacao de energia e sinalizacao eficiente.",
+    quickActions: [
+      "Aplique STOP: pare, respire, observe e planeje antes de andar sem direcao.",
+      "Marque o ponto atual (fita, anotacao ou waypoint) e escolha uma rota principal + alternativa.",
+      "Priorize terreno estavel e mais alto, longe de leito de rio, grotas e encostas com sinais de deslizamento.",
+      "Se o tempo fechar, prepare abrigo rapido e reduza deslocamento ate melhorar visibilidade e seguranca.",
+    ],
+    blocks: [
+      {
+        title: "Riscos mais comuns no contexto do Parana",
+        points: [
+          "Chuva forte e rapida aumenta risco de cabeca d'agua em rios e de solo ceder em trilhas de encosta.",
+          "Frio noturno em altitude e vento umido podem acelerar hipotermia mesmo fora do inverno.",
+          "Mata fechada reduz orientacao visual; neblina e perda de trilha sao comuns em serra e areas de araucaria.",
+          "Animais peconhentos e carrapatos exigem deslocamento atento, roupa cobrindo pele e checagem periodica do corpo.",
+        ],
+      },
+      {
+        title: "Evasao segura em 10 minutos, 1 hora e 6 horas",
+        points: [
+          "Primeiros 10 minutos: estabilizar respiracao, tratar urgencias e evitar corrida em mata fechada.",
+          "Primeira hora: definir azimute simples ou referencia linear segura (estrada, crista, cerca, curso d'agua sem cheia).",
+          "Ate 6 horas: alternar 40-50 min de caminhada com 10 min de pausa para navegacao, hidratacao e reavaliacao.",
+          "Se houver lesao, clima severo ou noite chegando, priorize abrigo e sinalizacao em vez de continuar avancando.",
+        ],
+      },
+      {
+        title: "Navegacao pratica sem depender de internet",
+        points: [
+          "Use mapa offline e bussola como base; GPS do celular e apoio, nao unica referencia.",
+          "Trabalhe com pontos curtos: referencia visivel, checagem de direcao e confirmacao do relevo.",
+          "Evite atalho por vale fechado ou encosta escorregadia; rota mais longa e estavel costuma ser mais segura.",
+          "Registre horario e direcao em anotacao simples para evitar andar em circulo.",
+        ],
+      },
+      {
+        title: "Sinalizacao e resgate",
+        points: [
+          "Padrao internacional de socorro: 3 sinais curtos repetidos (apito, lanterna ou batidas).",
+          "Em area aberta segura, sinal visual de alto contraste ajuda localizacao por equipes e aeronaves.",
+          "Envie mensagem objetiva quando houver sinal: local aproximado, estado de saude, pessoas no grupo e recursos restantes.",
+          "Conserve bateria: celular em modo economia, ligado apenas para janela de comunicacao programada.",
+        ],
+      },
+    ],
+    commonMistakes: [
+      "Continuar andando sem rumo por ansiedade e piorar distancia da rota segura.",
+      "Seguir rio durante chuva forte sem avaliar risco de subida rapida da agua.",
+      "Ignorar sinais de frio, desidratacao e exaustao antes que se tornem emergencia.",
+    ],
+  },
+  {
+    id: "apendices-uteis",
+    number: 16,
     title: "Apendices uteis",
     objective: "Concentrar referencias praticas para consulta rapida em campo.",
     quickActions: [
