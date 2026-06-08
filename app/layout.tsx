@@ -13,7 +13,6 @@ export const metadata: Metadata = {
     default: "AppsLab Portfolio",
     template: "%s | LabApps",
   },
-  manifest: "/manifest.webmanifest",
   description:
     "Página principal de apresentação dos apps do projeto, com links para cada aplicação.",
   metadataBase: new URL("http://localhost:3000"),

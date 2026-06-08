@@ -11,6 +11,7 @@ export const metadata: Metadata = {
   title: "SurvivalNotes",
   description:
     "Manual de sobrevivencia textual com protocolos por prioridade, checklists e cenarios de risco.",
+  manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
