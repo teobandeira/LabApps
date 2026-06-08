@@ -1,0 +1,31 @@
+{
+  "name": "SurvivalNotes",
+  "short_name": "SurvivalNotes",
+  "description": "Manual de sobrevivencia com consulta rapida, funcionando offline no Android.",
+  "lang": "pt-BR",
+  "start_url": "/survival-notes",
+  "scope": "/survival-notes",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#dc2626",
+  "background_color": "#0e1014",
+  "icons": [
+    {
+      "src": "/icons/survivalnotes-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/survivalnotes-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/survivalnotes.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

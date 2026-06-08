@@ -8,6 +8,7 @@ import {
   MdChevronRight,
   MdChecklist,
   MdDarkMode,
+  MdDownload,
   MdEmergency,
   MdFoodBank,
   MdHealthAndSafety,
@@ -39,6 +40,11 @@ type ThemeMode = "light" | "dark";
 type SurvivalNotesAppProps = {
   displayFontClass: string;
   monoFontClass: string;
+};
+
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform?: string }>;
 };
 
 const THEME_STORAGE_KEY = "survival-notes-theme";
@@ -323,6 +329,7 @@ export default function SurvivalNotesApp({
   monoFontClass,
 }: SurvivalNotesAppProps) {
   const [theme, setTheme] = useState<ThemeMode>(getInitialTheme);
+  const [installPromptEvent, setInstallPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
   const [query, setQuery] = useState("");
   const [selectedChapterId, setSelectedChapterId] = useState(MANUAL_CHAPTERS[0]?.id ?? "");
   const contentRef = useRef<HTMLElement | null>(null);
@@ -330,6 +337,37 @@ export default function SurvivalNotesApp({
   useEffect(() => {
     window.localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !("serviceWorker" in navigator)) {
+      return;
+    }
+
+    navigator.serviceWorker.register("/survivalnotes-sw.js", { scope: "/survival-notes" }).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const handleBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPromptEvent(event as BeforeInstallPromptEvent);
+    };
+
+    const handleAppInstalled = () => {
+      setInstallPromptEvent(null);
+    };
+
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt as EventListener);
+    window.addEventListener("appinstalled", handleAppInstalled);
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt as EventListener);
+      window.removeEventListener("appinstalled", handleAppInstalled);
+    };
+  }, []);
 
   const selectedChapter =
     MANUAL_CHAPTERS.find((chapter) => chapter.id === selectedChapterId) ?? MANUAL_CHAPTERS[0];
@@ -387,6 +425,22 @@ export default function SurvivalNotesApp({
     window.setTimeout(() => window.URL.revokeObjectURL(url), 1000);
   };
 
+  const installAsApp = async () => {
+    if (!installPromptEvent) {
+      return;
+    }
+
+    try {
+      await installPromptEvent.prompt();
+      const choice = await installPromptEvent.userChoice;
+      if (choice.outcome === "accepted") {
+        setInstallPromptEvent(null);
+      }
+    } catch {
+      setInstallPromptEvent(null);
+    }
+  };
+
   return (
     <main
       className={`${displayFontClass} min-h-screen transition-colors duration-300 ${
@@ -429,30 +483,51 @@ export default function SurvivalNotesApp({
               </p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-2">
+              {installPromptEvent ? (
+                <button
+                  type="button"
+                  onClick={installAsApp}
+                  aria-label="Instalar app"
+                  title="Instalar app"
+                  className={`inline-flex h-10 w-10 items-center justify-center gap-2 rounded-xl border text-sm font-semibold transition sm:h-auto sm:w-auto sm:px-3 sm:py-2 ${
+                    isDark
+                      ? "border-red-300/40 bg-red-500/15 text-red-100 hover:bg-red-500/25"
+                      : "border-red-700/35 bg-red-50 text-red-800 hover:bg-red-100"
+                  }`}
+                >
+                  <MdDownload className="h-4 w-4" />
+                  <span className="hidden sm:inline">Instalar app</span>
+                </button>
+              ) : null}
+
               <button
                 type="button"
                 onClick={exportAsPdf}
-                className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                aria-label="Exportar PDF"
+                title="Exportar PDF"
+                className={`inline-flex h-10 w-10 items-center justify-center gap-2 rounded-xl border text-sm font-semibold transition sm:h-auto sm:w-auto sm:px-3 sm:py-2 ${
                   isDark
                     ? "border-red-300/40 bg-red-500/15 text-red-100 hover:bg-red-500/25"
                     : "border-red-700/35 bg-red-50 text-red-800 hover:bg-red-100"
                 }`}
               >
                 <MdPictureAsPdf className="h-4 w-4" />
-                Exportar PDF
+                <span className="hidden sm:inline">Exportar PDF</span>
               </button>
               <button
                 type="button"
                 onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
-                className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                aria-label={isDark ? "Mudar para tema light" : "Mudar para tema black"}
+                title={isDark ? "Mudar para tema light" : "Mudar para tema black"}
+                className={`inline-flex h-10 w-10 items-center justify-center gap-2 rounded-xl border text-sm font-semibold transition sm:h-auto sm:w-auto sm:px-3 sm:py-2 ${
                   isDark
                     ? "border-zinc-500/50 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700"
                     : "border-zinc-400/70 bg-white text-zinc-800 hover:bg-zinc-100"
                 }`}
               >
                 {isDark ? <MdLightMode className="h-4 w-4" /> : <MdDarkMode className="h-4 w-4" />}
-                {isDark ? "Tema light" : "Tema black"}
+                <span className="hidden sm:inline">{isDark ? "Tema light" : "Tema black"}</span>
               </button>
             </div>
           </div>
