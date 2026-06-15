@@ -662,7 +662,10 @@ function normalizeMode(value: FormDataEntryValue | null | undefined): Generation
 }
 
 function getAllowedImageSizesByModel(model: string): readonly string[] {
-  return IMAGE_SIZES_BY_MODEL[model] ?? IMAGE_SIZES_BY_MODEL[DEFAULT_IMAGE_MODEL];
+  if (Object.prototype.hasOwnProperty.call(IMAGE_SIZES_BY_MODEL, model)) {
+    return IMAGE_SIZES_BY_MODEL[model as keyof typeof IMAGE_SIZES_BY_MODEL];
+  }
+  return IMAGE_SIZES_BY_MODEL[DEFAULT_IMAGE_MODEL];
 }
 
 function normalizeImageSize(
