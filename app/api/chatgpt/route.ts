@@ -17,17 +17,28 @@ const OPENAI_IMAGES_API_URL = "https://api.openai.com/v1/images/generations";
 const OPENAI_IMAGE_EDITS_API_URL = "https://api.openai.com/v1/images/edits";
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_TEXT_MODEL = "gpt-5.2";
-const DEFAULT_IMAGE_MODEL = "gpt-image-1.5";
+const DEFAULT_IMAGE_MODEL = "gpt-image-2";
+const DEFAULT_GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image";
 const ALLOWED_IMAGE_MODELS = new Set([
+  "gpt-image-2",
   "gpt-image-1.5",
   "chatgpt-image-latest",
   "gpt-image-1",
   "gpt-image-1-mini",
+  DEFAULT_GEMINI_IMAGE_MODEL,
   "nano_banana",
   "gpt_image",
 ]);
-const DEFAULT_IMAGE_SIZE = "1024x1024";
-const IMAGE_SIZES = new Set(["1024x1024", "1536x1024", "1024x1536", "1024x1792", "1792x1024"]);
+const DEFAULT_IMAGE_SIZE = "1536x1024";
+const IMAGE_SIZES_BY_MODEL = {
+  [DEFAULT_GEMINI_IMAGE_MODEL]: ["1536x1024", "1024x1536", "1024x1024"],
+  nano_banana: ["1536x1024", "1024x1536", "1024x1024"],
+  "gpt-image-2": ["1536x1024", "1024x1536", "1024x1024"],
+  "gpt-image-1.5": ["1536x1024", "1024x1536", "1024x1024"],
+  "chatgpt-image-latest": ["1536x1024", "1024x1536", "1024x1024"],
+  "gpt-image-1": ["1536x1024", "1024x1536", "1024x1024"],
+  "gpt-image-1-mini": ["1536x1024", "1024x1536", "1024x1024"],
+} as const satisfies Record<string, readonly string[]>;
 const SAVED_IMAGE_MAX_DIMENSION = 1280;
 const SAVED_IMAGE_WEBP_QUALITY = 82;
 const MAX_SOURCE_IMAGE_SIZE_BYTES = 50 * 1024 * 1024;
@@ -71,7 +82,7 @@ type ParsedRequest = {
   mode: GenerationMode;
   imageSize: string;
   imageAction: ImageAction;
-  sourceImage: File | null;
+  sourceImages: File[];
   files: File[];
   chatHistory: ChatHistoryMessage[];
   deviceId: string;
@@ -562,7 +573,10 @@ function normalizeImageModel(value: FormDataEntryValue | string | null | undefin
 
   const normalized = value.trim();
   if (normalized === "gpt_image") {
-    return "gpt-image-1.5";
+    return "gpt-image-2";
+  }
+  if (normalized === "nano_banana") {
+    return DEFAULT_GEMINI_IMAGE_MODEL;
   }
   return ALLOWED_IMAGE_MODELS.has(normalized) ? normalized : DEFAULT_IMAGE_MODEL;
 }
@@ -571,13 +585,21 @@ function normalizeMode(value: FormDataEntryValue | null | undefined): Generation
   return value === "image" ? "image" : "chat";
 }
 
-function normalizeImageSize(value: FormDataEntryValue | null | undefined): string {
+function getAllowedImageSizesByModel(model: string): readonly string[] {
+  return IMAGE_SIZES_BY_MODEL[model] ?? IMAGE_SIZES_BY_MODEL[DEFAULT_IMAGE_MODEL];
+}
+
+function normalizeImageSize(
+  value: FormDataEntryValue | string | null | undefined,
+  model: string
+): string {
+  const allowedSizes = getAllowedImageSizesByModel(model);
   if (typeof value !== "string") {
-    return DEFAULT_IMAGE_SIZE;
+    return allowedSizes[0] ?? DEFAULT_IMAGE_SIZE;
   }
 
   const normalized = value.trim();
-  return IMAGE_SIZES.has(normalized) ? normalized : DEFAULT_IMAGE_SIZE;
+  return allowedSizes.includes(normalized) ? normalized : allowedSizes[0] ?? DEFAULT_IMAGE_SIZE;
 }
 
 function parseImageSize(size: string): { width: number; height: number } | null {
@@ -622,6 +644,51 @@ async function normalizeSourceImageForEdit(
   const baseName = originalName.replace(/\.[^.]+$/, "");
   const normalizedName = `${baseName || "image"}.png`;
   return new File([Uint8Array.from(outputBuffer)], normalizedName, { type: "image/png" });
+}
+
+async function normalizeSourceImagesForEdit(
+  sourceImages: File[],
+  imageSize: string
+): Promise<{ files: File[] } | { error: string }> {
+  if (sourceImages.length === 0) {
+    return { error: "Envie ao menos uma imagem base para editar." };
+  }
+
+  const normalizedFiles: File[] = [];
+
+  for (let index = 0; index < sourceImages.length; index += 1) {
+    const sourceImage = sourceImages[index];
+    const imageLabel = `imagem ${index + 1}`;
+
+    if (sourceImage.size <= 0) {
+      return { error: `A ${imageLabel} enviada esta vazia.` };
+    }
+
+    if (sourceImage.size > MAX_SOURCE_IMAGE_SIZE_BYTES) {
+      return { error: `A ${imageLabel} enviada excede o limite de 50MB.` };
+    }
+
+    if (!isSupportedSourceImage(sourceImage)) {
+      return {
+        error: `Formato da ${imageLabel} nao suportado. Use PNG, JPG/JPEG ou WEBP.`,
+      };
+    }
+
+    let normalizedSourceImage = sourceImage;
+    try {
+      normalizedSourceImage = await normalizeSourceImageForEdit(sourceImage, imageSize);
+    } catch {
+      return { error: `Nao foi possivel preparar a ${imageLabel} enviada para edicao.` };
+    }
+
+    if (normalizedSourceImage.size > MAX_SOURCE_IMAGE_SIZE_BYTES) {
+      return { error: `A ${imageLabel} enviada excede o limite de 50MB apos o ajuste.` };
+    }
+
+    normalizedFiles.push(normalizedSourceImage);
+  }
+
+  return { files: normalizedFiles };
 }
 
 function normalizeImageAction(value: FormDataEntryValue | null | undefined): ImageAction {
@@ -715,8 +782,10 @@ async function parseIncomingRequest(request: NextRequest): Promise<ParsedRequest
     const files = formData
       .getAll("files")
       .filter((item): item is File => item instanceof File);
-    const sourceImageEntry = formData.get("sourceImage");
-    const sourceImage = sourceImageEntry instanceof File ? sourceImageEntry : null;
+    const sourceImages = [
+      ...formData.getAll("sourceImage"),
+      ...formData.getAll("sourceImages"),
+    ].filter((item): item is File => item instanceof File);
 
     const mode = normalizeMode(formData.get("mode"));
     const model =
@@ -728,9 +797,9 @@ async function parseIncomingRequest(request: NextRequest): Promise<ParsedRequest
       prompt: normalizePrompt(formData.get("prompt")),
       model,
       mode,
-      imageSize: normalizeImageSize(formData.get("imageSize")),
+      imageSize: normalizeImageSize(formData.get("imageSize"), model),
       imageAction: normalizeImageAction(formData.get("imageAction")),
-      sourceImage,
+      sourceImages,
       files,
       chatHistory: parseChatHistoryFromFormData(formData.get("chatHistory")),
       deviceId: normalizeDeviceId(formData.get("deviceId")),
@@ -743,10 +812,7 @@ async function parseIncomingRequest(request: NextRequest): Promise<ParsedRequest
   const mode = payload.mode === "image" ? "image" : "chat";
   const model =
     mode === "image" ? normalizeImageModel(payload.model) : normalizeTextModel();
-  const imageSize =
-    typeof payload.imageSize === "string" && IMAGE_SIZES.has(payload.imageSize.trim())
-      ? payload.imageSize.trim()
-      : DEFAULT_IMAGE_SIZE;
+  const imageSize = normalizeImageSize(payload.imageSize, model);
   const imageAction = payload.imageAction === "edit" ? "edit" : "generate";
 
   return {
@@ -755,7 +821,7 @@ async function parseIncomingRequest(request: NextRequest): Promise<ParsedRequest
     mode,
     imageSize,
     imageAction,
-    sourceImage: null,
+    sourceImages: [],
     files: [],
     chatHistory: normalizeChatHistory(payload.chatHistory),
     deviceId: normalizeDeviceId(payload.deviceId),
@@ -1033,7 +1099,7 @@ export async function POST(request: NextRequest) {
     }
     const streamRequested = request.nextUrl.searchParams.get("stream") === "1";
 
-    const { prompt, model, mode, imageSize, imageAction, sourceImage, files, chatHistory, deviceId, requestId } =
+    const { prompt, model, mode, imageSize, imageAction, sourceImages, files, chatHistory, deviceId, requestId } =
       parsedRequest;
 
     if (mode === "image") {
@@ -1059,7 +1125,7 @@ export async function POST(request: NextRequest) {
       let imageUrl = "";
       let revisedPrompt: string | null = null;
 
-      if (model === "nano_banana") {
+      if (model.startsWith("gemini-")) {
         const geminiApiKey = process.env.GEMINI_API_KEY?.trim();
         if (!geminiApiKey) {
           return NextResponse.json(
@@ -1071,64 +1137,32 @@ export async function POST(request: NextRequest) {
         const parts: Array<{ text: string } | { inlineData: { data: string; mimeType: string } }> = [];
 
         if (imageAction === "edit") {
-          if (!sourceImage) {
+          const normalizedSourceImagesResult = await normalizeSourceImagesForEdit(
+            sourceImages,
+            imageSize
+          );
+          if ("error" in normalizedSourceImagesResult) {
             return NextResponse.json(
-              { error: "Envie uma imagem base para editar." },
+              { error: normalizedSourceImagesResult.error },
               { status: 400 }
             );
           }
 
-          if (sourceImage.size <= 0) {
-            return NextResponse.json(
-              { error: "A imagem enviada esta vazia." },
-              { status: 400 }
-            );
+          for (const normalizedSourceImage of normalizedSourceImagesResult.files) {
+            const imageBytes = Buffer.from(await normalizedSourceImage.arrayBuffer()).toString("base64");
+            parts.push({
+              inlineData: {
+                data: imageBytes,
+                mimeType: normalizedSourceImage.type || "image/png",
+              },
+            });
           }
-
-          if (sourceImage.size > MAX_SOURCE_IMAGE_SIZE_BYTES) {
-            return NextResponse.json(
-              { error: "A imagem enviada excede o limite de 50MB." },
-              { status: 400 }
-            );
-          }
-
-          if (!isSupportedSourceImage(sourceImage)) {
-            return NextResponse.json(
-              { error: "Formato da imagem nao suportado. Use PNG, JPG/JPEG ou WEBP." },
-              { status: 400 }
-            );
-          }
-
-          let normalizedSourceImage = sourceImage;
-          try {
-            normalizedSourceImage = await normalizeSourceImageForEdit(sourceImage, imageSize);
-          } catch {
-            return NextResponse.json(
-              { error: "Nao foi possivel preparar a imagem enviada para edicao." },
-              { status: 400 }
-            );
-          }
-
-          if (normalizedSourceImage.size > MAX_SOURCE_IMAGE_SIZE_BYTES) {
-            return NextResponse.json(
-              { error: "A imagem enviada excede o limite de 50MB apos o ajuste." },
-              { status: 400 }
-            );
-          }
-
-          const imageBytes = Buffer.from(await normalizedSourceImage.arrayBuffer()).toString("base64");
-          parts.push({
-            inlineData: {
-              data: imageBytes,
-              mimeType: normalizedSourceImage.type || "image/png",
-            },
-          });
         }
 
         parts.push({ text: prompt });
 
         const geminiResponse = await fetch(
-          `${GEMINI_BASE_URL}/models/nano-banana-pro-preview:generateContent?key=${encodeURIComponent(
+          `${GEMINI_BASE_URL}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(
             geminiApiKey
           )}`,
           {
@@ -1190,47 +1224,13 @@ export async function POST(request: NextRequest) {
 
         let imageResponse: Response;
         if (imageAction === "edit") {
-          if (!sourceImage) {
+          const normalizedSourceImagesResult = await normalizeSourceImagesForEdit(
+            sourceImages,
+            imageSize
+          );
+          if ("error" in normalizedSourceImagesResult) {
             return NextResponse.json(
-              { error: "Envie uma imagem base para editar." },
-              { status: 400 }
-            );
-          }
-
-          if (sourceImage.size <= 0) {
-            return NextResponse.json(
-              { error: "A imagem enviada esta vazia." },
-              { status: 400 }
-            );
-          }
-
-          if (sourceImage.size > MAX_SOURCE_IMAGE_SIZE_BYTES) {
-            return NextResponse.json(
-              { error: "A imagem enviada excede o limite de 50MB." },
-              { status: 400 }
-            );
-          }
-
-          if (!isSupportedSourceImage(sourceImage)) {
-            return NextResponse.json(
-              { error: "Formato da imagem nao suportado. Use PNG, JPG/JPEG ou WEBP." },
-              { status: 400 }
-            );
-          }
-
-          let normalizedSourceImage = sourceImage;
-          try {
-            normalizedSourceImage = await normalizeSourceImageForEdit(sourceImage, imageSize);
-          } catch {
-            return NextResponse.json(
-              { error: "Nao foi possivel preparar a imagem enviada para edicao." },
-              { status: 400 }
-            );
-          }
-
-          if (normalizedSourceImage.size > MAX_SOURCE_IMAGE_SIZE_BYTES) {
-            return NextResponse.json(
-              { error: "A imagem enviada excede o limite de 50MB apos o ajuste." },
+              { error: normalizedSourceImagesResult.error },
               { status: 400 }
             );
           }
@@ -1239,11 +1239,13 @@ export async function POST(request: NextRequest) {
           editPayload.append("model", model);
           editPayload.append("prompt", prompt);
           editPayload.append("size", imageSize);
-          editPayload.append(
-            "image",
-            normalizedSourceImage,
-            normalizedSourceImage.name || "image.png"
-          );
+          normalizedSourceImagesResult.files.forEach((normalizedSourceImage, index) => {
+            editPayload.append(
+              "image[]",
+              normalizedSourceImage,
+              normalizedSourceImage.name || `image-${index + 1}.png`
+            );
+          });
 
           imageResponse = await fetch(OPENAI_IMAGE_EDITS_API_URL, {
             method: "POST",
@@ -1301,6 +1303,12 @@ export async function POST(request: NextRequest) {
 
       let persistedImageUrl = imageUrl;
       let storedImageId: string | null = null;
+      const sourceImageName =
+        sourceImages
+          .map((sourceImage) => sourceImage.name?.trim() || "")
+          .filter((name) => name.length > 0)
+          .join(", ")
+          .slice(0, 1000) || null;
 
       try {
         const persistedImage = await persistGeneratedImage({
@@ -1311,7 +1319,7 @@ export async function POST(request: NextRequest) {
           imageSize,
           imageModel: model,
           imageAction,
-          sourceImageName: sourceImage?.name ?? null,
+          sourceImageName,
         });
 
         persistedImageUrl = `/api/chatgpt/generated-image/${persistedImage.recordId}?deviceId=${encodeURIComponent(

@@ -10,6 +10,7 @@ import {
   MdForest,
   MdGridView,
   MdHealthAndSafety,
+  MdImage,
   MdLocalMall,
   MdRocketLaunch,
   MdSchedule,
@@ -79,6 +80,17 @@ const APPS: PortfolioApp[] = [
     href: "/chatgpt",
     icon: MdSmartToy,
     stack: ["OpenAI API", "Prompt UI", "Full Screen"],
+    image: "/technology-venture-workspace-using-machine-learning-streamline-coding-process.jpg",
+  },
+  {
+    name: "IA Studio PRO",
+    subtitle: "Producao",
+    description:
+      "App dedicado para gerar imagens e videos com OpenAI, organizar biblioteca de midias e baixar resultados.",
+    status: "live",
+    href: "/chatgpt/imagem",
+    icon: MdImage,
+    stack: ["Imagem IA", "Video IA", "Biblioteca de Midias"],
     image: "/technology-venture-workspace-using-machine-learning-streamline-coding-process.jpg",
   },
   {
@@ -247,6 +259,13 @@ export default function PortfolioPage() {
               <MdArrowOutward className="h-4 w-4" />
             </Link>
             <Link
+              href="/chatgpt/imagem"
+              className="inline-flex items-center gap-2 rounded-xl border border-blue-200/45 bg-blue-400/18 px-5 py-3 text-sm font-semibold text-blue-100 transition hover:bg-blue-400/30 hover:text-white"
+            >
+              Abrir IA Studio
+              <MdArrowOutward className="h-4 w-4" />
+            </Link>
+            <Link
               href="/fumar"
               className="inline-flex items-center gap-2 rounded-xl border border-rose-200/45 bg-rose-500/18 px-5 py-3 text-sm font-semibold text-rose-100 transition hover:bg-rose-500/30 hover:text-white"
             >
@@ -385,6 +404,9 @@ export default function PortfolioPage() {
               </Link>
               <Link href="/chatgpt" className="transition hover:text-white">
                 ChatGPT
+              </Link>
+              <Link href="/chatgpt/imagem" className="transition hover:text-white">
+                IA Studio
               </Link>
               <Link href="/fumar" className="transition hover:text-white">
                 Smoke Control

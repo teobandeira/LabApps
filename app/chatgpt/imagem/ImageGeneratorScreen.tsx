@@ -20,14 +20,17 @@ import { SiOpenai } from "react-icons/si";
 import Skeleton from "../components/Skeleton";
 
 type AmbientadorItem = {
-  file: File | null;
-  preview: string | null;
+  id: string;
+  file: File;
+  preview: string;
 };
 
 type VideoProvider = "veo" | "sora";
 type ImageModelOption = {
   value: string;
   label: string;
+  allowedImageSizes: readonly string[];
+  defaultImageSize: string;
 };
 type VideoModelOption = {
   value: string;
@@ -151,7 +154,7 @@ const SOCIAL_FORMAT_OPTIONS = [
     value: "9:16",
     label: "Story (vertical)",
     details: "1080x1920 (9:16)",
-    imageSize: "1024x1792",
+    imageSize: "1024x1536",
     previewAspectRatio: "9 / 16",
   },
   {
@@ -165,15 +168,15 @@ const SOCIAL_FORMAT_OPTIONS = [
 
 const DEFAULT_IMAGE_SIZE_OPTIONS: readonly ImageSizeOption[] = [
   {
-    value: "1792x1024",
+    value: "1536x1024",
     label: "Paisagem (horizontal)",
-    details: "1792x1024 (16:9)",
+    details: "1536x1024 (16:9)",
     videoAspectRatio: "16:9",
   },
   {
-    value: "1024x1792",
+    value: "1024x1536",
     label: "Story (vertical)",
-    details: "1080x1920 (9:16)",
+    details: "1024x1536 (9:16)",
     videoAspectRatio: "9:16",
   },
   {
@@ -184,20 +187,6 @@ const DEFAULT_IMAGE_SIZE_OPTIONS: readonly ImageSizeOption[] = [
   },
 ];
 
-const SORA_IMAGE_SIZE_OPTIONS: readonly ImageSizeOption[] = [
-  {
-    value: "720x1280",
-    label: "Sora Vertical HD",
-    details: "720x1280 (9:16)",
-    videoAspectRatio: "9:16",
-  },
-  {
-    value: "1280x720",
-    label: "Sora Horizontal HD",
-    details: "1280x720 (16:9)",
-    videoAspectRatio: "16:9",
-  },
-];
 const VIDEO_MERGE_FORMAT_OPTIONS = [
   {
     value: "16:9",
@@ -259,8 +248,18 @@ const VIDEO_MODEL_OPTIONS: VideoModelOption[] = [
 ];
 
 const IMAGE_MODEL_OPTIONS: ImageModelOption[] = [
-  { value: "nano_banana", label: "Nano Banana 2" },
-  { value: "gpt-image-1.5", label: "GPT Image (gpt-image-1.5)" },
+  {
+    value: "gemini-2.5-flash-image",
+    label: "Gemini 2.5 Flash Image (Nano Banana)",
+    allowedImageSizes: ["1536x1024", "1024x1536", "1024x1024"],
+    defaultImageSize: "1536x1024",
+  },
+  {
+    value: "gpt-image-2",
+    label: "GPT Image 2 (latest)",
+    allowedImageSizes: ["1536x1024", "1024x1536", "1024x1024"],
+    defaultImageSize: "1536x1024",
+  },
 ];
 
 const CHAT_DEVICE_ID_STORAGE_KEY = "chatgpt-device-id-v1";
@@ -268,6 +267,7 @@ const IMAGE_STUDIO_THEME_STORAGE_KEY = "chatgpt-image-studio-theme-v1";
 const IMAGE_GENERATION_CREDIT_COST = 1;
 const VIDEO_GENERATION_CREDIT_COST = 2;
 const BIBLIOTECA_PAGE_LIMIT = 8;
+const MAX_REFERENCE_IMAGES = 6;
 const ALLOWED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
 const ALLOWED_IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp"];
 const VIDEO_PROMPT_PTBR_GUARDRAIL =
@@ -663,12 +663,9 @@ function normalizeVercelLibraryItems(value: unknown): VercelLibraryMediaItem[] {
 }
 
 export default function ImageGeneratorScreen() {
-  const [produtoPrincipal, setProdutoPrincipal] = useState<AmbientadorItem>({
-    file: null,
-    preview: null,
-  });
+  const [produtoPrincipal, setProdutoPrincipal] = useState<AmbientadorItem[]>([]);
   const [model, setModel] = useState<string>(IMAGE_MODEL_OPTIONS[0].value);
-  const [imageSize, setImageSize] = useState<string>(DEFAULT_IMAGE_SIZE_OPTIONS[0].value);
+  const [imageSize, setImageSize] = useState<string>(IMAGE_MODEL_OPTIONS[0].defaultImageSize);
   const [loading, setLoading] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
   const [ambientacaoLightboxOpen, setAmbientacaoLightboxOpen] = useState(false);
@@ -779,19 +776,32 @@ export default function ImageGeneratorScreen() {
   const skipNextMediaProjectsSyncRef = useRef(false);
   const mediaProjectsSyncTimerRef = useRef<number | null>(null);
   const mediaProjectsSyncErrorShownRef = useRef(false);
+  const produtoPrincipalRef = useRef<AmbientadorItem[]>([]);
 
   const selectedVideoModelOption = useMemo(
     () => VIDEO_MODEL_OPTIONS.find((option) => option.value === videoModel) || VIDEO_MODEL_OPTIONS[0],
     [videoModel],
   );
-  const selectedImageModelLabel = useMemo(
-    () => IMAGE_MODEL_OPTIONS.find((option) => option.value === model)?.label || model,
+  const selectedImageModelOption = useMemo(
+    () => IMAGE_MODEL_OPTIONS.find((option) => option.value === model) || IMAGE_MODEL_OPTIONS[0],
     [model],
   );
-  const isSoraImageModel = useMemo(() => model.toLowerCase().includes("sora"), [model]);
+  const selectedImageModelLabel = useMemo(
+    () => selectedImageModelOption.label,
+    [selectedImageModelOption],
+  );
+  const produtoPrincipalPreview = produtoPrincipal[0]?.preview || null;
   const imageSizeOptions = useMemo(
-    () => (isSoraImageModel ? SORA_IMAGE_SIZE_OPTIONS : DEFAULT_IMAGE_SIZE_OPTIONS),
-    [isSoraImageModel],
+    () => {
+      const allowedSizes = new Set(selectedImageModelOption.allowedImageSizes);
+      const filteredOptions = DEFAULT_IMAGE_SIZE_OPTIONS.filter((option) =>
+        allowedSizes.has(option.value),
+      );
+      return filteredOptions.length > 0
+        ? filteredOptions
+        : [DEFAULT_IMAGE_SIZE_OPTIONS[0]];
+    },
+    [selectedImageModelOption],
   );
   const selectedImageSizeOption = useMemo(
     () => imageSizeOptions.find((option) => option.value === imageSize) || imageSizeOptions[0],
@@ -852,8 +862,22 @@ export default function ImageGeneratorScreen() {
     if (imageSizeOptions.some((option) => option.value === imageSize)) {
       return;
     }
-    setImageSize(imageSizeOptions[0]?.value || DEFAULT_IMAGE_SIZE_OPTIONS[0].value);
-  }, [imageSize, imageSizeOptions]);
+    setImageSize(selectedImageModelOption.defaultImageSize);
+  }, [imageSize, imageSizeOptions, selectedImageModelOption]);
+
+  useEffect(() => {
+    produtoPrincipalRef.current = produtoPrincipal;
+  }, [produtoPrincipal]);
+
+  useEffect(() => {
+    return () => {
+      for (const item of produtoPrincipalRef.current) {
+        if (item.preview.startsWith("blob:")) {
+          URL.revokeObjectURL(item.preview);
+        }
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const handlePointerDown = (event: MouseEvent) => {
@@ -1599,69 +1623,158 @@ export default function ImageGeneratorScreen() {
     setBibliotecaLightboxImageLoaded(false);
   }, [bibliotecaLightboxItem]);
 
-  const saveReferenceImageToLibrary = useCallback(
-    async (file: File) => {
+  const saveReferenceImagesToLibrary = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) return;
+
       const deviceIdForUpload = chatDeviceId || getOrCreateChatDeviceId();
       if (!chatDeviceId) {
         setChatDeviceId(deviceIdForUpload);
       }
 
-      const formData = new FormData();
-      formData.append("sourceImage", file);
-      formData.append("deviceId", deviceIdForUpload);
+      const uploads = await Promise.allSettled(
+        files.map(async (file) => {
+          const formData = new FormData();
+          formData.append("sourceImage", file);
+          formData.append("deviceId", deviceIdForUpload);
 
-      try {
-        const response = await fetch("/api/chatgpt/reference-image", {
-          method: "POST",
-          body: formData,
-        });
-        const payload = (await response.json().catch(() => null)) as
-          | {
-              ok?: boolean;
-              error?: string;
-            }
-          | null;
+          const response = await fetch("/api/chatgpt/reference-image", {
+            method: "POST",
+            body: formData,
+          });
+          const payload = (await response.json().catch(() => null)) as
+            | {
+                ok?: boolean;
+                error?: string;
+              }
+            | null;
 
-        if (!response.ok || payload?.error) {
-          throw new Error(payload?.error || "Falha ao salvar imagem na biblioteca.");
-        }
+          if (!response.ok || payload?.error) {
+            throw new Error(payload?.error || "Falha ao salvar imagem na biblioteca.");
+          }
+        }),
+      );
 
-        notify("success", "Imagem de referência adicionada à biblioteca.");
+      const successCount = uploads.filter((result) => result.status === "fulfilled").length;
+      const failedCount = uploads.length - successCount;
+
+      if (successCount > 0) {
+        notify(
+          "success",
+          successCount === 1
+            ? "Imagem de referência adicionada à biblioteca."
+            : `${successCount} imagens de referência adicionadas à biblioteca.`,
+        );
         void loadBiblioteca(deviceIdForUpload);
-      } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "Falha ao salvar imagem na biblioteca.";
-        notify("error", message);
+      }
+      if (failedCount > 0) {
+        notify(
+          "error",
+          failedCount === 1
+            ? "1 imagem não pôde ser salva na biblioteca."
+            : `${failedCount} imagens não puderam ser salvas na biblioteca.`,
+        );
       }
     },
-    [chatDeviceId],
+    [chatDeviceId, loadBiblioteca, notify],
   );
 
-  const handleProdutoPrincipalFile = useCallback((
-    file: File,
+  const removeProdutoPrincipalImage = useCallback((imageId: string) => {
+    setProdutoPrincipal((prev) => {
+      const target = prev.find((item) => item.id === imageId);
+      if (target?.preview.startsWith("blob:")) {
+        URL.revokeObjectURL(target.preview);
+      }
+      return prev.filter((item) => item.id !== imageId);
+    });
+  }, []);
+
+  const clearProdutoPrincipalImages = useCallback(() => {
+    setProdutoPrincipal((prev) => {
+      for (const item of prev) {
+        if (item.preview.startsWith("blob:")) {
+          URL.revokeObjectURL(item.preview);
+        }
+      }
+      return [];
+    });
+  }, []);
+
+  const handleProdutoPrincipalFiles = useCallback((
+    files: File[],
     source: "upload" | "drop" | "paste" = "upload",
   ) => {
-    if (!isAcceptedImageFile(file)) {
-      notify("error", "Formato de imagem inválido. Utilize PNG, JPG ou WEBP.");
+    if (!files.length) return;
+
+    const acceptedFiles = files.filter((file) => isAcceptedImageFile(file));
+    const invalidCount = files.length - acceptedFiles.length;
+    if (acceptedFiles.length === 0) {
+      notify("error", "Nenhuma imagem válida encontrada. Utilize PNG, JPG ou WEBP.");
       return;
     }
 
+    const addedFiles: File[] = [];
+    let duplicatedCount = 0;
+    let exceededLimitCount = 0;
+
     setProdutoPrincipal((prev) => {
-      if (prev.preview?.startsWith("blob:")) {
-        URL.revokeObjectURL(prev.preview);
+      const existingSignatures = new Set(
+        prev.map((item) => `${item.file.name}|${item.file.size}|${item.file.lastModified}`),
+      );
+      const next = [...prev];
+
+      for (const file of acceptedFiles) {
+        const signature = `${file.name}|${file.size}|${file.lastModified}`;
+        if (existingSignatures.has(signature)) {
+          duplicatedCount += 1;
+          continue;
+        }
+        if (next.length >= MAX_REFERENCE_IMAGES) {
+          exceededLimitCount += 1;
+          continue;
+        }
+
+        next.push({
+          id: createRequestId(),
+          file,
+          preview: URL.createObjectURL(file),
+        });
+        addedFiles.push(file);
+        existingSignatures.add(signature);
       }
-      return {
-        ...prev,
-        file,
-        preview: URL.createObjectURL(file),
-      };
+
+      return next;
     });
 
-    const actionLabel =
-      source === "paste" ? "colada" : source === "drop" ? "arrastada" : "carregada";
-    notify("success", `Imagem do produto principal ${actionLabel} com sucesso!`);
-    void saveReferenceImageToLibrary(file);
-  }, [saveReferenceImageToLibrary]);
+    const actionLabel = source === "paste" ? "coladas" : source === "drop" ? "arrastadas" : "carregadas";
+    if (addedFiles.length > 0) {
+      notify(
+        "success",
+        `${addedFiles.length} ${addedFiles.length === 1 ? "imagem" : "imagens"} ${actionLabel} com sucesso!`,
+      );
+      void saveReferenceImagesToLibrary(addedFiles);
+    }
+
+    if (invalidCount > 0) {
+      notify(
+        "error",
+        invalidCount === 1
+          ? "1 arquivo foi ignorado por formato inválido."
+          : `${invalidCount} arquivos foram ignorados por formato inválido.`,
+      );
+    }
+    if (duplicatedCount > 0) {
+      notify(
+        "error",
+        duplicatedCount === 1
+          ? "1 imagem já estava selecionada e foi ignorada."
+          : `${duplicatedCount} imagens já estavam selecionadas e foram ignoradas.`,
+      );
+    }
+    if (exceededLimitCount > 0) {
+      notify("error", `Limite de ${MAX_REFERENCE_IMAGES} imagens de referência atingido.`);
+    }
+  }, [notify, saveReferenceImagesToLibrary]);
 
   useEffect(() => {
     const handlePaste = (event: ClipboardEvent) => {
@@ -1677,12 +1790,12 @@ export default function ImageGeneratorScreen() {
       if (!imageFile) return;
 
       event.preventDefault();
-      handleProdutoPrincipalFile(imageFile, "paste");
+      handleProdutoPrincipalFiles([imageFile], "paste");
     };
 
     window.addEventListener("paste", handlePaste);
     return () => window.removeEventListener("paste", handlePaste);
-  }, [handleProdutoPrincipalFile]);
+  }, [handleProdutoPrincipalFiles]);
 
   const handleGenerate = async () => {
     if (!chatDeviceId) {
@@ -1700,7 +1813,7 @@ export default function ImageGeneratorScreen() {
 
     setAmbientacaoLightboxOpen(true);
     setPreview(null);
-    const imageAction = produtoPrincipal.file ? "edit" : "generate";
+    const imageAction = produtoPrincipal.length > 0 ? "edit" : "generate";
     const formData = new FormData();
     formData.append("mode", "image");
     formData.append(
@@ -1714,8 +1827,10 @@ export default function ImageGeneratorScreen() {
     formData.append("imageAction", imageAction);
     formData.append("deviceId", chatDeviceId);
     formData.append("requestId", createRequestId());
-    if (imageAction === "edit" && produtoPrincipal.file) {
-      formData.append("sourceImage", produtoPrincipal.file);
+    if (imageAction === "edit") {
+      for (const sourceImage of produtoPrincipal) {
+        formData.append("sourceImage", sourceImage.file);
+      }
     }
 
     setLoading(true);
@@ -1788,7 +1903,7 @@ export default function ImageGeneratorScreen() {
     sourceUrl?: string,
     preferredAspectRatio?: "16:9" | "9:16" | "1:1" | null,
   ) => {
-    const targetSource = sourceUrl || preview || produtoPrincipal.preview;
+    const targetSource = sourceUrl || preview || produtoPrincipalPreview;
     if (loading) return;
     setIsTopMenuOpen(false);
     if (window.matchMedia("(max-width: 640px)").matches) {
@@ -2618,23 +2733,20 @@ export default function ImageGeneratorScreen() {
 
                   const droppedFiles = Array.from(event.dataTransfer.files || []);
                   if (!droppedFiles.length) return;
-
-                  const imageFile =
-                    droppedFiles.find((file) => file.type.startsWith("image/")) || droppedFiles[0];
-
-                  handleProdutoPrincipalFile(imageFile, "drop");
+                  handleProdutoPrincipalFiles(droppedFiles, "drop");
                 }}
               >
                 <input
                   type="file"
                   accept="image/png, image/jpeg, image/jpg, image/webp"
+                  multiple
                   className="hidden"
                   id="produtoPrincipalUpload"
                   disabled={loading}
                   onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (!file) return;
-                    handleProdutoPrincipalFile(file, "upload");
+                    const files = Array.from(e.target.files || []);
+                    if (!files.length) return;
+                    handleProdutoPrincipalFiles(files, "upload");
                     e.currentTarget.value = "";
                   }}
                 />
@@ -2652,9 +2764,9 @@ export default function ImageGeneratorScreen() {
                           : "bg-linear-to-br from-gray-900 via-gray-900 to-cyan-900/20"
                       }`}
                     >
-                      {produtoPrincipal.preview ? (
+                      {produtoPrincipalPreview ? (
                         <img
-                          src={produtoPrincipal.preview}
+                          src={produtoPrincipalPreview}
                           alt="Produto principal"
                           className="absolute inset-0 h-full w-full object-contain p-4 opacity-25 blur-[1px]"
                         />
@@ -2701,13 +2813,24 @@ export default function ImageGeneratorScreen() {
                         </div>
                       </div>
                     </div>
-                  ) : produtoPrincipal.preview ? (
+                  ) : produtoPrincipalPreview ? (
                     <div className="relative flex h-full w-full items-center justify-center">
                       <img
-                        src={produtoPrincipal.preview}
+                        src={produtoPrincipalPreview}
                         alt="Produto principal"
                         className="mx-auto max-h-60 w-auto rounded-md object-contain"
                       />
+                      {produtoPrincipal.length > 1 ? (
+                        <span
+                          className={`absolute right-3 top-3 rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                            isLightTheme
+                              ? "border border-sky-300 bg-white text-sky-700"
+                              : "border border-cyan-300/45 bg-gray-900/85 text-cyan-100"
+                          }`}
+                        >
+                          +{produtoPrincipal.length - 1}
+                        </span>
+                      ) : null}
                     </div>
                   ) : (
                     <>
@@ -2720,20 +2843,76 @@ export default function ImageGeneratorScreen() {
                       >
                         <FiUploadCloud className={`text-3xl ${isLightTheme ? "text-slate-700" : "text-purple-200"}`} />
                       </span>
-                      <span className={`font-medium ${isLightTheme ? "text-slate-900" : "text-white"}`}>Clique ou arraste a imagem aqui</span>
+                      <span className={`font-medium ${isLightTheme ? "text-slate-900" : "text-white"}`}>Clique ou arraste imagens aqui</span>
                       <span className={`text-xs ${isLightTheme ? "text-slate-600" : "text-gray-300"}`}>JPG, PNG, WEBP (opcional)</span>
                     </>
                   )}
                 </label>
               </div>
 
-              {produtoPrincipal.file ? (
-                <p className={`mt-3 text-center text-xs ${isLightTheme ? "text-slate-600" : "text-gray-400"}`}>
-                  Imagem selecionada: <strong>{produtoPrincipal.file.name}</strong>
-                </p>
+              {produtoPrincipal.length > 0 ? (
+                <div className="mt-3 space-y-2">
+                  <p className={`text-center text-xs ${isLightTheme ? "text-slate-600" : "text-gray-400"}`}>
+                    {produtoPrincipal.length} {produtoPrincipal.length === 1 ? "imagem selecionada" : "imagens selecionadas"}
+                  </p>
+                  <div className="flex gap-2 overflow-x-auto pb-1">
+                    {produtoPrincipal.map((item) => (
+                      <div
+                        key={item.id}
+                        className={`relative w-23 shrink-0 overflow-hidden rounded-xl border ${
+                          isLightTheme
+                            ? "border-slate-300 bg-slate-100"
+                            : "border-gray-600 bg-gray-800"
+                        }`}
+                      >
+                        <img
+                          src={item.preview}
+                          alt={item.file.name}
+                          className="h-23 w-full object-cover"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeProdutoPrincipalImage(item.id)}
+                          disabled={loading}
+                          className={`absolute right-1.5 top-1.5 inline-flex h-5 w-5 cursor-pointer items-center justify-center rounded-full transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                            isLightTheme
+                              ? "bg-white/90 text-slate-700 hover:bg-white"
+                              : "bg-black/65 text-gray-100 hover:bg-black/80"
+                          }`}
+                          aria-label={`Remover ${item.file.name}`}
+                        >
+                          <MdClose className="h-3 w-3" />
+                        </button>
+                        <p
+                          className={`truncate px-2 py-1 text-[10px] ${
+                            isLightTheme ? "text-slate-700" : "text-gray-300"
+                          }`}
+                          title={item.file.name}
+                        >
+                          {item.file.name}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex justify-center">
+                    <button
+                      type="button"
+                      onClick={clearProdutoPrincipalImages}
+                      disabled={loading}
+                      className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                        isLightTheme
+                          ? "border border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100"
+                          : "border border-rose-400/45 bg-rose-500/15 text-rose-100 hover:bg-rose-500/25"
+                      }`}
+                    >
+                      <FaTrash className="h-3 w-3" />
+                      Remover todas
+                    </button>
+                  </div>
+                </div>
               ) : (
                 <p className={`mt-3 text-center text-xs ${isLightTheme ? "text-slate-600" : "text-gray-400"}`}>
-                  Nenhuma imagem selecionada (a IA criará do zero).
+                  Nenhuma imagem selecionada (a IA criará do zero). Você pode enviar até {MAX_REFERENCE_IMAGES}.
                 </p>
               )}
 
@@ -2783,6 +2962,9 @@ export default function ImageGeneratorScreen() {
                               type="button"
                               onClick={() => {
                                 setModel(option.value);
+                                if (!option.allowedImageSizes.includes(imageSize)) {
+                                  setImageSize(option.defaultImageSize);
+                                }
                                 setIsModelDropdownOpen(false);
                               }}
                               className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm transition ${
@@ -2917,7 +3099,7 @@ export default function ImageGeneratorScreen() {
                 <button
                   type="button"
                   onClick={() => {
-                    const directSource = preview || produtoPrincipal.preview || undefined;
+                    const directSource = preview || produtoPrincipalPreview || undefined;
                     const preferredAspectRatio = preview
                       ? resolveAspectRatioFromImageSize(imageSize)
                       : null;
