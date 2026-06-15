@@ -41,6 +41,8 @@ const IMAGE_SIZES_BY_MODEL = {
 } as const satisfies Record<string, readonly string[]>;
 const SAVED_IMAGE_MAX_DIMENSION = 1280;
 const SAVED_IMAGE_WEBP_QUALITY = 82;
+const PRINT_UPSCALE_LONG_EDGE_PX = 12_000;
+const PRINT_OUTPUT_DENSITY_DPI = 100;
 const MAX_SOURCE_IMAGE_SIZE_BYTES = 50 * 1024 * 1024;
 const SUPPORTED_SOURCE_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
 
@@ -60,6 +62,7 @@ const PDF_FILE_EXTENSIONS = new Set([".pdf"]);
 
 type GenerationMode = "chat" | "image";
 type ImageAction = "generate" | "edit";
+type ImageOutputMode = "digital" | "print";
 type ChatHistoryMessage = {
   role: "user" | "assistant";
   content: string;
@@ -71,6 +74,7 @@ type ChatRequestBody = {
   mode?: string;
   imageSize?: string;
   imageAction?: string;
+  outputMode?: string;
   chatHistory?: unknown;
   deviceId?: unknown;
   requestId?: unknown;
@@ -82,6 +86,7 @@ type ParsedRequest = {
   mode: GenerationMode;
   imageSize: string;
   imageAction: ImageAction;
+  outputMode: ImageOutputMode;
   sourceImages: File[];
   files: File[];
   chatHistory: ChatHistoryMessage[];
@@ -272,6 +277,72 @@ async function optimizeGeneratedImage(
   }
 }
 
+async function upscaleGeneratedImageForPrint(
+  image: ResolvedGeneratedImage
+): Promise<ResolvedGeneratedImage> {
+  try {
+    const inputBuffer = Buffer.from(image.bytes);
+    const pipeline = sharp(inputBuffer).rotate();
+    const metadata = await pipeline.metadata();
+    const width = metadata.width ?? 0;
+    const height = metadata.height ?? 0;
+
+    if (!width || !height) {
+      return image;
+    }
+
+    const longEdge = Math.max(width, height);
+    if (longEdge >= PRINT_UPSCALE_LONG_EDGE_PX) {
+      return image;
+    }
+
+    const scaleFactor = PRINT_UPSCALE_LONG_EDGE_PX / longEdge;
+    const targetWidth = Math.max(1, Math.round(width * scaleFactor));
+    const targetHeight = Math.max(1, Math.round(height * scaleFactor));
+
+    const upscaledBuffer = await sharp(inputBuffer)
+      .rotate()
+      .resize(targetWidth, targetHeight, {
+        fit: "fill",
+        kernel: sharp.kernel.lanczos3,
+      })
+      .png({ compressionLevel: 9 })
+      .withMetadata({ density: PRINT_OUTPUT_DENSITY_DPI })
+      .toBuffer();
+
+    if (upscaledBuffer.byteLength <= 0) {
+      return image;
+    }
+
+    return {
+      ...image,
+      bytes: new Uint8Array(upscaledBuffer),
+      contentType: "image/png",
+      extension: "png",
+    };
+  } catch {
+    return image;
+  }
+}
+
+async function resolveImageSizeLabel(
+  image: ResolvedGeneratedImage,
+  fallback: string
+): Promise<string> {
+  try {
+    const metadata = await sharp(Buffer.from(image.bytes)).metadata();
+    const width = metadata.width ?? 0;
+    const height = metadata.height ?? 0;
+    if (width > 0 && height > 0) {
+      return `${width}x${height}`;
+    }
+  } catch {
+    // fallback para tamanho informado na requisicao
+  }
+
+  return fallback;
+}
+
 function buildGeneratedImageBlobPath(extension: string): string {
   const datePath = new Date().toISOString().slice(0, 10);
   return `chatgpt/generated/${datePath}/${crypto.randomUUID()}.${extension}`;
@@ -308,6 +379,7 @@ async function persistGeneratedImage(params: {
   imageSize: string;
   imageModel: string;
   imageAction: ImageAction;
+  outputMode: ImageOutputMode;
   sourceImageName: string | null;
 }): Promise<PersistedGeneratedImage> {
   const blobToken = process.env.BLOB_READ_WRITE_TOKEN;
@@ -316,10 +388,14 @@ async function persistGeneratedImage(params: {
   }
 
   const resolvedImage = await resolveGeneratedImage(params.imageUrl);
-  const optimizedImage = await optimizeGeneratedImage(resolvedImage);
-  const blobPath = buildGeneratedImageBlobPath(optimizedImage.extension);
-  const blobBody = new Blob([Uint8Array.from(optimizedImage.bytes)], {
-    type: optimizedImage.contentType,
+  const processedImage =
+    params.outputMode === "print"
+      ? await upscaleGeneratedImageForPrint(resolvedImage)
+      : await optimizeGeneratedImage(resolvedImage);
+  const resolvedSizeLabel = await resolveImageSizeLabel(processedImage, params.imageSize);
+  const blobPath = buildGeneratedImageBlobPath(processedImage.extension);
+  const blobBody = new Blob([Uint8Array.from(processedImage.bytes)], {
+    type: processedImage.contentType,
   });
 
   const accessCandidates = getBlobAccessCandidates();
@@ -330,7 +406,7 @@ async function persistGeneratedImage(params: {
     try {
       blob = await put(blobPath, blobBody, {
         access: accessMode,
-        contentType: optimizedImage.contentType,
+        contentType: processedImage.contentType,
         token: blobToken,
         addRandomSuffix: false,
       });
@@ -356,14 +432,14 @@ async function persistGeneratedImage(params: {
       prompt: params.prompt,
       revisedPrompt: params.revisedPrompt,
       model: params.imageModel,
-      size: params.imageSize,
+      size: resolvedSizeLabel,
       action: params.imageAction,
       sourceImageName: params.sourceImageName,
-      openaiImageUrl: optimizedImage.openaiImageUrl,
+      openaiImageUrl: processedImage.openaiImageUrl,
       blobUrl: blob.url,
       blobPath: blob.pathname,
-      mimeType: optimizedImage.contentType,
-      bytes: optimizedImage.bytes.byteLength,
+      mimeType: processedImage.contentType,
+      bytes: processedImage.bytes.byteLength,
     },
   });
 
@@ -695,6 +771,10 @@ function normalizeImageAction(value: FormDataEntryValue | null | undefined): Ima
   return value === "edit" ? "edit" : "generate";
 }
 
+function normalizeOutputMode(value: FormDataEntryValue | string | null | undefined): ImageOutputMode {
+  return value === "print" ? "print" : "digital";
+}
+
 function normalizeRequestId(value: unknown): string {
   if (typeof value !== "string") {
     return "";
@@ -799,6 +879,7 @@ async function parseIncomingRequest(request: NextRequest): Promise<ParsedRequest
       mode,
       imageSize: normalizeImageSize(formData.get("imageSize"), model),
       imageAction: normalizeImageAction(formData.get("imageAction")),
+      outputMode: normalizeOutputMode(formData.get("outputMode")),
       sourceImages,
       files,
       chatHistory: parseChatHistoryFromFormData(formData.get("chatHistory")),
@@ -814,6 +895,7 @@ async function parseIncomingRequest(request: NextRequest): Promise<ParsedRequest
     mode === "image" ? normalizeImageModel(payload.model) : normalizeTextModel();
   const imageSize = normalizeImageSize(payload.imageSize, model);
   const imageAction = payload.imageAction === "edit" ? "edit" : "generate";
+  const outputMode = normalizeOutputMode(payload.outputMode);
 
   return {
     prompt,
@@ -821,6 +903,7 @@ async function parseIncomingRequest(request: NextRequest): Promise<ParsedRequest
     mode,
     imageSize,
     imageAction,
+    outputMode,
     sourceImages: [],
     files: [],
     chatHistory: normalizeChatHistory(payload.chatHistory),
@@ -1099,7 +1182,19 @@ export async function POST(request: NextRequest) {
     }
     const streamRequested = request.nextUrl.searchParams.get("stream") === "1";
 
-    const { prompt, model, mode, imageSize, imageAction, sourceImages, files, chatHistory, deviceId, requestId } =
+    const {
+      prompt,
+      model,
+      mode,
+      imageSize,
+      imageAction,
+      outputMode,
+      sourceImages,
+      files,
+      chatHistory,
+      deviceId,
+      requestId,
+    } =
       parsedRequest;
 
     if (mode === "image") {
@@ -1319,6 +1414,7 @@ export async function POST(request: NextRequest) {
           imageSize,
           imageModel: model,
           imageAction,
+          outputMode,
           sourceImageName,
         });
 
@@ -1356,6 +1452,7 @@ export async function POST(request: NextRequest) {
         imageUrl: persistedImageUrl,
         revisedPrompt,
         storedImageId,
+        outputMode,
         warnings,
         creditsBalance: consumeResult.balance,
       });

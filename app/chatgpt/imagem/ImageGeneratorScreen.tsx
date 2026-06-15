@@ -26,6 +26,7 @@ type AmbientadorItem = {
 };
 
 type VideoProvider = "veo" | "sora";
+type ImageOutputMode = "digital" | "print";
 type ImageModelOption = {
   value: string;
   label: string;
@@ -666,6 +667,7 @@ export default function ImageGeneratorScreen() {
   const [produtoPrincipal, setProdutoPrincipal] = useState<AmbientadorItem[]>([]);
   const [model, setModel] = useState<string>(IMAGE_MODEL_OPTIONS[0].value);
   const [imageSize, setImageSize] = useState<string>(IMAGE_MODEL_OPTIONS[0].defaultImageSize);
+  const [imageOutputMode, setImageOutputMode] = useState<ImageOutputMode>("digital");
   const [loading, setLoading] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
   const [ambientacaoLightboxOpen, setAmbientacaoLightboxOpen] = useState(false);
@@ -1825,6 +1827,7 @@ export default function ImageGeneratorScreen() {
     formData.append("model", model);
     formData.append("imageSize", imageSize);
     formData.append("imageAction", imageAction);
+    formData.append("outputMode", imageOutputMode);
     formData.append("deviceId", chatDeviceId);
     formData.append("requestId", createRequestId());
     if (imageAction === "edit") {
@@ -1869,7 +1872,12 @@ export default function ImageGeneratorScreen() {
       } else {
         void loadCredits(chatDeviceId);
       }
-      notify("success", "Imagem gerada com sucesso!");
+      notify(
+        "success",
+        imageOutputMode === "print"
+          ? "Imagem gerada com sucesso! Upscale para impressao aplicado."
+          : "Imagem gerada com sucesso!",
+      );
       void loadBiblioteca(chatDeviceId);
     } catch {
       notify("error", "Erro ao gerar a imagem.");
@@ -3069,6 +3077,49 @@ export default function ImageGeneratorScreen() {
                     {selectedImageSizeOption?.details || "Escolha a proporção da imagem para geração."}
                   </p>
                 </div>
+              </div>
+
+              <div>
+                <label className={fieldLabelClass}>Saida</label>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={() => setImageOutputMode("digital")}
+                    className={`rounded-xl border px-3 py-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                      imageOutputMode === "digital"
+                        ? isLightTheme
+                          ? "border-sky-500 bg-sky-100 text-sky-900"
+                          : "border-cyan-400/60 bg-cyan-500/20 text-cyan-100"
+                        : isLightTheme
+                          ? "border-slate-300 bg-white text-slate-700 hover:border-slate-400"
+                          : "border-gray-700 bg-gray-900/80 text-gray-300 hover:border-gray-500"
+                    }`}
+                  >
+                    Digital
+                  </button>
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={() => setImageOutputMode("print")}
+                    className={`rounded-xl border px-3 py-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                      imageOutputMode === "print"
+                        ? isLightTheme
+                          ? "border-amber-500 bg-amber-100 text-amber-900"
+                          : "border-amber-400/60 bg-amber-500/20 text-amber-100"
+                        : isLightTheme
+                          ? "border-slate-300 bg-white text-slate-700 hover:border-slate-400"
+                          : "border-gray-700 bg-gray-900/80 text-gray-300 hover:border-gray-500"
+                    }`}
+                  >
+                    Impressao (upscale)
+                  </button>
+                </div>
+                <p className={`mt-1.5 text-[11px] ${isLightTheme ? "text-slate-600" : "text-gray-400"}`}>
+                  {imageOutputMode === "print"
+                    ? "Modo impressao ativo: aplica upscale automatico para ate 12000px no lado maior."
+                    : "Modo digital: exporta no tamanho nativo gerado."}
+                </p>
               </div>
 
               <div>
